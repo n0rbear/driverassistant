@@ -12,14 +12,16 @@ const initDb = async () => {
         `CREATE TABLE IF NOT EXISTS costs (id SERIAL PRIMARY KEY, driver_name TEXT, amount DECIMAL, currency TEXT, category TEXT, notes TEXT, mileage INT, status TEXT DEFAULT 'Rögzítve', timestamp BIGINT)`,
         `CREATE TABLE IF NOT EXISTS chat_messages (id SERIAL PRIMARY KEY, driver_name TEXT, sender TEXT, message TEXT, timestamp BIGINT)`,
         `CREATE TABLE IF NOT EXISTS work_times (id SERIAL PRIMARY KEY, driver_name TEXT, type TEXT, start_time BIGINT, end_time BIGINT, mileage INT, end_mileage INT, license_plate TEXT, notes TEXT, date TEXT)`,
-        `CREATE TABLE IF NOT EXISTS hotels (id SERIAL PRIMARY KEY, driver_name TEXT, name TEXT, address TEXT, timestamp BIGINT)`
+        `CREATE TABLE IF NOT EXISTS hotels (id SERIAL PRIMARY KEY, driver_name TEXT, name TEXT, address TEXT, timestamp BIGINT)`,
+        `CREATE TABLE IF NOT EXISTS tours (id SERIAL PRIMARY KEY, driver_name TEXT, name TEXT, customer TEXT, date BIGINT, day_of_week TEXT, notes TEXT, is_closed BOOLEAN, is_current BOOLEAN)`,
+        `CREATE TABLE IF NOT EXISTS stops (id SERIAL PRIMARY KEY, tour_id INT, address TEXT, contact_name TEXT, phone_number TEXT, email TEXT, time_window TEXT, notes TEXT, alternative_names TEXT, order_index INT, latitude DOUBLE PRECISION, longitude DOUBLE PRECISION, is_completed BOOLEAN, arrival_time BIGINT)`
     ];
     for (let q of queries) { await pool.query(q); }
     try { await pool.query('ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS driver_name TEXT'); } catch(e) {}
 };
 initDb();
 
-// API-K
+// API-K (APP -> BACKEND)
 app.post('/api/live-update', async (req, res) => {
     const d = req.body;
     await pool.query('INSERT INTO live_updates (driver_name, driver_photo, license_plate, latitude, longitude, speed, status, current_tour, next_stop, next_lat, next_lng, timestamp) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)',
@@ -50,6 +52,27 @@ app.post('/api/sync-worktimes', async (req, res) => {
 app.post('/api/sync-costs', async (req, res) => {
     for (const c of req.body) {
         await pool.query('INSERT INTO costs (driver_name, amount, currency, category, notes, mileage, timestamp) VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT DO NOTHING', [c.driverName, c.amount, c.currency, c.category, c.notes, c.mileage, c.timestamp]);
+    }
+    res.sendStatus(200);
+});
+
+app.post('/api/sync-tours', async (req, res) => {
+    for (const item of req.body) {
+        const t = item.tour;
+        const result = await pool.query('INSERT INTO tours (driver_name, name, customer, date, day_of_week, notes, is_closed, is_current) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id',
+            [t.driverName, t.name, t.customer, t.date, t.dayOfWeek, t.notes, t.isClosed, t.isCurrent]);
+        const tourId = result.rows[0].id;
+        for (const s of item.stops) {
+            await pool.query('INSERT INTO stops (tour_id, address, contact_name, phone_number, email, time_window, notes, alternative_names, order_index, latitude, longitude, is_completed, arrival_time) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)',
+                [tourId, s.address, s.contactName, s.phoneNumber, s.email, s.timeWindow, s.notes, s.alternativeNames, s.orderIndex, s.latitude, s.longitude, s.isCompleted, s.arrivalTime]);
+        }
+    }
+    res.sendStatus(200);
+});
+
+app.post('/api/sync-hotels', async (req, res) => {
+    for (const h of req.body) {
+        await pool.query('INSERT INTO hotels (driver_name, name, address, timestamp) VALUES ($1, $2, $3, $4)', [h.driverName, h.name, h.address, h.timestamp]);
     }
     res.sendStatus(200);
 });
