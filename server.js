@@ -60,6 +60,27 @@ app.get('/', async (req, res) => {
     const costs = await pool.query('SELECT * FROM costs ORDER BY timestamp DESC LIMIT 20');
     const chat = await pool.query('SELECT * FROM chat_messages ORDER BY timestamp DESC LIMIT 50');
 
+    let driverCards = drivers.rows.map(d => `
+        <div class="card" onclick="focusMarker(${d.latitude}, ${d.longitude})">
+            <img src="${d.driver_photo || ''}" style="width:40px;height:40px;border-radius:50%;float:right">
+            <b>${d.driver_name}</b><br>
+            <small>${d.status} | ${d.license_plate}</small><br>
+            <small style="color:#aaa">🎯 Cél: ${d.next_stop || 'Nincs'}</small>
+        </div>
+    `).join('');
+
+    let costRows = costs.rows.map(c => `
+        <div style="font-size:12px; border-bottom:1px solid #444; padding:5px;">
+            ${c.driver_name}: ${c.amount} ${c.currency} (${c.status})
+            <button onclick="setStatus(${c.id}, 'Kifizetve')">$</button>
+        </div>
+    `).join('');
+
+    let chatMsgs = chat.rows.map(m => {
+        const isBoss = m.sender === 'DISZPÉCSER' || m.sender === 'FŐNÖK';
+        return `<div class="msg ${isBoss ? 'msg-boss' : 'msg-driver'}"><b>${m.sender}:</b><br>${m.message}</div>`;
+    }).reverse().join('');
+
     res.send(`
         <html>
         <head>
@@ -83,29 +104,14 @@ app.get('/', async (req, res) => {
             <div id="side">
                 <h1 style="color:#3498db">🚛 Fleet BOSS</h1>
                 <h3>📍 Flotta Állapot</h3>
-                \${drivers.rows.map(d => \`
-                    <div class="card" onclick="focusMarker(\${d.latitude}, \${d.longitude})">
-                        <img src="\${d.driver_photo || ''}" style="width:40px;height:40px;border-radius:50%;float:right">
-                        <b>\${d.driver_name}</b><br>
-                        <small>\${d.status} | \${d.license_plate}</small><br>
-                        <small style="color:#aaa">🎯 Cél: \${d.next_stop || 'Nincs'}</small>
-                    </div>
-                \`).join('')}
+                ${driverCards}
                 <hr>
                 <h3>💰 Költségek</h3>
-                \${costs.rows.map(c => \`
-                    <div style="font-size:12px; border-bottom:1px solid #444; padding:5px;">
-                        \${c.driver_name}: \${c.amount} \${c.currency} (\${c.status})
-                        <button onclick="setStatus(\${c.id}, 'Kifizetve')">$</button>
-                    </div>
-                \`).join('')}
+                ${costRows}
                 <hr>
                 <h3>💬 Chat</h3>
                 <div class="chat-container">
-                    \${chat.rows.map(m => {
-                        const isBoss = m.sender === 'DISZPÉCSER' || m.sender === 'FŐNÖK';
-                        return \`<div class="msg \${isBoss ? 'msg-boss' : 'msg-driver'}"><b>\${m.sender}:</b><br>\${m.message}</div>\`;
-                    }).reverse().join('')}
+                    ${chatMsgs}
                 </div>
                 <div style="margin-top:10px;">
                     <input type="text" id="m" style="width:70%; background:#333; border:1px solid #444; color:white; padding:5px;">
@@ -116,7 +122,7 @@ app.get('/', async (req, res) => {
             <script>
                 var map = L.map('map').setView([47.5, 19.0], 7);
                 L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png').addTo(map);
-                var drivers = \${JSON.stringify(drivers.rows)};
+                var drivers = ${JSON.stringify(drivers.rows)};
                 if(drivers.length > 0) map.setView([drivers[0].latitude, drivers[0].longitude], 10);
                 drivers.forEach(d => {
                     L.marker([d.latitude, d.longitude]).addTo(map).bindPopup(d.driver_name);
@@ -142,7 +148,7 @@ app.get('/', async (req, res) => {
             </script>
         </body>
         </html>
-    \`);
+    `);
 });
 
 const PORT = process.env.PORT || 3000;
