@@ -37,7 +37,7 @@ app.post('/api/send-chat', async (req, res) => {
 });
 
 app.get('/api/get-chat/:driverName', async (req, res) => {
-    const result = await pool.query('SELECT sender, message, timestamp FROM chat_messages WHERE driver_name = $1 ORDER BY timestamp ASC', [req.params.driverName]);
+    const result = await pool.query('SELECT id, driver_name as "driverName", sender, message, timestamp FROM chat_messages WHERE driver_name = $1 ORDER BY timestamp ASC', [req.params.driverName]);
     res.json(result.rows);
 });
 
