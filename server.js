@@ -15,13 +15,11 @@ const initDb = async () => {
         `CREATE TABLE IF NOT EXISTS hotels (id SERIAL PRIMARY KEY, driver_name TEXT, name TEXT, address TEXT, timestamp BIGINT)`
     ];
     for (let q of queries) { await pool.query(q); }
-
-    // Oszlop ellenőrzések
     try { await pool.query('ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS driver_name TEXT'); } catch(e) {}
 };
 initDb();
 
-// API-K (APP -> BACKEND)
+// API-K
 app.post('/api/live-update', async (req, res) => {
     const d = req.body;
     await pool.query('INSERT INTO live_updates (driver_name, driver_photo, license_plate, latitude, longitude, speed, status, current_tour, next_stop, next_lat, next_lng, timestamp) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)',
@@ -37,7 +35,7 @@ app.post('/api/send-chat', async (req, res) => {
 });
 
 app.get('/api/get-chat/:driverName', async (req, res) => {
-    const result = await pool.query('SELECT id, driver_name as "driverName", sender, message, timestamp FROM chat_messages WHERE driver_name = $1 ORDER BY timestamp ASC', [req.params.driverName]);
+    const result = await pool.query('SELECT sender, message, timestamp FROM chat_messages WHERE driver_name = $1 ORDER BY timestamp ASC', [req.params.driverName]);
     res.json(result.rows);
 });
 
@@ -131,7 +129,9 @@ app.get('/driver/:name', async (req, res) => {
                         <h3>Státusz: <span style="color:#3498db">${d.status}</span></h3>
                         <p>Sebesség: ${Math.round(d.speed || 0)} km/h</p>
                         <p>Rendszám: ${d.license_plate || 'N/A'}</p>
-                        <hr><p>🎯 Cél: ${d.next_stop || 'Nincs'}</p>
+                        <hr>
+                        <p>🎯 Cél: ${d.next_stop || 'Nincs'}</p>
+                        <p id="distBox" style="color:#2ecc71; font-weight:bold; font-size:20px;">Távolság: -- km</p>
                     </div>
                 </div>
             </div>
@@ -154,8 +154,6 @@ app.get('/driver/:name', async (req, res) => {
                 </table>
             </div>
 
-            <div id="hotels" class="tab-content"><h3>Hotelek</h3><p>Hotelek listája...</p></div>
-
             <div id="chat" class="tab-content">
                 <div style="height:400px; display:flex; flex-direction:column; background:#111; border-radius:8px; padding:15px;">
                     <div id="chatBox" style="flex-grow:1; overflow-y:auto; display:flex; flex-direction:column;">
@@ -173,7 +171,6 @@ app.get('/driver/:name', async (req, res) => {
 
             <div id="stats" class="tab-content"><h3>Zeitkonto / Statisztika</h3><p>Havi összesítés...</p></div>
             <div id="profile" class="tab-content"><h3>Sofőr adatai</h3><p>Név: ${name}</p><p>Rendszám: ${d.license_plate}</p></div>
-            <div id="access" class="tab-content"><h3>Hozzáférés</h3><p>Hamarosan...</p></div>
 
             <script>
                 function openTab(evt, tabName) {
@@ -196,7 +193,24 @@ app.get('/driver/:name', async (req, res) => {
 
                 var map = L.map('map').setView([${d.latitude || 47.5}, ${d.longitude || 19.0}], 13);
                 L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png').addTo(map);
-                L.marker([${d.latitude || 47.5}, ${d.longitude || 19.0}]).addTo(map);
+                var driverMarker = L.marker([${d.latitude || 47.5}, ${d.longitude || 19.0}]).addTo(map);
+
+                if(${!!(d.next_lat && d.next_lng)}) {
+                    var routing = L.Routing.control({
+                        waypoints: [L.latLng(${d.latitude}, ${d.longitude}), L.latLng(${d.next_lat}, ${d.next_lng})],
+                        createMarker: function() { return null; },
+                        lineOptions: { styles: [{color: '#3498db', opacity: 0.8, weight: 6}] },
+                        addWaypoints: false,
+                        routeWhileDragging: false,
+                        show: false
+                    }).addTo(map);
+
+                    routing.on('routesfound', function(e) {
+                        var routes = e.routes;
+                        var summary = routes[0].summary;
+                        document.getElementById('distBox').innerHTML = 'Távolság: ' + (summary.totalDistance / 1000).toFixed(1) + ' km';
+                    });
+                }
 
                 function scrollChat() {
                     var chatBox = document.getElementById('chatBox');
@@ -224,16 +238,6 @@ app.get('/driver/:name', async (req, res) => {
                 }
 
                 setTimeout(() => { location.reload(); }, 30000);
-                if (Notification.permission !== "granted") { Notification.requestPermission(); }
-                var lastMsgCount = localStorage.getItem('msgCount_${name}') || 0;
-                var currentMsgCount = ${chat.rows.length};
-                if (currentMsgCount > lastMsgCount) {
-                    var lastMsg = ${JSON.stringify(chat.rows[chat.rows.length - 1] || {})};
-                    if (lastMsg.sender && lastMsg.sender !== 'DISZPÉCSER') {
-                        new Notification("Üzenet: " + lastMsg.sender, { body: lastMsg.message });
-                    }
-                }
-                localStorage.setItem('msgCount_${name}', currentMsgCount);
             </script>
         </body>
         </html>
