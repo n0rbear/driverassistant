@@ -27,6 +27,8 @@ app.post('/api/live-update', async (req, res) => {
 
 app.post('/api/send-chat', async (req, res) => {
     const { sender, message, timestamp } = req.body;
+    // Megelőzzük az üres vagy duplikált (azonos másodpercben érkező) üzeneteket
+    if (!message) return res.sendStatus(400);
     await pool.query('INSERT INTO chat_messages (sender, message, timestamp) VALUES ($1, $2, $3)', [sender, message, timestamp || Date.now()]);
     res.sendStatus(200);
 });
@@ -57,114 +59,202 @@ app.post('/admin/update-cost', async (req, res) => {
 // ADMIN FRONTEND
 app.get('/', async (req, res) => {
     const drivers = await pool.query('SELECT DISTINCT ON (driver_name) * FROM live_updates ORDER BY driver_name, timestamp DESC');
-    const costs = await pool.query('SELECT * FROM costs ORDER BY timestamp DESC LIMIT 20');
-    const chat = await pool.query('SELECT * FROM chat_messages ORDER BY timestamp DESC LIMIT 50');
 
-    let driverCards = drivers.rows.map(d => `
-        <div class="card" onclick="focusMarker(${d.latitude}, ${d.longitude})">
-            <img src="${d.driver_photo || ''}" style="width:40px;height:40px;border-radius:50%;float:right">
-            <b>${d.driver_name}</b><br>
-            <small>${d.status} | ${d.license_plate}</small><br>
-            <small style="color:#aaa">🎯 Cél: ${d.next_stop || 'Nincs'}</small>
+    let list = drivers.rows.map(d => `
+        <div class="card" onclick="location.href='/driver/${encodeURIComponent(d.driver_name)}'">
+            <img src="${d.driver_photo || ''}" style="width:50px;height:50px;border-radius:50%;float:right">
+            <h3>${d.driver_name}</h3>
+            <p>${d.status} | ${d.license_plate}</p>
         </div>
     `).join('');
-
-    let costRows = costs.rows.map(c => `
-        <div style="font-size:12px; border-bottom:1px solid #444; padding:5px;">
-            ${c.driver_name}: ${c.amount} ${c.currency} (${c.status})
-            <button onclick="setStatus(${c.id}, 'Kifizetve')">$</button>
-        </div>
-    `).join('');
-
-    let chatMsgs = chat.rows.map(m => {
-        const isBoss = m.sender === 'DISZPÉCSER' || m.sender === 'FŐNÖK';
-        return `<div class="msg ${isBoss ? 'msg-boss' : 'msg-driver'}"><b>${m.sender}:</b><br>${m.message}</div>`;
-    }).reverse().join('');
 
     res.send(`
         <html>
         <head>
-            <meta http-equiv="refresh" content="30">
+            <title>Driver ERP - Main</title>
+            <style>
+                body { font-family: sans-serif; background: #1a1a1a; color: white; padding: 40px; }
+                .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 20px; }
+                .card { background: #333; padding: 20px; border-radius: 12px; cursor: pointer; border-left: 8px solid #3498db; transition: 0.2s; }
+                .card:hover { transform: scale(1.02); background: #444; }
+            </style>
+        </head>
+        <body>
+            <h1>🚛 Flotta kiválasztása</h1>
+            <div class="grid">${list}</div>
+        </body>
+        </html>
+    `);
+});
+
+app.get('/driver/:name', async (req, res) => {
+    const name = req.params.name;
+    const update = await pool.query('SELECT * FROM live_updates WHERE driver_name = $1 ORDER BY timestamp DESC LIMIT 1', [name]);
+    const costs = await pool.query('SELECT * FROM costs WHERE driver_name = $1 ORDER BY timestamp DESC', [name]);
+    const chat = await pool.query('SELECT * FROM chat_messages ORDER BY timestamp ASC'); // Global chat for now, or filter by sender
+    const d = update.rows[0] || { driver_name: name };
+
+    res.send(`
+        <html>
+        <head>
+            <title>ERP - ${name}</title>
             <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
             <link rel="stylesheet" href="https://unpkg.com/leaflet-routing-machine@3.2.12/dist/leaflet-routing-machine.css" />
             <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
             <script src="https://unpkg.com/leaflet-routing-machine@3.2.12/dist/leaflet-routing-machine.js"></script>
             <style>
-                body { font-family: sans-serif; margin: 0; display: flex; height: 100vh; background: #1a1a1a; color: white; }
-                #side { width: 400px; padding: 20px; background: #222; overflow-y: auto; border-right: 1px solid #444; }
-                #map { flex-grow: 1; height: 100vh; }
-                .card { background: #333; padding: 15px; border-radius: 8px; margin-bottom: 10px; border-left: 5px solid #3498db; cursor: pointer; }
-                .msg { padding: 8px; margin: 5px 0; border-radius: 8px; font-size: 13px; max-width: 90%; }
+                body { font-family: sans-serif; margin: 0; background: #1a1a1a; color: white; display: flex; flex-direction: column; height: 100vh; }
+                header { background: #222; padding: 15px 30px; display: flex; align-items: center; border-bottom: 1px solid #444; }
+                nav { background: #333; display: flex; padding: 0 30px; }
+                nav button { background: none; border: none; color: #aaa; padding: 15px 20px; cursor: pointer; font-size: 14px; border-bottom: 3px solid transparent; }
+                nav button.active { color: white; border-bottom-color: #3498db; background: #444; }
+                .tab-content { flex-grow: 1; display: none; padding: 20px; overflow-y: auto; }
+                .tab-content.active { display: block; }
+                #map { height: 500px; width: 100%; border-radius: 8px; }
+                .msg { padding: 8px; margin: 5px 0; border-radius: 8px; max-width: 80%; }
                 .msg-boss { background: #F57F17; color: black; align-self: flex-end; margin-left: auto; }
                 .msg-driver { background: #34495e; color: white; }
-                .chat-container { height: 250px; overflow-y: auto; background: #111; padding: 10px; display: flex; flex-direction: column; border-radius: 8px; }
+                table { width: 100%; border-collapse: collapse; }
+                th, td { text-align: left; padding: 12px; border-bottom: 1px solid #333; }
             </style>
         </head>
         <body>
-            <div id="side">
-                <h1 style="color:#3498db">🚛 Fleet BOSS</h1>
-                <h3>📍 Flotta Állapot</h3>
-                ${driverCards}
-                <hr>
-                <h3>💰 Költségek</h3>
-                ${costRows}
-                <hr>
-                <h3>💬 Chat</h3>
-                <div class="chat-container" id="chatContainer">
-                    ${chatMsgs}
-                </div>
-                <div style="margin-top:10px;">
-                    <input type="text" id="m" style="width:70%; background:#333; border:1px solid #444; color:white; padding:5px;" onkeydown="if(event.key==='Enter') sendMsg()">
-                    <button onclick="sendMsg()" style="width:25%; background:#3498db; border:none; color:white; padding:6px; cursor:pointer;">OK</button>
+            <header>
+                <button onclick="location.href='/'" style="margin-right:20px;">⬅</button>
+                <img src="${d.driver_photo || ''}" style="width:40px;height:40px;border-radius:50%;margin-right:15px;">
+                <h2>${name} - ERP Kontroll</h2>
+            </header>
+            <nav>
+                <button class="active" onclick="openTab(event, 'dashboard')">DASHBOARD</button>
+                <button onclick="openTab(event, 'tours')">TÚRÁK</button>
+                <button onclick="openTab(event, 'costs')">KÖLTSÉGEK</button>
+                <button onclick="openTab(event, 'hotels')">HOTELEK</button>
+                <button onclick="openTab(event, 'chat')">CHAT</button>
+                <button onclick="openTab(event, 'profile')">PROFIL</button>
+                <button onclick="openTab(event, 'access')">HOZZÁFÉRÉS</button>
+            </nav>
+
+            <div id="dashboard" class="tab-content active">
+                <div style="display:grid; grid-template-columns: 1fr 300px; gap: 20px;">
+                    <div id="map"></div>
+                    <div>
+                        <div style="background:#222; padding:20px; border-radius:8px;">
+                            <h3>Státusz: <span style="color:#3498db">${d.status}</span></h3>
+                            <p>Sebesség: ${Math.round(d.speed || 0)} km/h</p>
+                            <p>Rendszám: ${d.license_plate || 'N/A'}</p>
+                            <hr>
+                            <p>🎯 Cél: ${d.next_stop || 'Nincs'}</p>
+                        </div>
+                    </div>
                 </div>
             </div>
-            <div id="map"></div>
+
+            <div id="tours" class="tab-content">
+                <h3>Aktív és lezárt túrák</h3>
+                <p>Nincs megjeleníthető túra adat.</p>
+            </div>
+
+            <div id="costs" class="tab-content">
+                <h3>Költségek és jóváhagyás</h3>
+                <table>
+                    <tr><th>Dátum</th><th>Kategória</th><th>Összeg</th><th>Státusz</th><th>Művelet</th></tr>
+                    ${costs.rows.map(c => `
+                        <tr>
+                            <td>${new Date(Number(c.timestamp)).toLocaleDateString()}</td>
+                            <td>${c.category}</td>
+                            <td>${c.amount} ${c.currency}</td>
+                            <td>${c.status}</td>
+                            <td>
+                                <button onclick="setStatus(${c.id}, 'Elfogadva')">✔</button>
+                                <button onclick="setStatus(${c.id}, 'Kifizetve')">$</button>
+                            </td>
+                        </tr>
+                    `).join('')}
+                </table>
+            </div>
+
+            <div id="chat" class="tab-content">
+                <div style="height:400px; display:flex; flex-direction:column; background:#111; border-radius:8px; padding:15px;">
+                    <div id="chatBox" style="flex-grow:1; overflow-y:auto; display:flex; flex-direction:column;">
+                        ${chat.rows.map(m => {
+                            const isBoss = m.sender === 'DISZPÉCSER' || m.sender === 'FŐNÖK';
+                            return `<div class="msg ${isBoss ? 'msg-boss' : 'msg-driver'}"><b>${m.sender}:</b><br>${m.message}</div>`;
+                        }).join('')}
+                    </div>
+                    <div style="margin-top:10px; display:flex; gap:10px;">
+                        <input type="text" id="m" style="flex-grow:1; padding:10px;" onkeydown="if(event.key==='Enter') sendMsg()">
+                        <button id="sendBtn" onclick="sendMsg()" style="padding:10px 20px; background:#3498db; border:none; color:white;">Küldés</button>
+                    </div>
+                </div>
+            </div>
+
+            <div id="profile" class="tab-content">
+                <h3>Sofőr adatai</h3>
+                <p>Név: ${name}</p>
+                <p>Rendszám: ${d.license_plate}</p>
+            </div>
+
+            <div id="access" class="tab-content">
+                <h3>Hozzáférés kezelése</h3>
+                <p>Hamarosan...</p>
+            </div>
+
             <script>
-                // Scroll chat to bottom
-                var chatContainer = document.getElementById('chatContainer');
-                chatContainer.scrollTop = chatContainer.scrollHeight;
-
-                // Browser Notification permission
-                if (Notification.permission !== "granted") {
-                    Notification.requestPermission();
+                function openTab(evt, tabName) {
+                    var i, tabcontent, tablinks;
+                    tabcontent = document.getElementsByClassName("tab-content");
+                    for (i = 0; i < tabcontent.length; i++) tabcontent[i].classList.remove("active");
+                    tablinks = document.getElementsByTagName("nav")[0].getElementsByTagName("button");
+                    for (i = 0; i < tablinks.length; i++) tablinks[i].classList.remove("active");
+                    document.getElementById(tabName).classList.add("active");
+                    evt.currentTarget.classList.add("active");
+                    if(tabName === 'dashboard') setTimeout(() => map.invalidateSize(), 200);
                 }
 
-                // Check for new messages since last load
-                var lastMsgCount = localStorage.getItem('msgCount') || 0;
-                var currentMsgCount = ${chat.rows.length};
-                if (currentMsgCount > lastMsgCount) {
-                    var lastMsg = ${JSON.stringify(chat.rows[0] || {})};
-                    if (lastMsg.sender !== 'DISZPÉCSER' && lastMsg.sender !== 'FŐNÖK') {
-                        new Notification("Új üzenet: " + lastMsg.sender, { body: lastMsg.message });
-                    }
-                }
-                localStorage.setItem('msgCount', currentMsgCount);
-
-                var map = L.map('map').setView([47.5, 19.0], 7);
+                var map = L.map('map').setView([${d.latitude || 47.5}, ${d.longitude || 19.0}], 13);
                 L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png').addTo(map);
-                var drivers = ${JSON.stringify(drivers.rows)};
-                if(drivers.length > 0) map.setView([drivers[0].latitude, drivers[0].longitude], 10);
-                drivers.forEach(d => {
-                    L.marker([d.latitude, d.longitude]).addTo(map).bindPopup(d.driver_name);
-                    if(d.next_lat && d.next_lng) {
-                        L.Routing.control({
-                            waypoints: [L.latLng(d.latitude, d.longitude), L.latLng(d.next_lat, d.next_lng)],
-                            createMarker: function() { return null; },
-                            lineOptions: { styles: [{color: '#3498db', opacity: 0.8, weight: 6}] },
-                            addWaypoints: false,
-                            routeWhileDragging: false
-                        }).addTo(map);
-                    }
-                });
-                function focusMarker(lat, lng) { map.setView([lat, lng], 13); }
+                L.marker([${d.latitude || 47.5}, ${d.longitude || 19.0}]).addTo(map);
+
+                if(${!!(d.next_lat && d.next_lng)}) {
+                    L.Routing.control({
+                        waypoints: [L.latLng(${d.latitude}, ${d.longitude}), L.latLng(${d.next_lat}, ${d.next_lng})],
+                        createMarker: function() { return null; },
+                        lineOptions: { styles: [{color: '#3498db', opacity: 0.8, weight: 6}] },
+                        addWaypoints: false,
+                        routeWhileDragging: false
+                    }).addTo(map);
+                }
+
+                let isSending = false;
                 function sendMsg() {
-                    var text = document.getElementById('m').value;
+                    if (isSending) return;
+                    var input = document.getElementById('m');
+                    var btn = document.getElementById('sendBtn');
+                    var text = input.value;
                     if(!text) return;
-                    fetch('/api/send-chat', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({sender: 'DISZPÉCSER', message: text, timestamp: Date.now()}) }).then(() => location.reload());
+
+                    isSending = true;
+                    input.disabled = true;
+                    btn.disabled = true;
+
+                    fetch('/api/send-chat', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({sender: 'DISZPÉCSER', message: text, timestamp: Date.now()})
+                    }).then(() => {
+                        location.reload();
+                    }).catch(() => {
+                        isSending = false;
+                        input.disabled = false;
+                        btn.disabled = false;
+                    });
                 }
                 function setStatus(id, status) {
                     fetch('/admin/update-cost', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({id, status}) }).then(() => location.reload());
                 }
+                // Scroll chat
+                var chatBox = document.getElementById('chatBox');
+                chatBox.scrollTop = chatBox.scrollHeight;
             </script>
         </body>
         </html>
