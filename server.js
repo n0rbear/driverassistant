@@ -11,11 +11,12 @@ const initDb = async () => {
         `CREATE TABLE IF NOT EXISTS live_updates (id SERIAL PRIMARY KEY, driver_name TEXT, driver_photo TEXT, license_plate TEXT, latitude DOUBLE PRECISION, longitude DOUBLE PRECISION, speed FLOAT, status TEXT, current_tour TEXT, next_stop TEXT, next_lat DOUBLE PRECISION, next_lng DOUBLE PRECISION, timestamp BIGINT)`,
         `CREATE TABLE IF NOT EXISTS costs (id SERIAL PRIMARY KEY, driver_name TEXT, amount DECIMAL, currency TEXT, category TEXT, notes TEXT, mileage INT, status TEXT DEFAULT 'Rögzítve', timestamp BIGINT)`,
         `CREATE TABLE IF NOT EXISTS chat_messages (id SERIAL PRIMARY KEY, driver_name TEXT, sender TEXT, message TEXT, timestamp BIGINT)`,
+        `CREATE TABLE IF NOT EXISTS work_times (id SERIAL PRIMARY KEY, driver_name TEXT, type TEXT, start_time BIGINT, end_time BIGINT, mileage INT, end_mileage INT, license_plate TEXT, notes TEXT, date TEXT)`,
         `CREATE TABLE IF NOT EXISTS hotels (id SERIAL PRIMARY KEY, driver_name TEXT, name TEXT, address TEXT, timestamp BIGINT)`
     ];
     for (let q of queries) { await pool.query(q); }
 
-    // Biztosítjuk, hogy a driver_name oszlop létezik a chat_messages-ben (régi telepítésekhez)
+    // Oszlop ellenőrzések
     try { await pool.query('ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS driver_name TEXT'); } catch(e) {}
 };
 initDb();
@@ -40,9 +41,12 @@ app.get('/api/get-chat/:driverName', async (req, res) => {
     res.json(result.rows);
 });
 
-app.get('/api/cost-status/:driverName', async (req, res) => {
-    const result = await pool.query('SELECT id, status FROM costs WHERE driver_name = $1', [req.params.driverName]);
-    res.json(result.rows);
+app.post('/api/sync-worktimes', async (req, res) => {
+    for (const wt of req.body) {
+        await pool.query('INSERT INTO work_times (driver_name, type, start_time, end_time, mileage, end_mileage, license_plate, notes, date) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT DO NOTHING',
+            [wt.driverName, wt.type, wt.startTime, wt.endTime, wt.mileage, wt.endMileage, wt.licensePlate, wt.notes, wt.date]);
+    }
+    res.sendStatus(200);
 });
 
 app.post('/api/sync-costs', async (req, res) => {
@@ -75,6 +79,7 @@ app.get('/driver/:name', async (req, res) => {
     const update = await pool.query('SELECT * FROM live_updates WHERE driver_name = $1 ORDER BY timestamp DESC LIMIT 1', [name]);
     const costs = await pool.query('SELECT * FROM costs WHERE driver_name = $1 ORDER BY timestamp DESC', [name]);
     const chat = await pool.query('SELECT * FROM chat_messages WHERE driver_name = $1 ORDER BY timestamp ASC', [name]);
+    const work = await pool.query('SELECT * FROM work_times WHERE driver_name = $1 ORDER BY start_time DESC', [name]);
     const d = update.rows[0] || { driver_name: name };
 
     res.send(`
@@ -109,10 +114,12 @@ app.get('/driver/:name', async (req, res) => {
             </header>
             <nav id="mainNav">
                 <button onclick="openTab(event, 'dashboard')">DASHBOARD</button>
+                <button onclick="openTab(event, 'report')">MENETLEVÉL</button>
                 <button onclick="openTab(event, 'tours')">TÚRÁK</button>
                 <button onclick="openTab(event, 'costs')">KÖLTSÉGEK</button>
                 <button onclick="openTab(event, 'hotels')">HOTELEK</button>
                 <button onclick="openTab(event, 'chat')">CHAT</button>
+                <button onclick="openTab(event, 'stats')">STATISZTIKA</button>
                 <button onclick="openTab(event, 'profile')">PROFIL</button>
                 <button onclick="openTab(event, 'access')">HOZZÁFÉRÉS</button>
             </nav>
@@ -129,15 +136,25 @@ app.get('/driver/:name', async (req, res) => {
                 </div>
             </div>
 
-            <div id="tours" class="tab-content"><h3>Aktív és lezárt túrák</h3><p>Nincs megjeleníthető túra adat.</p></div>
+            <div id="report" class="tab-content">
+                <h3>Napi menetlevél adatok</h3>
+                <table>
+                    <tr><th>Típus</th><th>Időtartam</th><th>Rendszám</th><th>KM állás</th><th>Megjegyzés</th></tr>
+                    ${work.rows.map(w => `<tr><td>${w.type}</td><td>${new Date(Number(w.start_time)).toLocaleTimeString()} - ${w.end_time ? new Date(Number(w.end_time)).toLocaleTimeString() : '...'}</td><td>${w.license_plate || '-'}</td><td>${w.mileage || ''} - ${w.end_mileage || ''}</td><td>${w.notes || ''}</td></tr>`).join('')}
+                </table>
+            </div>
+
+            <div id="tours" class="tab-content"><h3>Túrák</h3><p>Túrák kezelése folyamatban...</p></div>
 
             <div id="costs" class="tab-content">
-                <h3>Költségek és jóváhagyás</h3>
+                <h3>Költségek</h3>
                 <table>
                     <tr><th>Dátum</th><th>Kategória</th><th>Összeg</th><th>Státusz</th><th>Művelet</th></tr>
                     ${costs.rows.map(c => `<tr><td>${new Date(Number(c.timestamp)).toLocaleDateString()}</td><td>${c.category}</td><td>${c.amount} ${c.currency}</td><td>${c.status}</td><td><button onclick="setStatus(${c.id}, 'Elfogadva')">✔</button><button onclick="setStatus(${c.id}, 'Kifizetve')">$</button></td></tr>`).join('')}
                 </table>
             </div>
+
+            <div id="hotels" class="tab-content"><h3>Hotelek</h3><p>Hotelek listája...</p></div>
 
             <div id="chat" class="tab-content">
                 <div style="height:400px; display:flex; flex-direction:column; background:#111; border-radius:8px; padding:15px;">
@@ -154,6 +171,7 @@ app.get('/driver/:name', async (req, res) => {
                 </div>
             </div>
 
+            <div id="stats" class="tab-content"><h3>Zeitkonto / Statisztika</h3><p>Havi összesítés...</p></div>
             <div id="profile" class="tab-content"><h3>Sofőr adatai</h3><p>Név: ${name}</p><p>Rendszám: ${d.license_plate}</p></div>
             <div id="access" class="tab-content"><h3>Hozzáférés</h3><p>Hamarosan...</p></div>
 
@@ -171,30 +189,20 @@ app.get('/driver/:name', async (req, res) => {
                     if(tabName === 'chat') scrollChat();
                 }
 
-                // Restore tab
                 var savedTab = localStorage.getItem('activeTab_${name}') || 'dashboard';
+                document.getElementById(savedTab).classList.add('active');
                 var buttons = document.getElementById("mainNav").getElementsByTagName("button");
                 for(var b of buttons) { if(b.innerText.toLowerCase() === savedTab) b.classList.add('active'); }
-                document.getElementById(savedTab).classList.add('active');
-                if(savedTab === 'chat') setTimeout(scrollChat, 100);
 
                 var map = L.map('map').setView([${d.latitude || 47.5}, ${d.longitude || 19.0}], 13);
                 L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png').addTo(map);
                 L.marker([${d.latitude || 47.5}, ${d.longitude || 19.0}]).addTo(map);
-                if(${!!(d.next_lat && d.next_lng)}) {
-                    L.Routing.control({
-                        waypoints: [L.latLng(${d.latitude}, ${d.longitude}), L.latLng(${d.next_lat}, ${d.next_lng})],
-                        createMarker: function() { return null; },
-                        lineOptions: { styles: [{color: '#3498db', opacity: 0.8, weight: 6}] },
-                        addWaypoints: false,
-                        routeWhileDragging: false
-                    }).addTo(map);
-                }
 
                 function scrollChat() {
                     var chatBox = document.getElementById('chatBox');
                     chatBox.scrollTop = chatBox.scrollHeight;
                 }
+                if(savedTab === 'chat') setTimeout(scrollChat, 100);
 
                 let isSending = false;
                 function sendMsg() {
@@ -215,10 +223,7 @@ app.get('/driver/:name', async (req, res) => {
                     fetch('/admin/update-cost', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({id, status}) }).then(() => location.reload());
                 }
 
-                // Auto reload logic
                 setTimeout(() => { location.reload(); }, 30000);
-
-                // Notifications
                 if (Notification.permission !== "granted") { Notification.requestPermission(); }
                 var lastMsgCount = localStorage.getItem('msgCount_${name}') || 0;
                 var currentMsgCount = ${chat.rows.length};
