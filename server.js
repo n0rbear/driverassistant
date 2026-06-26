@@ -27,7 +27,7 @@ app.post('/api/live-update', async (req, res) => {
 
 app.post('/api/send-chat', async (req, res) => {
     const { sender, message, timestamp } = req.body;
-    await pool.query('INSERT INTO chat_messages (sender, message, timestamp) VALUES ($1, $2, $3)', [sender, message, timestamp]);
+    await pool.query('INSERT INTO chat_messages (sender, message, timestamp) VALUES ($1, $2, $3)', [sender, message, timestamp || Date.now()]);
     res.sendStatus(200);
 });
 
@@ -73,7 +73,10 @@ app.get('/', async (req, res) => {
                 #side { width: 400px; padding: 20px; background: #222; overflow-y: auto; border-right: 1px solid #444; }
                 #map { flex-grow: 1; height: 100vh; }
                 .card { background: #333; padding: 15px; border-radius: 8px; margin-bottom: 10px; border-left: 5px solid #3498db; cursor: pointer; }
-                .msg { background: #000; padding: 5px; margin: 2px; border-radius: 4px; font-size: 12px; }
+                .msg { padding: 8px; margin: 5px 0; border-radius: 8px; font-size: 13px; max-width: 90%; }
+                .msg-boss { background: #F57F17; color: black; align-self: flex-end; margin-left: auto; }
+                .msg-driver { background: #34495e; color: white; }
+                .chat-container { height: 250px; overflow-y: auto; background: #111; padding: 10px; display: flex; flex-direction: column; border-radius: 8px; }
             </style>
         </head>
         <body>
@@ -84,7 +87,8 @@ app.get('/', async (req, res) => {
                     <div class="card" onclick="focusMarker(\${d.latitude}, \${d.longitude})">
                         <img src="\${d.driver_photo || ''}" style="width:40px;height:40px;border-radius:50%;float:right">
                         <b>\${d.driver_name}</b><br>
-                        <small>\${d.status} | \${d.license_plate}</small>
+                        <small>\${d.status} | \${d.license_plate}</small><br>
+                        <small style="color:#aaa">🎯 Cél: \${d.next_stop || 'Nincs'}</small>
                     </div>
                 \`).join('')}
                 <hr>
@@ -97,10 +101,16 @@ app.get('/', async (req, res) => {
                 \`).join('')}
                 <hr>
                 <h3>💬 Chat</h3>
-                <div style="height:150px; overflow-y:auto; background:#111; padding:5px;">
-                    \${chat.rows.map(m => \`<div class="msg"><b>\${m.sender}:</b> \${m.message}</div>\`).join('')}
+                <div class="chat-container">
+                    \${chat.rows.map(m => {
+                        const isBoss = m.sender === 'DISZPÉCSER' || m.sender === 'FŐNÖK';
+                        return \`<div class="msg \${isBoss ? 'msg-boss' : 'msg-driver'}"><b>\${m.sender}:</b><br>\${m.message}</div>\`;
+                    }).reverse().join('')}
                 </div>
-                <input type="text" id="m" style="width:70%"><button onclick="sendMsg()">OK</button>
+                <div style="margin-top:10px;">
+                    <input type="text" id="m" style="width:70%; background:#333; border:1px solid #444; color:white; padding:5px;">
+                    <button onclick="sendMsg()" style="width:25%; background:#3498db; border:none; color:white; padding:6px; cursor:pointer;">OK</button>
+                </div>
             </div>
             <div id="map"></div>
             <script>
@@ -110,17 +120,21 @@ app.get('/', async (req, res) => {
                 if(drivers.length > 0) map.setView([drivers[0].latitude, drivers[0].longitude], 10);
                 drivers.forEach(d => {
                     L.marker([d.latitude, d.longitude]).addTo(map).bindPopup(d.driver_name);
-                    if(d.next_lat) {
+                    if(d.next_lat && d.next_lng) {
                         L.Routing.control({
                             waypoints: [L.latLng(d.latitude, d.longitude), L.latLng(d.next_lat, d.next_lng)],
                             createMarker: function() { return null; },
-                            addWaypoints: false
+                            lineOptions: { styles: [{color: '#3498db', opacity: 0.8, weight: 6}] },
+                            addWaypoints: false,
+                            routeWhileDragging: false
                         }).addTo(map);
                     }
                 });
                 function focusMarker(lat, lng) { map.setView([lat, lng], 13); }
                 function sendMsg() {
-                    fetch('/api/send-chat', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({sender: 'DISZPÉCSER', message: document.getElementById('m').value, timestamp: Date.now()}) }).then(() => location.reload());
+                    var text = document.getElementById('m').value;
+                    if(!text) return;
+                    fetch('/api/send-chat', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({sender: 'DISZPÉCSER', message: text, timestamp: Date.now()}) }).then(() => location.reload());
                 }
                 function setStatus(id, status) {
                     fetch('/admin/update-cost', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({id, status}) }).then(() => location.reload());
