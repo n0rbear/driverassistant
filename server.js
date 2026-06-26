@@ -112,10 +112,10 @@ app.get('/driver/:name', async (req, res) => {
 
     const d = update.rows[0] || { driver_name: name };
 
-    res.send(\`
+    res.send(`
         <html>
         <head>
-            <title>ERP - \${name}</title>
+            <title>ERP - ${name}</title>
             <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
             <link rel="stylesheet" href="https://unpkg.com/leaflet-routing-machine@3.2.12/dist/leaflet-routing-machine.css" />
             <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -141,8 +141,8 @@ app.get('/driver/:name', async (req, res) => {
         <body>
             <header>
                 <button onclick="location.href='/'" style="margin-right:20px;">⬅</button>
-                <img src="\${d.driver_photo || ''}" style="width:40px;height:40px;border-radius:50%;margin-right:15px;">
-                <h2>\${name} - ERP Kontroll</h2>
+                <img src="${d.driver_photo || ''}" style="width:40px;height:40px;border-radius:50%;margin-right:15px;">
+                <h2>${name} - ERP Kontroll</h2>
             </header>
             <nav id="mainNav">
                 <button onclick="openTab(event, 'dashboard')">DASHBOARD</button>
@@ -160,11 +160,11 @@ app.get('/driver/:name', async (req, res) => {
                 <div style="display:grid; grid-template-columns: 1fr 300px; gap: 20px;">
                     <div id="map"></div>
                     <div style="background:#222; padding:20px; border-radius:8px;">
-                        <h3>Státusz: <span style="color:#3498db">\${d.status}</span></h3>
-                        <p>Sebesség: \${Math.round(d.speed || 0)} km/h</p>
-                        <p>Rendszám: \${d.license_plate || 'N/A'}</p>
+                        <h3>Státusz: <span style="color:#3498db">${d.status}</span></h3>
+                        <p>Sebesség: ${Math.round(d.speed || 0)} km/h</p>
+                        <p>Rendszám: ${d.license_plate || 'N/A'}</p>
                         <hr>
-                        <p>🎯 Cél: \${d.next_stop || 'Nincs'}</p>
+                        <p>🎯 Cél: ${d.next_stop || 'Nincs'}</p>
                         <p id="distBox" style="color:#2ecc71; font-weight:bold; font-size:20px;">Távolság: -- km</p>
                     </div>
                 </div>
@@ -174,31 +174,31 @@ app.get('/driver/:name', async (req, res) => {
                 <h3>Napi menetlevél adatok</h3>
                 <table>
                     <tr><th>Típus</th><th>Időtartam</th><th>Rendszám</th><th>KM állás</th><th>Megjegyzés</th></tr>
-                    \${work.rows.map(w => \`<tr><td>\${w.type}</td><td>\${new Date(Number(w.start_time)).toLocaleTimeString()} - \${w.end_time ? new Date(Number(w.end_time)).toLocaleTimeString() : '...'}</td><td>\${w.license_plate || '-'}</td><td>\${w.mileage || ''} - \${w.end_mileage || ''}</td><td>\${w.notes || ''}</td></tr>\`).join('')}
+                    ${work.rows.map(w => `<tr><td>${w.type}</td><td>${new Date(Number(w.start_time)).toLocaleTimeString()} - ${w.end_time ? new Date(Number(w.end_time)).toLocaleTimeString() : '...'}</td><td>${w.license_plate || '-'}</td><td>${w.mileage || ''} - ${w.end_mileage || ''}</td><td>${w.notes || ''}</td></tr>`).join('')}
                 </table>
             </div>
 
             <div id="tours" class="tab-content">
                 <h3>Túrák</h3>
-                \${toursRes.rows.map(t => \`
+                ${toursRes.rows.map(t => `
                     <div class="tour-card">
-                        <b>\${t.name}</b> (\${t.customer}) - \${new Date(Number(t.date)).toLocaleDateString()}
-                        \${t.stops.map(s => \`
+                        <b>${t.name}</b> (${t.customer}) - ${new Date(Number(t.date)).toLocaleDateString()}
+                        ${t.stops.map(s => `
                             <div class="stop-item">
-                                \${s.order_index + 1}. \${s.address} <br>
-                                <small>\${s.contact_name} | \${s.time_window}</small>
-                                \${s.is_completed ? \`<br><span style="color:green">✔ Érkezett: \${new Date(Number(s.arrival_time)).toLocaleTimeString()}</span>\` : ''}
+                                ${s.order_index + 1}. ${s.address} <br>
+                                <small>${s.contact_name} | ${s.time_window}</small>
+                                ${s.is_completed ? `<br><span style="color:green">✔ Érkezett: ${new Date(Number(s.arrival_time)).toLocaleTimeString()}</span>` : ''}
                             </div>
-                        \`).join('')}
+                        `).join('')}
                     </div>
-                \`).join('')}
+                `).join('')}
             </div>
 
             <div id="costs" class="tab-content">
                 <h3>Költségek</h3>
                 <table>
                     <tr><th>Dátum</th><th>Kategória</th><th>Összeg</th><th>Státusz</th><th>Művelet</th></tr>
-                    \${costs.rows.map(c => \`<tr><td>\${new Date(Number(c.timestamp)).toLocaleDateString()}</td><td>\${c.category}</td><td>\${c.amount} \${c.currency}</td><td>\${c.status}</td><td><button onclick="setStatus(\${c.id}, 'Elfogadva')">✔</button><button onclick="setStatus(\${c.id}, 'Kifizetve')">$</button></td></tr>\`).join('')}
+                    ${costs.rows.map(c => `<tr><td>${new Date(Number(c.timestamp)).toLocaleDateString()}</td><td>${c.category}</td><td>${c.amount} ${c.currency}</td><td>${c.status}</td><td><button onclick="setStatus(${c.id}, 'Elfogadva')">✔</button><button onclick="setStatus(${c.id}, 'Kifizetve')">$</button></td></tr>`).join('')}
                 </table>
             </div>
 
@@ -206,16 +206,16 @@ app.get('/driver/:name', async (req, res) => {
                 <h3>Hotelek</h3>
                 <table>
                     <tr><th>Dátum</th><th>Név</th><th>Cím</th></tr>
-                    \${hotelsRes.rows.map(h => \`<tr><td>\${new Date(Number(h.timestamp)).toLocaleDateString()}</td><td>\${h.name}</td><td>\${h.address}</td></tr>\`).join('')}
+                    ${hotelsRes.rows.map(h => `<tr><td>${new Date(Number(h.timestamp)).toLocaleDateString()}</td><td>${h.name}</td><td>${h.address}</td></tr>`).join('')}
                 </table>
             </div>
 
             <div id="chat" class="tab-content">
                 <div style="height:400px; display:flex; flex-direction:column; background:#111; border-radius:8px; padding:15px;">
                     <div id="chatBox" style="flex-grow:1; overflow-y:auto; display:flex; flex-direction:column;">
-                        \${chat.rows.map(m => {
+                        ${chat.rows.map(m => {
                             const isBoss = m.sender === 'DISZPÉCSER' || m.sender === 'FŐNÖK';
-                            return \`<div class="msg \${isBoss ? 'msg-boss' : 'msg-driver'}"><b>\${m.sender}:</b><br>\${m.message}</div>\`;
+                            return `<div class="msg ${isBoss ? 'msg-boss' : 'msg-driver'}"><b>${m.sender}:</b><br>${m.message}</div>`;
                         }).join('')}
                     </div>
                     <div style="margin-top:10px; display:flex; gap:10px;">
@@ -230,7 +230,7 @@ app.get('/driver/:name', async (req, res) => {
                 <p>Havi összesítés...</p>
             </div>
 
-            <div id="profile" class="tab-content"><h3>Sofőr adatai</h3><p>Név: \${name}</p><p>Rendszám: \${d.license_plate}</p></div>
+            <div id="profile" class="tab-content"><h3>Sofőr adatai</h3><p>Név: ${name}</p><p>Rendszám: ${d.license_plate}</p></div>
 
             <script>
                 function openTab(evt, tabName) {
@@ -241,23 +241,23 @@ app.get('/driver/:name', async (req, res) => {
                     for (i = 0; i < tablinks.length; i++) tablinks[i].classList.remove("active");
                     document.getElementById(tabName).classList.add("active");
                     if (evt) evt.currentTarget.classList.add("active");
-                    localStorage.setItem('activeTab_\${name}', tabName);
+                    localStorage.setItem('activeTab_${name}', tabName);
                     if(tabName === 'dashboard') setTimeout(() => map.invalidateSize(), 200);
                     if(tabName === 'chat') scrollChat();
                 }
 
-                var savedTab = localStorage.getItem('activeTab_\${name}') || 'dashboard';
+                var savedTab = localStorage.getItem('activeTab_${name}') || 'dashboard';
                 document.getElementById(savedTab).classList.add('active');
                 var buttons = document.getElementById("mainNav").getElementsByTagName("button");
                 for(var b of buttons) { if(b.innerText.toLowerCase() === savedTab) b.classList.add('active'); }
 
-                var map = L.map('map').setView([\${d.latitude || 47.5}, \${d.longitude || 19.0}], 13);
+                var map = L.map('map').setView([${d.latitude || 47.5}, ${d.longitude || 19.0}], 13);
                 L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png').addTo(map);
-                var driverMarker = L.marker([\${d.latitude || 47.5}, \${d.longitude || 19.0}]).addTo(map);
+                var driverMarker = L.marker([${d.latitude || 47.5}, ${d.longitude || 19.0}]).addTo(map);
 
-                if(\${!!(d.next_lat && d.next_lng)}) {
+                if(${!!(d.next_lat && d.next_lng)}) {
                     var routing = L.Routing.control({
-                        waypoints: [L.latLng(\${d.latitude}, \${d.longitude}), L.latLng(\${d.next_lat}, \${d.next_lng})],
+                        waypoints: [L.latLng(${d.latitude}, ${d.longitude}), L.latLng(${d.next_lat}, ${d.next_lng})],
                         createMarker: function() { return null; },
                         lineOptions: { styles: [{color: '#3498db', opacity: 0.8, weight: 6}] },
                         addWaypoints: false,
@@ -289,7 +289,7 @@ app.get('/driver/:name', async (req, res) => {
                     fetch('/api/send-chat', {
                         method: 'POST',
                         headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({driverName: '\${name}', sender: 'DISZPÉCSER', message: text, timestamp: Date.now()})
+                        body: JSON.stringify({driverName: '${name}', sender: 'DISZPÉCSER', message: text, timestamp: Date.now()})
                     }).then(() => location.reload());
                 }
 
@@ -301,7 +301,7 @@ app.get('/driver/:name', async (req, res) => {
             </script>
         </body>
         </html>
-    \`);
+    `);
 });
 
 const PORT = process.env.PORT || 3000;
