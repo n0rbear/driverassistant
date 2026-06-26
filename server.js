@@ -110,16 +110,36 @@ app.get('/', async (req, res) => {
                 ${costRows}
                 <hr>
                 <h3>💬 Chat</h3>
-                <div class="chat-container">
+                <div class="chat-container" id="chatContainer">
                     ${chatMsgs}
                 </div>
                 <div style="margin-top:10px;">
-                    <input type="text" id="m" style="width:70%; background:#333; border:1px solid #444; color:white; padding:5px;">
+                    <input type="text" id="m" style="width:70%; background:#333; border:1px solid #444; color:white; padding:5px;" onkeydown="if(event.key==='Enter') sendMsg()">
                     <button onclick="sendMsg()" style="width:25%; background:#3498db; border:none; color:white; padding:6px; cursor:pointer;">OK</button>
                 </div>
             </div>
             <div id="map"></div>
             <script>
+                // Scroll chat to bottom
+                var chatContainer = document.getElementById('chatContainer');
+                chatContainer.scrollTop = chatContainer.scrollHeight;
+
+                // Browser Notification permission
+                if (Notification.permission !== "granted") {
+                    Notification.requestPermission();
+                }
+
+                // Check for new messages since last load
+                var lastMsgCount = localStorage.getItem('msgCount') || 0;
+                var currentMsgCount = ${chat.rows.length};
+                if (currentMsgCount > lastMsgCount) {
+                    var lastMsg = ${JSON.stringify(chat.rows[0] || {})};
+                    if (lastMsg.sender !== 'DISZPÉCSER' && lastMsg.sender !== 'FŐNÖK') {
+                        new Notification("Új üzenet: " + lastMsg.sender, { body: lastMsg.message });
+                    }
+                }
+                localStorage.setItem('msgCount', currentMsgCount);
+
                 var map = L.map('map').setView([47.5, 19.0], 7);
                 L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png').addTo(map);
                 var drivers = ${JSON.stringify(drivers.rows)};
