@@ -10,10 +10,13 @@ const initDb = async () => {
     const queries = [
         `CREATE TABLE IF NOT EXISTS live_updates (id SERIAL PRIMARY KEY, driver_name TEXT, driver_photo TEXT, license_plate TEXT, latitude DOUBLE PRECISION, longitude DOUBLE PRECISION, speed FLOAT, status TEXT, current_tour TEXT, next_stop TEXT, next_lat DOUBLE PRECISION, next_lng DOUBLE PRECISION, timestamp BIGINT)`,
         `CREATE TABLE IF NOT EXISTS costs (id SERIAL PRIMARY KEY, driver_name TEXT, amount DECIMAL, currency TEXT, category TEXT, notes TEXT, mileage INT, status TEXT DEFAULT 'Rögzítve', timestamp BIGINT)`,
-        `CREATE TABLE IF NOT EXISTS chat_messages (id SERIAL PRIMARY KEY, sender TEXT, message TEXT, timestamp BIGINT)`,
+        `CREATE TABLE IF NOT EXISTS chat_messages (id SERIAL PRIMARY KEY, driver_name TEXT, sender TEXT, message TEXT, timestamp BIGINT)`,
         `CREATE TABLE IF NOT EXISTS hotels (id SERIAL PRIMARY KEY, driver_name TEXT, name TEXT, address TEXT, timestamp BIGINT)`
     ];
     for (let q of queries) { await pool.query(q); }
+
+    // Biztosítjuk, hogy a driver_name oszlop létezik a chat_messages-ben (régi telepítésekhez)
+    try { await pool.query('ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS driver_name TEXT'); } catch(e) {}
 };
 initDb();
 
@@ -26,15 +29,14 @@ app.post('/api/live-update', async (req, res) => {
 });
 
 app.post('/api/send-chat', async (req, res) => {
-    const { sender, message, timestamp } = req.body;
-    // Megelőzzük az üres vagy duplikált (azonos másodpercben érkező) üzeneteket
+    const { driverName, sender, message, timestamp } = req.body;
     if (!message) return res.sendStatus(400);
-    await pool.query('INSERT INTO chat_messages (sender, message, timestamp) VALUES ($1, $2, $3)', [sender, message, timestamp || Date.now()]);
+    await pool.query('INSERT INTO chat_messages (driver_name, sender, message, timestamp) VALUES ($1, $2, $3, $4)', [driverName, sender, message, timestamp || Date.now()]);
     res.sendStatus(200);
 });
 
-app.get('/api/get-chat', async (req, res) => {
-    const result = await pool.query('SELECT sender, message, timestamp FROM chat_messages ORDER BY timestamp ASC');
+app.get('/api/get-chat/:driverName', async (req, res) => {
+    const result = await pool.query('SELECT sender, message, timestamp FROM chat_messages WHERE driver_name = $1 ORDER BY timestamp ASC', [req.params.driverName]);
     res.json(result.rows);
 });
 
@@ -50,7 +52,6 @@ app.post('/api/sync-costs', async (req, res) => {
     res.sendStatus(200);
 });
 
-// ADMIN MŰVELETEK (WEB -> DB)
 app.post('/admin/update-cost', async (req, res) => {
     await pool.query('UPDATE costs SET status = $1 WHERE id = $2', [req.body.status, req.body.id]);
     res.json({ success: true });
@@ -59,7 +60,6 @@ app.post('/admin/update-cost', async (req, res) => {
 // ADMIN FRONTEND
 app.get('/', async (req, res) => {
     const drivers = await pool.query('SELECT DISTINCT ON (driver_name) * FROM live_updates ORDER BY driver_name, timestamp DESC');
-
     let list = drivers.rows.map(d => `
         <div class="card" onclick="location.href='/driver/${encodeURIComponent(d.driver_name)}'">
             <img src="${d.driver_photo || ''}" style="width:50px;height:50px;border-radius:50%;float:right">
@@ -67,31 +67,14 @@ app.get('/', async (req, res) => {
             <p>${d.status} | ${d.license_plate}</p>
         </div>
     `).join('');
-
-    res.send(`
-        <html>
-        <head>
-            <title>Driver ERP - Main</title>
-            <style>
-                body { font-family: sans-serif; background: #1a1a1a; color: white; padding: 40px; }
-                .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 20px; }
-                .card { background: #333; padding: 20px; border-radius: 12px; cursor: pointer; border-left: 8px solid #3498db; transition: 0.2s; }
-                .card:hover { transform: scale(1.02); background: #444; }
-            </style>
-        </head>
-        <body>
-            <h1>🚛 Flotta kiválasztása</h1>
-            <div class="grid">${list}</div>
-        </body>
-        </html>
-    `);
+    res.send(`<html><head><title>Driver ERP</title><style>body { font-family: sans-serif; background: #1a1a1a; color: white; padding: 40px; } .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 20px; } .card { background: #333; padding: 20px; border-radius: 12px; cursor: pointer; border-left: 8px solid #3498db; transition: 0.2s; } .card:hover { transform: scale(1.02); background: #444; }</style></head><body><h1>🚛 Flotta kiválasztása</h1><div class="grid">${list}</div></body></html>`);
 });
 
 app.get('/driver/:name', async (req, res) => {
     const name = req.params.name;
     const update = await pool.query('SELECT * FROM live_updates WHERE driver_name = $1 ORDER BY timestamp DESC LIMIT 1', [name]);
     const costs = await pool.query('SELECT * FROM costs WHERE driver_name = $1 ORDER BY timestamp DESC', [name]);
-    const chat = await pool.query('SELECT * FROM chat_messages ORDER BY timestamp ASC'); // Global chat for now, or filter by sender
+    const chat = await pool.query('SELECT * FROM chat_messages WHERE driver_name = $1 ORDER BY timestamp ASC', [name]);
     const d = update.rows[0] || { driver_name: name };
 
     res.send(`
@@ -124,8 +107,8 @@ app.get('/driver/:name', async (req, res) => {
                 <img src="${d.driver_photo || ''}" style="width:40px;height:40px;border-radius:50%;margin-right:15px;">
                 <h2>${name} - ERP Kontroll</h2>
             </header>
-            <nav>
-                <button class="active" onclick="openTab(event, 'dashboard')">DASHBOARD</button>
+            <nav id="mainNav">
+                <button onclick="openTab(event, 'dashboard')">DASHBOARD</button>
                 <button onclick="openTab(event, 'tours')">TÚRÁK</button>
                 <button onclick="openTab(event, 'costs')">KÖLTSÉGEK</button>
                 <button onclick="openTab(event, 'hotels')">HOTELEK</button>
@@ -134,42 +117,25 @@ app.get('/driver/:name', async (req, res) => {
                 <button onclick="openTab(event, 'access')">HOZZÁFÉRÉS</button>
             </nav>
 
-            <div id="dashboard" class="tab-content active">
+            <div id="dashboard" class="tab-content">
                 <div style="display:grid; grid-template-columns: 1fr 300px; gap: 20px;">
                     <div id="map"></div>
-                    <div>
-                        <div style="background:#222; padding:20px; border-radius:8px;">
-                            <h3>Státusz: <span style="color:#3498db">${d.status}</span></h3>
-                            <p>Sebesség: ${Math.round(d.speed || 0)} km/h</p>
-                            <p>Rendszám: ${d.license_plate || 'N/A'}</p>
-                            <hr>
-                            <p>🎯 Cél: ${d.next_stop || 'Nincs'}</p>
-                        </div>
+                    <div style="background:#222; padding:20px; border-radius:8px;">
+                        <h3>Státusz: <span style="color:#3498db">${d.status}</span></h3>
+                        <p>Sebesség: ${Math.round(d.speed || 0)} km/h</p>
+                        <p>Rendszám: ${d.license_plate || 'N/A'}</p>
+                        <hr><p>🎯 Cél: ${d.next_stop || 'Nincs'}</p>
                     </div>
                 </div>
             </div>
 
-            <div id="tours" class="tab-content">
-                <h3>Aktív és lezárt túrák</h3>
-                <p>Nincs megjeleníthető túra adat.</p>
-            </div>
+            <div id="tours" class="tab-content"><h3>Aktív és lezárt túrák</h3><p>Nincs megjeleníthető túra adat.</p></div>
 
             <div id="costs" class="tab-content">
                 <h3>Költségek és jóváhagyás</h3>
                 <table>
                     <tr><th>Dátum</th><th>Kategória</th><th>Összeg</th><th>Státusz</th><th>Művelet</th></tr>
-                    ${costs.rows.map(c => `
-                        <tr>
-                            <td>${new Date(Number(c.timestamp)).toLocaleDateString()}</td>
-                            <td>${c.category}</td>
-                            <td>${c.amount} ${c.currency}</td>
-                            <td>${c.status}</td>
-                            <td>
-                                <button onclick="setStatus(${c.id}, 'Elfogadva')">✔</button>
-                                <button onclick="setStatus(${c.id}, 'Kifizetve')">$</button>
-                            </td>
-                        </tr>
-                    `).join('')}
+                    ${costs.rows.map(c => `<tr><td>${new Date(Number(c.timestamp)).toLocaleDateString()}</td><td>${c.category}</td><td>${c.amount} ${c.currency}</td><td>${c.status}</td><td><button onclick="setStatus(${c.id}, 'Elfogadva')">✔</button><button onclick="setStatus(${c.id}, 'Kifizetve')">$</button></td></tr>`).join('')}
                 </table>
             </div>
 
@@ -188,33 +154,33 @@ app.get('/driver/:name', async (req, res) => {
                 </div>
             </div>
 
-            <div id="profile" class="tab-content">
-                <h3>Sofőr adatai</h3>
-                <p>Név: ${name}</p>
-                <p>Rendszám: ${d.license_plate}</p>
-            </div>
-
-            <div id="access" class="tab-content">
-                <h3>Hozzáférés kezelése</h3>
-                <p>Hamarosan...</p>
-            </div>
+            <div id="profile" class="tab-content"><h3>Sofőr adatai</h3><p>Név: ${name}</p><p>Rendszám: ${d.license_plate}</p></div>
+            <div id="access" class="tab-content"><h3>Hozzáférés</h3><p>Hamarosan...</p></div>
 
             <script>
                 function openTab(evt, tabName) {
                     var i, tabcontent, tablinks;
                     tabcontent = document.getElementsByClassName("tab-content");
                     for (i = 0; i < tabcontent.length; i++) tabcontent[i].classList.remove("active");
-                    tablinks = document.getElementsByTagName("nav")[0].getElementsByTagName("button");
+                    tablinks = document.getElementById("mainNav").getElementsByTagName("button");
                     for (i = 0; i < tablinks.length; i++) tablinks[i].classList.remove("active");
                     document.getElementById(tabName).classList.add("active");
-                    evt.currentTarget.classList.add("active");
+                    if (evt) evt.currentTarget.classList.add("active");
+                    localStorage.setItem('activeTab_${name}', tabName);
                     if(tabName === 'dashboard') setTimeout(() => map.invalidateSize(), 200);
+                    if(tabName === 'chat') scrollChat();
                 }
+
+                // Restore tab
+                var savedTab = localStorage.getItem('activeTab_${name}') || 'dashboard';
+                var buttons = document.getElementById("mainNav").getElementsByTagName("button");
+                for(var b of buttons) { if(b.innerText.toLowerCase() === savedTab) b.classList.add('active'); }
+                document.getElementById(savedTab).classList.add('active');
+                if(savedTab === 'chat') setTimeout(scrollChat, 100);
 
                 var map = L.map('map').setView([${d.latitude || 47.5}, ${d.longitude || 19.0}], 13);
                 L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png').addTo(map);
                 L.marker([${d.latitude || 47.5}, ${d.longitude || 19.0}]).addTo(map);
-
                 if(${!!(d.next_lat && d.next_lng)}) {
                     L.Routing.control({
                         waypoints: [L.latLng(${d.latitude}, ${d.longitude}), L.latLng(${d.next_lat}, ${d.next_lng})],
@@ -225,36 +191,44 @@ app.get('/driver/:name', async (req, res) => {
                     }).addTo(map);
                 }
 
+                function scrollChat() {
+                    var chatBox = document.getElementById('chatBox');
+                    chatBox.scrollTop = chatBox.scrollHeight;
+                }
+
                 let isSending = false;
                 function sendMsg() {
                     if (isSending) return;
                     var input = document.getElementById('m');
-                    var btn = document.getElementById('sendBtn');
                     var text = input.value;
                     if(!text) return;
-
                     isSending = true;
                     input.disabled = true;
-                    btn.disabled = true;
-
                     fetch('/api/send-chat', {
                         method: 'POST',
                         headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({sender: 'DISZPÉCSER', message: text, timestamp: Date.now()})
-                    }).then(() => {
-                        location.reload();
-                    }).catch(() => {
-                        isSending = false;
-                        input.disabled = false;
-                        btn.disabled = false;
-                    });
+                        body: JSON.stringify({driverName: '${name}', sender: 'DISZPÉCSER', message: text, timestamp: Date.now()})
+                    }).then(() => location.reload());
                 }
+
                 function setStatus(id, status) {
                     fetch('/admin/update-cost', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({id, status}) }).then(() => location.reload());
                 }
-                // Scroll chat
-                var chatBox = document.getElementById('chatBox');
-                chatBox.scrollTop = chatBox.scrollHeight;
+
+                // Auto reload logic
+                setTimeout(() => { location.reload(); }, 30000);
+
+                // Notifications
+                if (Notification.permission !== "granted") { Notification.requestPermission(); }
+                var lastMsgCount = localStorage.getItem('msgCount_${name}') || 0;
+                var currentMsgCount = ${chat.rows.length};
+                if (currentMsgCount > lastMsgCount) {
+                    var lastMsg = ${JSON.stringify(chat.rows[chat.rows.length - 1] || {})};
+                    if (lastMsg.sender && lastMsg.sender !== 'DISZPÉCSER') {
+                        new Notification("Üzenet: " + lastMsg.sender, { body: lastMsg.message });
+                    }
+                }
+                localStorage.setItem('msgCount_${name}', currentMsgCount);
             </script>
         </body>
         </html>
