@@ -101,6 +101,15 @@ app.get('/driver/:name', async (req, res) => {
     const costs = await pool.query('SELECT * FROM costs WHERE driver_name = $1 ORDER BY timestamp DESC', [name]);
     const chat = await pool.query('SELECT * FROM chat_messages WHERE driver_name = $1 ORDER BY timestamp ASC', [name]);
     const work = await pool.query('SELECT * FROM work_times WHERE driver_name = $1 ORDER BY start_time DESC', [name]);
+    const toursRes = await pool.query('SELECT * FROM tours WHERE driver_name = $1 ORDER BY date DESC', [name]);
+    const hotelsRes = await pool.query('SELECT * FROM hotels WHERE driver_name = $1 ORDER BY timestamp DESC', [name]);
+
+    // Fetch stops for each tour
+    for (let tour of toursRes.rows) {
+        const stopsRes = await pool.query('SELECT * FROM stops WHERE tour_id = $1 ORDER BY order_index ASC', [tour.id]);
+        tour.stops = stopsRes.rows;
+    }
+
     const d = update.rows[0] || { driver_name: name };
 
     res.send(`
@@ -125,6 +134,8 @@ app.get('/driver/:name', async (req, res) => {
                 .msg-driver { background: #34495e; color: white; }
                 table { width: 100%; border-collapse: collapse; }
                 th, td { text-align: left; padding: 12px; border-bottom: 1px solid #333; }
+                .tour-card { background: #222; padding: 15px; border-radius: 8px; margin-bottom: 15px; }
+                .stop-item { margin-left: 20px; border-left: 2px solid #444; padding-left: 10px; margin-top: 5px; }
             </style>
         </head>
         <body>
@@ -167,13 +178,35 @@ app.get('/driver/:name', async (req, res) => {
                 </table>
             </div>
 
-            <div id="tours" class="tab-content"><h3>Túrák</h3><p>Túrák kezelése folyamatban...</p></div>
+            <div id="tours" class="tab-content">
+                <h3>Túrák</h3>
+                ${toursRes.rows.map(t => `
+                    <div class="tour-card">
+                        <b>${t.name}</b> (${t.customer}) - ${new Date(Number(t.date)).toLocaleDateString()}
+                        ${t.stops.map(s => `
+                            <div class="stop-item">
+                                ${s.order_index + 1}. ${s.address} <br>
+                                <small>${s.contact_name} | ${s.time_window}</small>
+                                ${s.is_completed ? `<br><span style="color:green">✔ Érkezett: ${new Date(Number(s.arrival_time)).toLocaleTimeString()}</span>` : ''}
+                            </div>
+                        `).join('')}
+                    </div>
+                `).join('')}
+            </div>
 
             <div id="costs" class="tab-content">
                 <h3>Költségek</h3>
                 <table>
                     <tr><th>Dátum</th><th>Kategória</th><th>Összeg</th><th>Státusz</th><th>Művelet</th></tr>
                     ${costs.rows.map(c => `<tr><td>${new Date(Number(c.timestamp)).toLocaleDateString()}</td><td>${c.category}</td><td>${c.amount} ${c.currency}</td><td>${c.status}</td><td><button onclick="setStatus(${c.id}, 'Elfogadva')">✔</button><button onclick="setStatus(${c.id}, 'Kifizetve')">$</button></td></tr>`).join('')}
+                </table>
+            </div>
+
+            <div id="hotels" class="tab-content">
+                <h3>Hotelek</h3>
+                <table>
+                    <tr><th>Dátum</th><th>Név</th><th>Cím</th></tr>
+                    ${hotelsRes.rows.map(h => `<tr><td>${new Date(Number(h.timestamp)).toLocaleDateString()}</td><td>${h.name}</td><td>${h.address}</td></tr>`).join('')}
                 </table>
             </div>
 
@@ -192,7 +225,11 @@ app.get('/driver/:name', async (req, res) => {
                 </div>
             </div>
 
-            <div id="stats" class="tab-content"><h3>Zeitkonto / Statisztika</h3><p>Havi összesítés...</p></div>
+            <div id="stats" class="tab-content">
+                <h3>Zeitkonto / Statisztika</h3>
+                <p>Havi összesítés...</p>
+            </div>
+
             <div id="profile" class="tab-content"><h3>Sofőr adatai</h3><p>Név: ${name}</p><p>Rendszám: ${d.license_plate}</p></div>
 
             <script>
