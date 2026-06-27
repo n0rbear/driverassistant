@@ -43,8 +43,23 @@ const initDb = async () => {
     }
 
     // Egyedi megszorítások hozzáadása a szinkronizációhoz
-    try { await pool.query('ALTER TABLE work_times ADD CONSTRAINT unique_worktime UNIQUE (driver_name, start_time)'); } catch(e) {}
-    try { await pool.query('ALTER TABLE costs ADD CONSTRAINT unique_cost UNIQUE (driver_name, timestamp, amount)'); } catch(e) {}
+    try {
+        // Először töröljük a duplikátumokat, hogy a CONSTRAINT ne bukjon el
+        await pool.query(`
+            DELETE FROM work_times a USING work_times b
+            WHERE a.id < b.id AND a.driver_name = b.driver_name AND a.start_time = b.start_time
+        `);
+        await pool.query('ALTER TABLE work_times ADD CONSTRAINT unique_worktime UNIQUE (driver_name, start_time)');
+    } catch(e) { console.log("WorkTime constraint check:", e.message); }
+
+    try {
+        await pool.query(`
+            DELETE FROM costs a USING costs b
+            WHERE a.id < b.id AND a.driver_name = b.driver_name AND a.timestamp = b.timestamp AND a.amount = b.amount
+        `);
+        await pool.query('ALTER TABLE costs ADD CONSTRAINT unique_cost UNIQUE (driver_name, timestamp, amount)');
+    } catch(e) { console.log("Cost constraint check:", e.message); }
+
     try { await pool.query('ALTER TABLE hotels ADD CONSTRAINT unique_hotel UNIQUE (driver_name, timestamp, name)'); } catch(e) {}
 };
 initDb().catch(console.error);
@@ -272,7 +287,7 @@ app.get('/driver/:name', async (req, res) => {
     const update = await pool.query('SELECT * FROM live_updates WHERE driver_name = $1 ORDER BY timestamp DESC LIMIT 1', [name]);
     const costs = await pool.query('SELECT * FROM costs WHERE driver_name = $1 ORDER BY timestamp DESC', [name]);
     const chat = await pool.query('SELECT * FROM chat_messages WHERE driver_name = $1 ORDER BY timestamp ASC', [name]);
-    const work = await pool.query('SELECT * FROM work_times WHERE driver_name = $1 ORDER BY start_time DESC', [name]);
+    const work = await pool.query('SELECT DISTINCT ON (start_time) * FROM work_times WHERE driver_name = $1 ORDER BY start_time DESC, id DESC', [name]);
     const toursRes = await pool.query('SELECT * FROM tours WHERE driver_name = $1 ORDER BY date DESC', [name]);
     const hotelsRes = await pool.query('SELECT * FROM hotels WHERE driver_name = $1 ORDER BY timestamp DESC', [name]);
 
