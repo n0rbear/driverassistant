@@ -145,8 +145,13 @@ app.post('/admin/update-cost', async (req, res) => {
 });
 
 app.get('/api/cost-status/:driverName', async (req, res) => {
-    const result = await pool.query('SELECT id, status FROM costs WHERE driver_name = $1', [req.params.driverName]);
-    res.json(result.rows);
+    const result = await pool.query('SELECT id, status, timestamp, amount FROM costs WHERE driver_name = $1', [req.params.driverName]);
+    res.json(result.rows.map(r => ({
+        id: r.id,
+        status: r.status,
+        timestamp: Number(r.timestamp),
+        amount: Number(r.amount)
+    })));
 });
 
 app.post('/admin/save-tour', async (req, res) => {
@@ -182,12 +187,52 @@ app.post('/admin/delete-tour', async (req, res) => {
 });
 
 app.get('/api/get-tours/:driverName', async (req, res) => {
-    const toursRes = await pool.query('SELECT * FROM tours WHERE driver_name = $1 ORDER BY date DESC', [req.params.driverName]);
-    for (let tour of toursRes.rows) {
-        const stopsRes = await pool.query('SELECT * FROM stops WHERE tour_id = $1 ORDER BY order_index ASC', [tour.id]);
-        tour.stops = stopsRes.rows;
+    try {
+        const toursRes = await pool.query('SELECT * FROM tours WHERE driver_name = $1 ORDER BY date DESC', [req.params.driverName]);
+        const results = [];
+        for (let tour of toursRes.rows) {
+            const stopsRes = await pool.query('SELECT * FROM stops WHERE tour_id = $1 ORDER BY order_index ASC', [tour.id]);
+
+            // Map snake_case to camelCase for the App
+            const mappedTour = {
+                id: tour.id,
+                driverName: tour.driver_name,
+                name: tour.name,
+                customer: tour.customer,
+                date: Number(tour.date),
+                dayOfWeek: tour.day_of_week,
+                notes: tour.notes,
+                isClosed: tour.is_closed,
+                isCurrent: tour.is_current
+            };
+
+            const mappedStops = stopsRes.rows.map(s => ({
+                id: s.id,
+                tourId: s.tour_id,
+                address: s.address,
+                contactName: s.contact_name,
+                phoneNumber: s.phone_number,
+                email: s.email,
+                timeWindow: s.time_window,
+                notes: s.notes,
+                alternativeNames: s.alternative_names,
+                orderIndex: s.order_index,
+                latitude: s.latitude,
+                longitude: s.longitude,
+                isCompleted: s.is_completed,
+                arrivalTime: s.arrival_time ? Number(s.arrival_time) : null
+            }));
+
+            results.push({
+                tour: mappedTour,
+                stops: mappedStops
+            });
+        }
+        res.json(results);
+    } catch (e) {
+        console.error('GET TOURS ERROR:', e);
+        res.status(500).send(e.message);
     }
-    res.json(toursRes.rows);
 });
 
 // ADMIN FRONTEND
@@ -603,8 +648,6 @@ app.get('/driver/:name', async (req, res) => {
                         body: JSON.stringify({id})
                     }).then(() => location.reload());
                 }
-
-                setTimeout(() => { location.reload(); }, 60000);
             </script>
         </body>
         </html>
