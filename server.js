@@ -8,14 +8,16 @@ const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejec
 
 // ADATBÁZIS SÉMA FRISSÍTÉSE
 const initDb = async () => {
+    await pool.query('CREATE EXTENSION IF NOT EXISTS "pgcrypto"');
     const queries = [
-        `CREATE TABLE IF NOT EXISTS live_updates (id SERIAL PRIMARY KEY, driver_name TEXT, driver_photo TEXT, driver_phone TEXT, driver_email TEXT, license_plate TEXT, latitude DOUBLE PRECISION, longitude DOUBLE PRECISION, speed FLOAT, status TEXT, current_tour TEXT, next_stop TEXT, next_lat DOUBLE PRECISION, next_lng DOUBLE PRECISION, timestamp BIGINT)`,
-        `CREATE TABLE IF NOT EXISTS costs (id SERIAL PRIMARY KEY, driver_name TEXT, amount DECIMAL, currency TEXT, category TEXT, notes TEXT, mileage INT, status TEXT DEFAULT 'Rögzítve', timestamp BIGINT)`,
-        `CREATE TABLE IF NOT EXISTS chat_messages (id SERIAL PRIMARY KEY, driver_name TEXT, sender TEXT, message TEXT, timestamp BIGINT)`,
-        `CREATE TABLE IF NOT EXISTS work_times (id SERIAL PRIMARY KEY, driver_name TEXT, type TEXT, start_time BIGINT, end_time BIGINT, mileage INT, end_mileage INT, license_plate TEXT, notes TEXT, date TEXT)`,
-        `CREATE TABLE IF NOT EXISTS hotels (id SERIAL PRIMARY KEY, driver_name TEXT, name TEXT, address TEXT, timestamp BIGINT)`,
-        `CREATE TABLE IF NOT EXISTS tours (id SERIAL PRIMARY KEY, driver_name TEXT, name TEXT, customer TEXT, date BIGINT, day_of_week TEXT, notes TEXT, is_closed BOOLEAN, is_current BOOLEAN)`,
-        `CREATE TABLE IF NOT EXISTS stops (id SERIAL PRIMARY KEY, tour_id INT, address TEXT, contact_name TEXT, phone_number TEXT, email TEXT, time_window TEXT, notes TEXT, alternative_names TEXT, order_index INT, latitude DOUBLE PRECISION, longitude DOUBLE PRECISION, is_completed BOOLEAN, arrival_time BIGINT)`
+        `CREATE TABLE IF NOT EXISTS drivers (uuid UUID UNIQUE DEFAULT gen_random_uuid(), name TEXT UNIQUE, email TEXT, phone TEXT, license_plate TEXT, photo_url TEXT, is_active BOOLEAN DEFAULT TRUE)`,
+        `CREATE TABLE IF NOT EXISTS live_updates (id SERIAL PRIMARY KEY, uuid UUID UNIQUE DEFAULT gen_random_uuid(), driver_name TEXT, driver_photo TEXT, driver_phone TEXT, driver_email TEXT, license_plate TEXT, latitude DOUBLE PRECISION, longitude DOUBLE PRECISION, speed FLOAT, status TEXT, current_tour TEXT, next_stop TEXT, next_lat DOUBLE PRECISION, next_lng DOUBLE PRECISION, timestamp BIGINT)`,
+        `CREATE TABLE IF NOT EXISTS costs (id SERIAL PRIMARY KEY, uuid UUID UNIQUE DEFAULT gen_random_uuid(), driver_name TEXT, amount DECIMAL, currency TEXT, category TEXT, notes TEXT, mileage INT, status TEXT DEFAULT 'Rögzítve', timestamp BIGINT)`,
+        `CREATE TABLE IF NOT EXISTS chat_messages (id SERIAL PRIMARY KEY, uuid UUID UNIQUE DEFAULT gen_random_uuid(), driver_name TEXT, sender TEXT, message TEXT, timestamp BIGINT)`,
+        `CREATE TABLE IF NOT EXISTS work_times (id SERIAL PRIMARY KEY, uuid UUID UNIQUE DEFAULT gen_random_uuid(), driver_name TEXT, type TEXT, start_time BIGINT, end_time BIGINT, mileage INT, end_mileage INT, license_plate TEXT, notes TEXT, date TEXT)`,
+        `CREATE TABLE IF NOT EXISTS hotels (id SERIAL PRIMARY KEY, uuid UUID UNIQUE DEFAULT gen_random_uuid(), driver_name TEXT, name TEXT, address TEXT, timestamp BIGINT)`,
+        `CREATE TABLE IF NOT EXISTS tours (id SERIAL PRIMARY KEY, uuid UUID UNIQUE DEFAULT gen_random_uuid(), driver_name TEXT, name TEXT, customer TEXT, date BIGINT, day_of_week TEXT, notes TEXT, is_closed BOOLEAN, is_current BOOLEAN, deleted_at BIGINT)`,
+        `CREATE TABLE IF NOT EXISTS stops (id SERIAL PRIMARY KEY, uuid UUID UNIQUE DEFAULT gen_random_uuid(), tour_id INT, address TEXT, contact_name TEXT, phone_number TEXT, email TEXT, time_window TEXT, notes TEXT, alternative_names TEXT, order_index INT, latitude DOUBLE PRECISION, longitude DOUBLE PRECISION, is_completed BOOLEAN, arrival_time BIGINT, deleted_at BIGINT)`
     ];
     for (let q of queries) { await pool.query(q); }
 
@@ -30,7 +32,16 @@ const initDb = async () => {
         ['stops', 'latitude', 'DOUBLE PRECISION'],
         ['stops', 'longitude', 'DOUBLE PRECISION'],
         ['stops', 'is_completed', 'BOOLEAN'],
-        ['stops', 'arrival_time', 'BIGINT']
+        ['stops', 'arrival_time', 'BIGINT'],
+        ['tours', 'deleted_at', 'BIGINT'],
+        ['stops', 'deleted_at', 'BIGINT'],
+        ['live_updates', 'uuid', 'UUID UNIQUE DEFAULT gen_random_uuid()'],
+        ['costs', 'uuid', 'UUID UNIQUE DEFAULT gen_random_uuid()'],
+        ['chat_messages', 'uuid', 'UUID UNIQUE DEFAULT gen_random_uuid()'],
+        ['work_times', 'uuid', 'UUID UNIQUE DEFAULT gen_random_uuid()'],
+        ['hotels', 'uuid', 'UUID UNIQUE DEFAULT gen_random_uuid()'],
+        ['tours', 'uuid', 'UUID UNIQUE DEFAULT gen_random_uuid()'],
+        ['stops', 'uuid', 'UUID UNIQUE DEFAULT gen_random_uuid()']
     ];
 
     for (const [table, col, type] of addColumns) {
@@ -54,34 +65,34 @@ initDb().catch(console.error);
 // API-K
 app.post('/api/live-update', async (req, res) => {
     const d = req.body;
-    await pool.query('INSERT INTO live_updates (driver_name, driver_photo, driver_phone, driver_email, license_plate, latitude, longitude, speed, status, current_tour, next_stop, next_lat, next_lng, timestamp) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)',
-        [d.driverName, d.driverPhoto, d.driverPhone, d.driverEmail, d.licensePlate, d.latitude, d.longitude, d.speed, d.status, d.currentTour, d.nextStop, d.nextLat, d.nextLng, d.timestamp]);
+    await pool.query('INSERT INTO live_updates (uuid, driver_name, driver_photo, driver_phone, driver_email, license_plate, latitude, longitude, speed, status, current_tour, next_stop, next_lat, next_lng, timestamp) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)',
+        [d.uuid || null, d.driverName, d.driverPhoto, d.driverPhone, d.driverEmail, d.licensePlate, d.latitude, d.longitude, d.speed, d.status, d.currentTour, d.nextStop, d.nextLat, d.nextLng, d.timestamp]);
     res.sendStatus(200);
 });
 
 app.post('/api/send-chat', async (req, res) => {
-    const { driverName, sender, message, timestamp } = req.body;
+    const { uuid, driverName, sender, message, timestamp } = req.body;
     if (!message) return res.sendStatus(400);
-    await pool.query('INSERT INTO chat_messages (driver_name, sender, message, timestamp) VALUES ($1, $2, $3, $4)', [driverName, sender, message, timestamp || Date.now()]);
+    await pool.query('INSERT INTO chat_messages (uuid, driver_name, sender, message, timestamp) VALUES ($1, $2, $3, $4, $5)', [uuid || null, driverName, sender, message, timestamp || Date.now()]);
     res.sendStatus(200);
 });
 
 app.get('/api/get-chat/:driverName', async (req, res) => {
-    const result = await pool.query('SELECT sender, message, timestamp FROM chat_messages WHERE driver_name = $1 ORDER BY timestamp ASC', [req.params.driverName]);
+    const result = await pool.query('SELECT uuid, sender, message, timestamp FROM chat_messages WHERE driver_name = $1 ORDER BY timestamp ASC', [req.params.driverName]);
     res.json(result.rows);
 });
 
 app.post('/api/sync-worktimes', async (req, res) => {
     for (const wt of req.body) {
-        await pool.query(`INSERT INTO work_times (driver_name, type, start_time, end_time, mileage, end_mileage, license_plate, notes, date) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT (driver_name, start_time) DO UPDATE SET end_time = EXCLUDED.end_time, end_mileage = EXCLUDED.end_mileage, notes = EXCLUDED.notes`,
-            [wt.driverName, wt.type, wt.startTime, wt.endTime, wt.mileage, wt.endMileage, wt.licensePlate, wt.notes, wt.date]);
+        await pool.query(`INSERT INTO work_times (uuid, driver_name, type, start_time, end_time, mileage, end_mileage, license_plate, notes, date) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) ON CONFLICT (driver_name, start_time) DO UPDATE SET end_time = EXCLUDED.end_time, end_mileage = EXCLUDED.end_mileage, notes = EXCLUDED.notes`,
+            [wt.uuid || null, wt.driverName, wt.type, wt.startTime, wt.endTime, wt.mileage, wt.endMileage, wt.licensePlate, wt.notes, wt.date]);
     }
     res.sendStatus(200);
 });
 
 app.post('/api/sync-costs', async (req, res) => {
     for (const c of req.body) {
-        await pool.query('INSERT INTO costs (driver_name, amount, currency, category, notes, mileage, timestamp) VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (driver_name, timestamp, amount) DO UPDATE SET status = EXCLUDED.status, notes = EXCLUDED.notes', [c.driverName, c.amount, c.currency, c.category, c.notes, c.mileage, c.timestamp]);
+        await pool.query('INSERT INTO costs (uuid, driver_name, amount, currency, category, notes, mileage, timestamp) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT (driver_name, timestamp, amount) DO UPDATE SET status = EXCLUDED.status, notes = EXCLUDED.notes', [c.uuid || null, c.driverName, c.amount, c.currency, c.category, c.notes, c.mileage, c.timestamp]);
     }
     res.sendStatus(200);
 });
@@ -90,27 +101,81 @@ app.post('/api/sync-tours/:driverName', async (req, res) => {
     const driverName = req.params.driverName;
     try {
         await pool.query('BEGIN');
-        const oldTours = await pool.query('SELECT id FROM tours WHERE driver_name = $1', [driverName]);
-        const tourIds = oldTours.rows.map(r => r.id);
-        if (tourIds.length > 0) {
-            await pool.query('DELETE FROM stops WHERE tour_id = ANY($1)', [tourIds]);
-            await pool.query('DELETE FROM tours WHERE id = ANY($1)', [tourIds]);
-        }
-        if (req.body && Array.isArray(req.body)) {
-            for (const item of req.body) {
-                if (!item.tour) continue;
-                const t = item.tour;
-                const result = await pool.query('INSERT INTO tours (driver_name, name, customer, date, day_of_week, notes, is_closed, is_current) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id',
-                    [driverName, t.name || 'Túra', t.customer || '', t.date || Date.now(), t.dayOfWeek || '', t.notes || '', !!t.isClosed, !!t.isCurrent]);
-                const tourId = result.rows[0].id;
-                if (item.stops && Array.isArray(item.stops)) {
-                    for (const s of item.stops) {
-                        await pool.query('INSERT INTO stops (tour_id, address, contact_name, phone_number, email, time_window, notes, alternative_names, order_index, latitude, longitude, is_completed, arrival_time) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)',
-                            [tourId, s.address || '', s.contactName || '', s.phoneNumber || '', s.email || '', s.timeWindow || '', s.notes || '', s.alternativeNames || null, s.orderIndex || 0, s.latitude || null, s.longitude || null, !!s.isCompleted, s.arrivalTime || null]);
+        const incomingTours = req.body || [];
+        const incomingTourUuids = incomingTours.map(item => item.tour.uuid).filter(u => !!u);
+
+        for (const item of incomingTours) {
+            if (!item.tour) continue;
+            const t = item.tour;
+
+            if (t.deletedAt) {
+                if (t.uuid) {
+                    await pool.query('DELETE FROM stops WHERE tour_id IN (SELECT id FROM tours WHERE uuid = $1)', [t.uuid]);
+                    await pool.query('DELETE FROM tours WHERE uuid = $1', [t.uuid]);
+                }
+                continue;
+            }
+
+            let tourId;
+            if (t.uuid) {
+                const resT = await pool.query(`
+                    INSERT INTO tours (uuid, driver_name, name, customer, date, day_of_week, notes, is_closed, is_current)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                    ON CONFLICT (uuid) DO UPDATE SET
+                        name = EXCLUDED.name,
+                        customer = EXCLUDED.customer,
+                        date = EXCLUDED.date,
+                        day_of_week = EXCLUDED.day_of_week,
+                        notes = EXCLUDED.notes,
+                        is_closed = EXCLUDED.is_closed,
+                        is_current = EXCLUDED.is_current
+                    RETURNING id
+                `, [t.uuid, driverName, t.name || 'Túra', t.customer || '', t.date || Date.now(), t.dayOfWeek || '', t.notes || '', !!t.isClosed, !!t.isCurrent]);
+                tourId = resT.rows[0].id;
+            } else {
+                const resT = await pool.query(`
+                    INSERT INTO tours (driver_name, name, customer, date, day_of_week, notes, is_closed, is_current)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                    RETURNING id
+                `, [driverName, t.name || 'Túra', t.customer || '', t.date || Date.now(), t.dayOfWeek || '', t.notes || '', !!t.isClosed, !!t.isCurrent]);
+                tourId = resT.rows[0].id;
+            }
+
+            if (item.stops && Array.isArray(item.stops)) {
+                for (const s of item.stops) {
+                    if (s.deletedAt) {
+                        if (s.uuid) await pool.query('DELETE FROM stops WHERE uuid = $1', [s.uuid]);
+                        continue;
+                    }
+                    if (s.uuid) {
+                        await pool.query(`
+                            INSERT INTO stops (uuid, tour_id, address, contact_name, phone_number, email, time_window, notes, alternative_names, order_index, latitude, longitude, is_completed, arrival_time)
+                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+                            ON CONFLICT (uuid) DO UPDATE SET
+                                tour_id = EXCLUDED.tour_id,
+                                address = EXCLUDED.address,
+                                contact_name = EXCLUDED.contact_name,
+                                phone_number = EXCLUDED.phone_number,
+                                email = EXCLUDED.email,
+                                time_window = EXCLUDED.time_window,
+                                notes = EXCLUDED.notes,
+                                alternative_names = EXCLUDED.alternative_names,
+                                order_index = EXCLUDED.order_index,
+                                latitude = EXCLUDED.latitude,
+                                longitude = EXCLUDED.longitude,
+                                is_completed = EXCLUDED.is_completed,
+                                arrival_time = EXCLUDED.arrival_time
+                        `, [s.uuid, tourId, s.address || '', s.contactName || '', s.phoneNumber || '', s.email || '', s.timeWindow || '', s.notes || '', s.alternativeNames || null, s.orderIndex || 0, s.latitude || null, s.longitude || null, !!s.isCompleted, s.arrivalTime || null]);
+                    } else {
+                        await pool.query(`
+                            INSERT INTO stops (tour_id, address, contact_name, phone_number, email, time_window, notes, alternative_names, order_index, latitude, longitude, is_completed, arrival_time)
+                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                        `, [tourId, s.address || '', s.contactName || '', s.phoneNumber || '', s.email || '', s.timeWindow || '', s.notes || '', s.alternativeNames || null, s.orderIndex || 0, s.latitude || null, s.longitude || null, !!s.isCompleted, s.arrivalTime || null]);
                     }
                 }
             }
         }
+
         await pool.query('COMMIT');
         res.sendStatus(200);
     } catch (e) {
@@ -121,7 +186,7 @@ app.post('/api/sync-tours/:driverName', async (req, res) => {
 
 app.post('/api/sync-hotels', async (req, res) => {
     for (const h of req.body) {
-        await pool.query('INSERT INTO hotels (driver_name, name, address, timestamp) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING', [h.driverName, h.name, h.address, h.timestamp]);
+        await pool.query('INSERT INTO hotels (uuid, driver_name, name, address, timestamp) VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING', [h.uuid || null, h.driverName, h.name, h.address, h.timestamp]);
     }
     res.sendStatus(200);
 });
@@ -132,23 +197,52 @@ app.post('/admin/update-cost', async (req, res) => {
 });
 
 app.get('/api/cost-status/:driverName', async (req, res) => {
-    const result = await pool.query('SELECT id, status, timestamp, amount FROM costs WHERE driver_name = $1', [req.params.driverName]);
-    res.json(result.rows.map(r => ({ id: r.id, status: r.status, timestamp: Number(r.timestamp), amount: Number(r.amount) })));
+    const result = await pool.query('SELECT id, uuid, status, timestamp, amount FROM costs WHERE driver_name = $1', [req.params.driverName]);
+    res.json(result.rows.map(r => ({ id: r.id, uuid: r.uuid, status: r.status, timestamp: Number(r.timestamp), amount: Number(r.amount) })));
 });
 
 app.post('/admin/save-tour', async (req, res) => {
     try {
-        const { id, driver_name, name, customer, date, day_of_week, notes, is_closed, stops } = req.body;
+        const { id, uuid, driver_name, name, customer, date, day_of_week, notes, is_closed, stops } = req.body;
         let tourId = id;
-        if (id) {
-            await pool.query('UPDATE tours SET name=$1, customer=$2, date=$3, day_of_week=$4, notes=$5, is_closed=$6 WHERE id=$7', [name, customer, date, day_of_week, notes, is_closed, id]);
-            await pool.query('DELETE FROM stops WHERE tour_id = $1', [id]);
+
+        if (!tourId && uuid) {
+            const resUuid = await pool.query('SELECT id FROM tours WHERE uuid = $1', [uuid]);
+            if (resUuid.rows.length > 0) tourId = resUuid.rows[0].id;
+        }
+
+        if (tourId) {
+            await pool.query('UPDATE tours SET uuid=$1, name=$2, customer=$3, date=$4, day_of_week=$5, notes=$6, is_closed=$7 WHERE id=$8', [uuid || null, name, customer, date, day_of_week, notes, is_closed, tourId]);
         } else {
-            const result = await pool.query('INSERT INTO tours (driver_name, name, customer, date, day_of_week, notes, is_closed) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id', [driver_name, name, customer, date, day_of_week, notes, is_closed]);
+            const result = await pool.query('INSERT INTO tours (uuid, driver_name, name, customer, date, day_of_week, notes, is_closed) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id', [uuid || null, driver_name, name, customer, date, day_of_week, notes, is_closed]);
             tourId = result.rows[0].id;
         }
-        for (const s of stops) {
-            await pool.query('INSERT INTO stops (tour_id, address, contact_name, phone_number, email, time_window, notes, order_index, is_completed) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)', [tourId, s.address, s.contact_name, s.phone_number, s.email, s.time_window, s.notes, s.order_index, !!s.is_completed]);
+
+        if (stops && Array.isArray(stops)) {
+            const incomingStopUuids = stops.map(s => s.uuid).filter(u => !!u);
+            for (const s of stops) {
+                if (s.uuid) {
+                    await pool.query(`
+                        INSERT INTO stops (uuid, tour_id, address, contact_name, phone_number, email, time_window, notes, order_index, is_completed)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                        ON CONFLICT (uuid) DO UPDATE SET
+                            tour_id = EXCLUDED.tour_id,
+                            address = EXCLUDED.address,
+                            contact_name = EXCLUDED.contact_name,
+                            phone_number = EXCLUDED.phone_number,
+                            email = EXCLUDED.email,
+                            time_window = EXCLUDED.time_window,
+                            notes = EXCLUDED.notes,
+                            order_index = EXCLUDED.order_index,
+                            is_completed = EXCLUDED.is_completed
+                    `, [s.uuid, tourId, s.address, s.contact_name, s.phone_number, s.email, s.time_window, s.notes, s.order_index, !!s.is_completed]);
+                } else {
+                    await pool.query('INSERT INTO stops (tour_id, address, contact_name, phone_number, email, time_window, notes, order_index, is_completed) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)', [tourId, s.address, s.contact_name, s.phone_number, s.email, s.time_window, s.notes, s.order_index, !!s.is_completed]);
+                }
+            }
+            if (incomingStopUuids.length > 0) {
+                await pool.query('DELETE FROM stops WHERE tour_id = $1 AND uuid IS NOT NULL AND NOT (uuid = ANY($2))', [tourId, incomingStopUuids]);
+            }
         }
         res.json({ success: true });
     } catch (e) { res.status(500).send(e.message); }
@@ -167,8 +261,8 @@ app.get('/api/get-tours/:driverName', async (req, res) => {
         for (let tour of toursRes.rows) {
             const stopsRes = await pool.query('SELECT * FROM stops WHERE tour_id = $1 ORDER BY order_index ASC', [tour.id]);
             results.push({
-                tour: { id: tour.id, driverName: tour.driver_name, name: tour.name, customer: tour.customer, date: Number(tour.date), dayOfWeek: tour.day_of_week, notes: tour.notes, isClosed: tour.is_closed, isCurrent: tour.is_current },
-                stops: stopsRes.rows.map(s => ({ id: s.id, tourId: s.tour_id, address: s.address, contactName: s.contact_name, phoneNumber: s.phone_number, email: s.email, timeWindow: s.time_window, notes: s.notes, alternativeNames: s.alternative_names, orderIndex: s.order_index, latitude: s.latitude, longitude: s.longitude, isCompleted: s.is_completed, arrivalTime: s.arrival_time ? Number(s.arrival_time) : null }))
+                tour: { id: tour.id, uuid: tour.uuid, driverName: tour.driver_name, name: tour.name, customer: tour.customer, date: Number(tour.date), dayOfWeek: tour.day_of_week, notes: tour.notes, isClosed: tour.is_closed, isCurrent: tour.is_current },
+                stops: stopsRes.rows.map(s => ({ id: s.id, uuid: s.uuid, tourId: s.tour_id, address: s.address, contactName: s.contact_name, phoneNumber: s.phone_number, email: s.email, timeWindow: s.time_window, notes: s.notes, alternativeNames: s.alternative_names, orderIndex: s.order_index, latitude: s.latitude, longitude: s.longitude, isCompleted: s.is_completed, arrivalTime: s.arrival_time ? Number(s.arrival_time) : null }))
             });
         }
         res.json(results);
@@ -263,7 +357,7 @@ app.get('/driver/:name', async (req, res) => {
 
         <div id="tourModal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.8); z-index:1000; padding:50px;">
             <div style="background:#222; padding:30px; border-radius:12px; max-width:800px; margin:auto; max-height:90vh; overflow-y:auto;">
-                <h2 id="modalTitle">Túra</h2><input type="hidden" id="tourId">
+                <h2 id="modalTitle">Túra</h2><input type="hidden" id="tourId"><input type="hidden" id="tourUuid">
                 <div style="display:grid; grid-template-columns:1fr 1fr; gap:15px; margin-bottom:20px;">
                     <input type="text" id="tName" placeholder="Név"><input type="text" id="tCustomer" placeholder="Megrendelő">
                     <input type="date" id="tDate"><input type="text" id="tDay" placeholder="Nap">
@@ -338,6 +432,7 @@ app.get('/driver/:name', async (req, res) => {
 
             function editTour(t) {
                 document.getElementById('tourId').value = t ? t.id : '';
+                document.getElementById('tourUuid').value = t ? t.uuid : '';
                 document.getElementById('tName').value = t ? t.name : '';
                 document.getElementById('tCustomer').value = t ? t.customer : '';
                 document.getElementById('tDate').value = t ? new Date(Number(t.date)).toISOString().split('T')[0] : '';
@@ -347,13 +442,14 @@ app.get('/driver/:name', async (req, res) => {
             }
             function addStopRow(s) {
                 const d = document.createElement('div');
+                d.dataset.uuid = s ? s.uuid : '';
                 d.innerHTML = '<input type="text" value="' + (s?s.address:'') + '" placeholder="Cím"><button onclick="this.parentElement.remove()">X</button>';
                 document.getElementById('modalStops').appendChild(d);
             }
             function closeModal() { document.getElementById('tourModal').style.display = 'none'; }
             function saveTour() {
-                const stops = []; document.querySelectorAll('#modalStops div').forEach((r, i) => stops.push({ address: r.querySelector('input').value, order_index: i }));
-                const data = { id: document.getElementById('tourId').value, driver_name: '${name}', name: document.getElementById('tName').value, customer: document.getElementById('tCustomer').value, date: new Date(document.getElementById('tDate').value).getTime(), stops };
+                const stops = []; document.querySelectorAll('#modalStops div').forEach((r, i) => stops.push({ uuid: r.dataset.uuid || null, address: r.querySelector('input').value, order_index: i }));
+                const data = { id: document.getElementById('tourId').value, uuid: document.getElementById('tourUuid').value, driver_name: '${name}', name: document.getElementById('tName').value, customer: document.getElementById('tCustomer').value, date: new Date(document.getElementById('tDate').value).getTime(), stops };
                 fetch('/admin/save-tour', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) }).then(() => location.reload());
             }
             function deleteTour(id) { if(confirm('Törlöd?')) fetch('/admin/delete-tour', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({id}) }).then(() => location.reload()); }
