@@ -71,7 +71,11 @@ app.get('/api/get-chat/:driverName', async (req, res) => {
 
 app.post('/api/sync-worktimes', async (req, res) => {
     for (const wt of req.body) {
-        await pool.query('INSERT INTO work_times (driver_name, type, start_time, end_time, mileage, end_mileage, license_plate, notes, date) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT DO NOTHING',
+        await pool.query(`
+            INSERT INTO work_times (driver_name, type, start_time, end_time, mileage, end_mileage, license_plate, notes, date)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            ON CONFLICT (driver_name, start_time)
+            DO UPDATE SET end_time = EXCLUDED.end_time, end_mileage = EXCLUDED.end_mileage, notes = EXCLUDED.notes`,
             [wt.driverName, wt.type, wt.startTime, wt.endTime, wt.mileage, wt.endMileage, wt.licensePlate, wt.notes, wt.date]);
     }
     res.sendStatus(200);
@@ -79,7 +83,7 @@ app.post('/api/sync-worktimes', async (req, res) => {
 
 app.post('/api/sync-costs', async (req, res) => {
     for (const c of req.body) {
-        await pool.query('INSERT INTO costs (driver_name, amount, currency, category, notes, mileage, timestamp) VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT DO NOTHING', [c.driverName, c.amount, c.currency, c.category, c.notes, c.mileage, c.timestamp]);
+        await pool.query('INSERT INTO costs (driver_name, amount, currency, category, notes, mileage, timestamp) VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (driver_name, timestamp, amount) DO UPDATE SET status = EXCLUDED.status, notes = EXCLUDED.notes', [c.driverName, c.amount, c.currency, c.category, c.notes, c.mileage, c.timestamp]);
     }
     res.sendStatus(200);
 });
@@ -651,7 +655,7 @@ app.get('/driver/:name', async (req, res) => {
             </script>
         </body>
         </html>
-    `);
+    \`);
 });
 
 const PORT = process.env.PORT || 3000;
