@@ -1,4 +1,4 @@
-// FIXED SERVER
+// FIXED SERVER v2
 const express = require('express');
 const { Pool } = require('pg');
 const app = express();
@@ -23,6 +23,7 @@ const initDb = async () => {
     const addColumns = [
         ['tours', 'day_of_week', 'TEXT'],
         ['tours', 'notes', 'TEXT'],
+        ['tours', 'customer', 'TEXT'],
         ['tours', 'is_closed', 'BOOLEAN'],
         ['tours', 'is_current', 'BOOLEAN'],
         ['live_updates', 'driver_phone', 'TEXT'],
@@ -143,6 +144,52 @@ app.post('/admin/update-cost', async (req, res) => {
     res.json({ success: true });
 });
 
+app.get('/api/cost-status/:driverName', async (req, res) => {
+    const result = await pool.query('SELECT id, status FROM costs WHERE driver_name = $1', [req.params.driverName]);
+    res.json(result.rows);
+});
+
+app.post('/admin/save-tour', async (req, res) => {
+    try {
+        const { id, driver_name, name, customer, date, day_of_week, notes, is_closed, stops } = req.body;
+        let tourId = id;
+
+        if (id) {
+            await pool.query('UPDATE tours SET name=$1, customer=$2, date=$3, day_of_week=$4, notes=$5, is_closed=$6 WHERE id=$7',
+                [name, customer, date, day_of_week, notes, is_closed, id]);
+            await pool.query('DELETE FROM stops WHERE tour_id = $1', [id]);
+        } else {
+            const result = await pool.query('INSERT INTO tours (driver_name, name, customer, date, day_of_week, notes, is_closed) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id',
+                [driver_name, name, customer, date, day_of_week, notes, is_closed]);
+            tourId = result.rows[0].id;
+        }
+
+        for (const s of stops) {
+            await pool.query('INSERT INTO stops (tour_id, address, contact_name, phone_number, email, time_window, notes, order_index, is_completed) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)',
+                [tourId, s.address, s.contact_name, s.phone_number, s.email, s.time_window, s.notes, s.order_index, !!s.is_completed]);
+        }
+        res.json({ success: true });
+    } catch (e) {
+        console.error(e);
+        res.status(500).send(e.message);
+    }
+});
+
+app.post('/admin/delete-tour', async (req, res) => {
+    await pool.query('DELETE FROM stops WHERE tour_id = $1', [req.body.id]);
+    await pool.query('DELETE FROM tours WHERE id = $1', [req.body.id]);
+    res.json({ success: true });
+});
+
+app.get('/api/get-tours/:driverName', async (req, res) => {
+    const toursRes = await pool.query('SELECT * FROM tours WHERE driver_name = $1 ORDER BY date DESC', [req.params.driverName]);
+    for (let tour of toursRes.rows) {
+        const stopsRes = await pool.query('SELECT * FROM stops WHERE tour_id = $1 ORDER BY order_index ASC', [tour.id]);
+        tour.stops = stopsRes.rows;
+    }
+    res.json(toursRes.rows);
+});
+
 // ADMIN FRONTEND
 app.get('/', async (req, res) => {
     try {
@@ -247,19 +294,52 @@ app.get('/driver/:name', async (req, res) => {
             </div>
 
             <div id="tours" class="tab-content">
-                <h3>Túrák</h3>
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <h3>Túrák</h3>
+                    <button onclick="editTour()" style="background:#2ecc71; color:white; border:none; padding:10px 20px; border-radius:4px; cursor:pointer;">+ Új túra</button>
+                </div>
+                <div id="tourList">
                 ${toursRes.rows.map(t => `
                     <div class="tour-card">
+                        <div style="float:right;">
+                            <button onclick='editTour(${JSON.stringify(t).replace(/'/g, "&apos;")})'>✏</button>
+                            <button onclick="deleteTour(${t.id})" style="background:#e74c3c; color:white;">🗑</button>
+                        </div>
                         <b>${t.name}</b> (${t.customer}) - ${new Date(Number(t.date)).toLocaleDateString()}
                         ${t.stops.map(s => `
                             <div class="stop-item">
-                                ${s.order_index + 1}. ${s.address} <br>
+                                ${Number(s.order_index) + 1}. ${s.address} <br>
                                 <small>${s.contact_name} | ${s.time_window}</small>
                                 ${s.is_completed ? `<br><span style="color:green">✔ Érkezett: ${new Date(Number(s.arrival_time)).toLocaleTimeString()}</span>` : ''}
                             </div>
                         `).join('')}
                     </div>
                 `).join('')}
+                </div>
+            </div>
+
+            <!-- Túra szerkesztő Modal -->
+            <div id="tourModal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.8); z-index:1000; padding:50px;">
+                <div style="background:#222; padding:30px; border-radius:12px; max-width:800px; margin:auto; max-height:90vh; overflow-y:auto;">
+                    <h2 id="modalTitle">Túra szerkesztése</h2>
+                    <input type="hidden" id="tourId">
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:15px; margin-bottom:20px;">
+                        <input type="text" id="tName" placeholder="Túra neve" style="padding:10px;">
+                        <input type="text" id="tCustomer" placeholder="Megrendelő" style="padding:10px;">
+                        <input type="date" id="tDate" style="padding:10px;">
+                        <input type="text" id="tDay" placeholder="Nap (pl. Hétfő)" style="padding:10px;">
+                    </div>
+                    <textarea id="tNotes" placeholder="Megjegyzések" style="width:100%; height:60px; margin-bottom:20px; padding:10px;"></textarea>
+
+                    <h3>Megállók</h3>
+                    <div id="modalStops"></div>
+                    <button onclick="addStopRow()" style="margin-top:10px;">+ Megálló hozzáadása</button>
+
+                    <div style="margin-top:30px; display:flex; gap:10px; justify-content:flex-end;">
+                        <button onclick="closeModal()">Mégse</button>
+                        <button onclick="saveTour()" style="background:#3498db; color:white; padding:10px 30px;">Mentés</button>
+                    </div>
+                </div>
             </div>
 
             <div id="costs" class="tab-content">
@@ -448,7 +528,83 @@ app.get('/driver/:name', async (req, res) => {
                     fetch('/admin/update-cost', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({id, status}) }).then(() => location.reload());
                 }
 
-                setTimeout(() => { location.reload(); }, 30000);
+                function editTour(tour) {
+                    document.getElementById('tourId').value = tour ? tour.id : '';
+                    document.getElementById('tName').value = tour ? tour.name : '';
+                    document.getElementById('tCustomer').value = tour ? tour.customer : '';
+                    document.getElementById('tDate').value = tour ? new Date(Number(tour.date)).toISOString().split('T')[0] : new Date().toISOString().split('T')[0];
+                    document.getElementById('tDay').value = tour ? (tour.day_of_week || '') : '';
+                    document.getElementById('tNotes').value = tour ? (tour.notes || '') : '';
+                    document.getElementById('modalTitle').innerText = tour ? 'Túra szerkesztése' : 'Új túra létrehozása';
+
+                    const stopBox = document.getElementById('modalStops');
+                    stopBox.innerHTML = '';
+                    if (tour && tour.stops) {
+                        tour.stops.forEach(s => addStopRow(s));
+                    } else if (!tour) {
+                        addStopRow();
+                    }
+
+                    document.getElementById('tourModal').style.display = 'block';
+                }
+
+                function addStopRow(s) {
+                    const div = document.createElement('div');
+                    div.className = 'stop-row';
+                    div.style = 'background:#333; padding:15px; margin-bottom:10px; border-radius:8px; display:grid; grid-template-columns: 1fr 1fr auto; gap:10px;';
+                    div.innerHTML = `
+                        <input type="text" placeholder="Cím" value="${s ? s.address : ''}" style="grid-column: span 2;">
+                        <input type="text" placeholder="Név" value="${s ? s.contact_name : ''}">
+                        <input type="text" placeholder="Időablak" value="${s ? s.time_window : ''}">
+                        <button onclick="this.parentElement.remove()" style="background:#e74c3c;">X</button>
+                    `;
+                    document.getElementById('modalStops').appendChild(div);
+                }
+
+                function closeModal() { document.getElementById('tourModal').style.display = 'none'; }
+
+                function saveTour() {
+                    const stops = [];
+                    document.getElementById('modalStops').querySelectorAll('.stop-row').forEach((row, index) => {
+                        const inputs = row.querySelectorAll('input');
+                        stops.push({
+                            address: inputs[0].value,
+                            contact_name: inputs[1].value,
+                            time_window: inputs[2].value,
+                            order_index: index,
+                            phone_number: '', email: '', notes: '', is_completed: false
+                        });
+                    });
+
+                    const data = {
+                        id: document.getElementById('tourId').value,
+                        driver_name: '${name}',
+                        name: document.getElementById('tName').value,
+                        customer: document.getElementById('tCustomer').value,
+                        date: new Date(document.getElementById('tDate').value).getTime(),
+                        day_of_week: document.getElementById('tDay').value,
+                        notes: document.getElementById('tNotes').value,
+                        is_closed: false,
+                        stops: stops
+                    };
+
+                    fetch('/admin/save-tour', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify(data)
+                    }).then(() => location.reload());
+                }
+
+                function deleteTour(id) {
+                    if (!confirm('Biztosan törlöd?')) return;
+                    fetch('/admin/delete-tour', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({id})
+                    }).then(() => location.reload());
+                }
+
+                setTimeout(() => { location.reload(); }, 60000);
             </script>
         </body>
         </html>
