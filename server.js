@@ -63,15 +63,13 @@ app.post('/api/sync-costs', async (req, res) => {
     res.sendStatus(200);
 });
 
-app.post('/api/sync-tours', async (req, res) => {
-    if (!req.body || req.body.length === 0) return res.sendStatus(200);
-
-    const driverName = req.body[0].tour.driverName;
+app.post('/api/sync-tours/:driverName', async (req, res) => {
+    const driverName = req.params.driverName;
     if (!driverName) return res.sendStatus(400);
 
     try {
         await pool.query('BEGIN');
-        // Először töröljük a sofőr meglévő túráit és megállóit, hogy ne legyenek duplikációk
+        // Töröljük a sofőr meglévő túráit és megállóit
         const oldTours = await pool.query('SELECT id FROM tours WHERE driver_name = $1', [driverName]);
         const tourIds = oldTours.rows.map(r => r.id);
         if (tourIds.length > 0) {
@@ -79,14 +77,16 @@ app.post('/api/sync-tours', async (req, res) => {
             await pool.query('DELETE FROM tours WHERE id = ANY($1)', [tourIds]);
         }
 
-        for (const item of req.body) {
-            const t = item.tour;
-            const result = await pool.query('INSERT INTO tours (driver_name, name, customer, date, day_of_week, notes, is_closed, is_current) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id',
-                [t.driverName, t.name, t.customer, t.date, t.dayOfWeek, t.notes, t.isClosed, t.isCurrent]);
-            const tourId = result.rows[0].id;
-            for (const s of item.stops) {
-                await pool.query('INSERT INTO stops (tour_id, address, contact_name, phone_number, email, time_window, notes, alternative_names, order_index, latitude, longitude, is_completed, arrival_time) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)',
-                    [tourId, s.address, s.contactName, s.phoneNumber, s.email, s.timeWindow, s.notes, s.alternativeNames, s.orderIndex, s.latitude, s.longitude, s.isCompleted, s.arrivalTime]);
+        if (req.body && req.body.length > 0) {
+            for (const item of req.body) {
+                const t = item.tour;
+                const result = await pool.query('INSERT INTO tours (driver_name, name, customer, date, day_of_week, notes, is_closed, is_current) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id',
+                    [driverName, t.name, t.customer, t.date, t.dayOfWeek, t.notes, t.isClosed, t.isCurrent]);
+                const tourId = result.rows[0].id;
+                for (const s of item.stops) {
+                    await pool.query('INSERT INTO stops (tour_id, address, contact_name, phone_number, email, time_window, notes, alternative_names, order_index, latitude, longitude, is_completed, arrival_time) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)',
+                        [tourId, s.address, s.contactName, s.phoneNumber, s.email, s.timeWindow, s.notes, s.alternativeNames, s.orderIndex, s.latitude, s.longitude, s.isCompleted, s.arrivalTime]);
+                }
             }
         }
         await pool.query('COMMIT');
