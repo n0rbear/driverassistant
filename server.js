@@ -8,7 +8,7 @@ const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejec
 // ADATBÁZIS SÉMA FRISSÍTÉSE
 const initDb = async () => {
     const queries = [
-        `CREATE TABLE IF NOT EXISTS live_updates (id SERIAL PRIMARY KEY, driver_name TEXT, driver_photo TEXT, license_plate TEXT, latitude DOUBLE PRECISION, longitude DOUBLE PRECISION, speed FLOAT, status TEXT, current_tour TEXT, next_stop TEXT, next_lat DOUBLE PRECISION, next_lng DOUBLE PRECISION, timestamp BIGINT)`,
+        `CREATE TABLE IF NOT EXISTS live_updates (id SERIAL PRIMARY KEY, driver_name TEXT, driver_photo TEXT, driver_phone TEXT, driver_email TEXT, license_plate TEXT, latitude DOUBLE PRECISION, longitude DOUBLE PRECISION, speed FLOAT, status TEXT, current_tour TEXT, next_stop TEXT, next_lat DOUBLE PRECISION, next_lng DOUBLE PRECISION, timestamp BIGINT)`,
         `CREATE TABLE IF NOT EXISTS costs (id SERIAL PRIMARY KEY, driver_name TEXT, amount DECIMAL, currency TEXT, category TEXT, notes TEXT, mileage INT, status TEXT DEFAULT 'Rögzítve', timestamp BIGINT)`,
         `CREATE TABLE IF NOT EXISTS chat_messages (id SERIAL PRIMARY KEY, driver_name TEXT, sender TEXT, message TEXT, timestamp BIGINT)`,
         `CREATE TABLE IF NOT EXISTS work_times (id SERIAL PRIMARY KEY, driver_name TEXT, type TEXT, start_time BIGINT, end_time BIGINT, mileage INT, end_mileage INT, license_plate TEXT, notes TEXT, date TEXT)`,
@@ -23,14 +23,16 @@ const initDb = async () => {
     try { await pool.query('ALTER TABLE costs ADD CONSTRAINT unique_cost UNIQUE (driver_name, timestamp, amount)'); } catch(e) {}
     try { await pool.query('ALTER TABLE hotels ADD CONSTRAINT unique_hotel UNIQUE (driver_name, timestamp, name)'); } catch(e) {}
     try { await pool.query('ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS driver_name TEXT'); } catch(e) {}
+    try { await pool.query('ALTER TABLE live_updates ADD COLUMN IF NOT EXISTS driver_phone TEXT'); } catch(e) {}
+    try { await pool.query('ALTER TABLE live_updates ADD COLUMN IF NOT EXISTS driver_email TEXT'); } catch(e) {}
 };
 initDb().catch(console.error);
 
 // API-K (APP -> BACKEND)
 app.post('/api/live-update', async (req, res) => {
     const d = req.body;
-    await pool.query('INSERT INTO live_updates (driver_name, driver_photo, license_plate, latitude, longitude, speed, status, current_tour, next_stop, next_lat, next_lng, timestamp) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)',
-        [d.driverName, d.driverPhoto, d.licensePlate, d.latitude, d.longitude, d.speed, d.status, d.currentTour, d.nextStop, d.nextLat, d.nextLng, d.timestamp]);
+    await pool.query('INSERT INTO live_updates (driver_name, driver_photo, driver_phone, driver_email, license_plate, latitude, longitude, speed, status, current_tour, next_stop, next_lat, next_lng, timestamp) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)',
+        [d.driverName, d.driverPhoto, d.driverPhone, d.driverEmail, d.licensePlate, d.latitude, d.longitude, d.speed, d.status, d.currentTour, d.nextStop, d.nextLat, d.nextLng, d.timestamp]);
     res.sendStatus(200);
 });
 
@@ -110,12 +112,22 @@ app.post('/admin/update-cost', async (req, res) => {
 
 // ADMIN FRONTEND
 app.get('/', async (req, res) => {
-    const drivers = await pool.query('SELECT DISTINCT ON (driver_name) * FROM live_updates ORDER BY driver_name, timestamp DESC');
+    const drivers = await pool.query(`
+        SELECT DISTINCT ON (driver_name) driver_name, driver_photo, status, license_plate, timestamp
+        FROM (
+            SELECT driver_name, driver_photo, status, license_plate, timestamp FROM live_updates
+            UNION ALL
+            SELECT driver_name, NULL as driver_photo, 'Túra feltöltve' as status, '' as license_plate, 0 as timestamp FROM tours
+            UNION ALL
+            SELECT driver_name, NULL as driver_photo, 'Munkaidő feltöltve' as status, license_plate, 0 as timestamp FROM work_times
+        ) AS all_drivers
+        ORDER BY driver_name, timestamp DESC
+    `);
     let list = drivers.rows.map(d => `
         <div class="card" onclick="location.href='/driver/${encodeURIComponent(d.driver_name)}'">
-            <img src="${d.driver_photo || ''}" style="width:50px;height:50px;border-radius:50%;float:right">
+            <img src="${d.driver_photo || ''}" style="width:50px;height:50px;border-radius:50%;float:right;background:#444">
             <h3>${d.driver_name}</h3>
-            <p>${d.status} | ${d.license_plate}</p>
+            <p>${d.status} ${d.license_plate ? '| ' + d.license_plate : ''}</p>
         </div>
     `).join('');
     res.send(`<html><head><title>Driver ERP</title><style>body { font-family: sans-serif; background: #1a1a1a; color: white; padding: 40px; } .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 20px; } .card { background: #333; padding: 20px; border-radius: 12px; cursor: pointer; border-left: 8px solid #3498db; transition: 0.2s; } .card:hover { transform: scale(1.02); background: #444; }</style></head><body><h1>🚛 Flotta kiválasztása</h1><div class="grid">${list}</div></body></html>`);
@@ -256,7 +268,13 @@ app.get('/driver/:name', async (req, res) => {
                 <p>Havi összesítés...</p>
             </div>
 
-            <div id="profile" class="tab-content"><h3>Sofőr adatai</h3><p>Név: ${name}</p><p>Rendszám: ${d.license_plate}</p></div>
+            <div id="profile" class="tab-content">
+                <h3>Sofőr adatai</h3>
+                <p>Név: ${name}</p>
+                <p>Telefonszám: ${d.driver_phone || 'Nincs megadva'}</p>
+                <p>Email: ${d.driver_email || 'Nincs megadva'}</p>
+                <p>Rendszám: ${d.license_plate}</p>
+            </div>
 
             <script>
                 function openTab(evt, tabName) {
