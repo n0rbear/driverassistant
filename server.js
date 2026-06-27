@@ -1,4 +1,4 @@
-// FIXED SERVER v2
+// FIXED SERVER v3
 const express = require('express');
 const { Pool } = require('pg');
 const app = express();
@@ -651,7 +651,7 @@ app.get('/driver/:name', async (req, res) => {
             </script>
         </body>
         </html>
-    \`);
+    `);
 });
 
 const PORT = process.env.PORT || 3000;
