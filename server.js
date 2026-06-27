@@ -490,24 +490,24 @@ app.get('/driver/:name', async (req, res) => {
                     const formatH = ms => (ms / 3600000).toFixed(1) + ' óra';
                     const zeitkonto = (stats.work + stats.drive + stats.loading) - (stats.days.size * 8 * 3600000);
 
-                    document.getElementById('statsBox').innerHTML = `
-                        <div style="background:#333; padding:20px; border-radius:8px; border-left: 5px solid \${zeitkonto >= 0 ? '#2ecc71' : '#e74c3c'}">
+                    document.getElementById('statsBox').innerHTML = \`
+                        <div style="background:#333; padding:20px; border-radius:8px; border-left: 5px solid \\\${zeitkonto >= 0 ? '#2ecc71' : '#e74c3c'}\">
                             <h4>Zeitkonto Egyenleg</h4>
-                            <h2 style="margin:0">\${(zeitkonto / 3600000).toFixed(1)} óra</h2>
+                            <h2 style="margin:0">\\\${(zeitkonto / 3600000).toFixed(1)} óra</h2>
                         </div>
                         <div style="background:#222; padding:20px; border-radius:8px;">
                             <h4>Összes vezetés</h4>
-                            <p>\${formatH(stats.drive)}</p>
+                            <p>\\\${formatH(stats.drive)}</p>
                         </div>
                         <div style="background:#222; padding:20px; border-radius:8px;">
                             <h4>Összes egyéb munka</h4>
-                            <p>\${formatH(stats.work + stats.loading)}</p>
+                            <p>\\\${formatH(stats.work + stats.loading)}</p>
                         </div>
                         <div style="background:#222; padding:20px; border-radius:8px;">
                             <h4>Munkanapok</h4>
-                            <p>\${stats.days.size} nap</p>
+                            <p>\\\${stats.days.size} nap</p>
                         </div>
-                    `;
+                    \`;
 
                     // Timeline Render (28 Days)
                     const colors = { 'Vezetés': '#3498db', 'Munka': '#f1c40f', 'Pihenő': '#2ecc71', 'Rakodás': '#e67e22' };
@@ -520,27 +520,27 @@ app.get('/driver/:name', async (req, res) => {
                         const dateKey = d.toISOString().split('T')[0];
                         const dayEvents = workByDate[dateKey] || [];
 
-                        timelineHtml += `
+                        timelineHtml += \`
                             <div style="margin-bottom:20px; position:relative;">
                                 <div style="display:flex; justify-content:space-between; margin-bottom:5px;">
-                                    <span style="font-weight:bold; color:#aaa;">\${dateKey}</span>
+                                    <span style="font-weight:bold; color:#aaa;">\\\${dateKey}</span>
                                     <span style="font-size:12px; color:#666;">00:00 ------------------- 12:00 ------------------- 24:00</span>
                                 </div>
                                 <div style="height:40px; width:100%; background:#222; border-radius:4px; overflow:hidden; display:flex; position:relative; border:1px solid #333;">
-                                    \${Array.from({length: 24}).map((_, h) => \`<div style="position:absolute; left:\${(h/24)*100}%; top:0; bottom:0; width:1px; background:rgba(255,255,255,0.05);"></div>\`).join('')}
+                                    \\\${Array.from({length: 24}).map((_, h) => \\\`<div style="position:absolute; left:\\\${(h/24)*100}%; top:0; bottom:0; width:1px; background:rgba(255,255,255,0.05);"></div>\\\`).join('')}
 
-                                    \${dayEvents.map(w => {
+                                    \\\${dayEvents.map(w => {
                                         const dayStart = new Date(dateKey).setHours(0,0,0,0);
                                         const startOffset = ((Number(w.start_time) - dayStart) / 86400000) * 100;
                                         const duration = (w.end_time ? Number(w.end_time) : Date.now()) - Number(w.start_time);
                                         const width = (duration / 86400000) * 100;
-                                        const title = \`\${w.type}: \${new Date(Number(w.start_time)).toLocaleTimeString()} - \${w.end_time ? new Date(Number(w.end_time)).toLocaleTimeString() : 'aktív'}\`;
+                                        const title = \\\`\\\${w.type}: \\\${new Date(Number(w.start_time)).toLocaleTimeString()} - \\\${w.end_time ? new Date(Number(w.end_time)).toLocaleTimeString() : 'aktív'}\\\`;
 
-                                        return \`<div style="height:100%; width:\${Math.min(width, 100)}%; background:\${colors[w.type] || '#555'}; position:absolute; left:\${Math.max(0, startOffset)}%;" title="\${title}"></div>\`;
+                                        return \\\`<div style="height:100%; width:\\\${Math.min(width, 100)}%; background:\\\${colors[w.type] || '#555'}; position:absolute; left:\\\${Math.max(0, startOffset)}%;" title="\\\${title}"></div>\\\`;
                                     }).join('')}
                                 </div>
                             </div>
-                        `;
+                        \`;
                     }
                     document.getElementById('timelineContainer').innerHTML = timelineHtml;
                 }
@@ -636,9 +636,9 @@ app.get('/driver/:name', async (req, res) => {
                     div.className = 'stop-row';
                     div.style = 'background:#333; padding:15px; margin-bottom:10px; border-radius:8px; display:grid; grid-template-columns: 1fr 1fr auto; gap:10px;';
                     div.innerHTML = \`
-                        <input type="text" placeholder="Cím" value="\${s ? s.address : ''}" style="grid-column: span 2;">
-                        <input type="text" placeholder="Név" value="\${s ? s.contact_name : ''}">
-                        <input type="text" placeholder="Időablak" value="\${s ? s.time_window : ''}">
+                        <input type="text" placeholder="Cím" value="\\\${s ? s.address : ''}" style="grid-column: span 2;">
+                        <input type="text" placeholder="Név" value="\\\${s ? s.contact_name : ''}">
+                        <input type="text" placeholder="Időablak" value="\\\${s ? s.time_window : ''}">
                         <button onclick="this.parentElement.remove()" style="background:#e74c3c;">X</button>
                     \`;
                     document.getElementById('modalStops').appendChild(div);
