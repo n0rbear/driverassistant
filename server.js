@@ -47,6 +47,9 @@ const initDb = async () => {
     for (const [table, col, type] of addColumns) {
         try {
             await pool.query(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS ${col} ${type}`);
+            if (type.includes('UUID')) {
+                await pool.query(`UPDATE ${table} SET uuid = gen_random_uuid() WHERE uuid IS NULL`);
+            }
         } catch (e) {}
     }
 
@@ -65,7 +68,7 @@ initDb().catch(console.error);
 // API-K
 app.post('/api/live-update', async (req, res) => {
     const d = req.body;
-    await pool.query('INSERT INTO live_updates (uuid, driver_name, driver_photo, driver_phone, driver_email, license_plate, latitude, longitude, speed, status, current_tour, next_stop, next_lat, next_lng, timestamp) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)',
+    await pool.query('INSERT INTO live_updates (uuid, driver_name, driver_photo, driver_phone, driver_email, license_plate, latitude, longitude, speed, status, current_tour, next_stop, next_lat, next_lng, timestamp) VALUES (COALESCE($1, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)',
         [d.uuid || null, d.driverName, d.driverPhoto, d.driverPhone, d.driverEmail, d.licensePlate, d.latitude, d.longitude, d.speed, d.status, d.currentTour, d.nextStop, d.nextLat, d.nextLng, d.timestamp]);
     res.sendStatus(200);
 });
@@ -73,7 +76,7 @@ app.post('/api/live-update', async (req, res) => {
 app.post('/api/send-chat', async (req, res) => {
     const { uuid, driverName, sender, message, timestamp } = req.body;
     if (!message) return res.sendStatus(400);
-    await pool.query('INSERT INTO chat_messages (uuid, driver_name, sender, message, timestamp) VALUES ($1, $2, $3, $4, $5)', [uuid || null, driverName, sender, message, timestamp || Date.now()]);
+    await pool.query('INSERT INTO chat_messages (uuid, driver_name, sender, message, timestamp) VALUES (COALESCE($1, gen_random_uuid()), $2, $3, $4, $5)', [uuid || null, driverName, sender, message, timestamp || Date.now()]);
     res.sendStatus(200);
 });
 
@@ -84,7 +87,7 @@ app.get('/api/get-chat/:driverName', async (req, res) => {
 
 app.post('/api/sync-worktimes', async (req, res) => {
     for (const wt of req.body) {
-        await pool.query(`INSERT INTO work_times (uuid, driver_name, type, start_time, end_time, mileage, end_mileage, license_plate, notes, date) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) ON CONFLICT (driver_name, start_time) DO UPDATE SET end_time = EXCLUDED.end_time, end_mileage = EXCLUDED.end_mileage, notes = EXCLUDED.notes`,
+        await pool.query(`INSERT INTO work_times (uuid, driver_name, type, start_time, end_time, mileage, end_mileage, license_plate, notes, date) VALUES (COALESCE($1, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8, $9, $10) ON CONFLICT (driver_name, start_time) DO UPDATE SET end_time = EXCLUDED.end_time, end_mileage = EXCLUDED.end_mileage, notes = EXCLUDED.notes`,
             [wt.uuid || null, wt.driverName, wt.type, wt.startTime, wt.endTime, wt.mileage, wt.endMileage, wt.licensePlate, wt.notes, wt.date]);
     }
     res.sendStatus(200);
@@ -92,7 +95,7 @@ app.post('/api/sync-worktimes', async (req, res) => {
 
 app.post('/api/sync-costs', async (req, res) => {
     for (const c of req.body) {
-        await pool.query('INSERT INTO costs (uuid, driver_name, amount, currency, category, notes, mileage, timestamp) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT (driver_name, timestamp, amount) DO UPDATE SET status = EXCLUDED.status, notes = EXCLUDED.notes', [c.uuid || null, c.driverName, c.amount, c.currency, c.category, c.notes, c.mileage, c.timestamp]);
+        await pool.query('INSERT INTO costs (uuid, driver_name, amount, currency, category, notes, mileage, timestamp) VALUES (COALESCE($1, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8) ON CONFLICT (driver_name, timestamp, amount) DO UPDATE SET status = EXCLUDED.status, notes = EXCLUDED.notes', [c.uuid || null, c.driverName, c.amount, c.currency, c.category, c.notes, c.mileage, c.timestamp]);
     }
     res.sendStatus(200);
 });
@@ -186,7 +189,7 @@ app.post('/api/sync-tours/:driverName', async (req, res) => {
 
 app.post('/api/sync-hotels', async (req, res) => {
     for (const h of req.body) {
-        await pool.query('INSERT INTO hotels (uuid, driver_name, name, address, timestamp) VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING', [h.uuid || null, h.driverName, h.name, h.address, h.timestamp]);
+        await pool.query('INSERT INTO hotels (uuid, driver_name, name, address, timestamp) VALUES (COALESCE($1, gen_random_uuid()), $2, $3, $4, $5) ON CONFLICT DO NOTHING', [h.uuid || null, h.driverName, h.name, h.address, h.timestamp]);
     }
     res.sendStatus(200);
 });
@@ -212,9 +215,9 @@ app.post('/admin/save-tour', async (req, res) => {
         }
 
         if (tourId) {
-            await pool.query('UPDATE tours SET uuid=$1, name=$2, customer=$3, date=$4, day_of_week=$5, notes=$6, is_closed=$7 WHERE id=$8', [uuid || null, name, customer, date, day_of_week, notes, is_closed, tourId]);
+            await pool.query('UPDATE tours SET name=$1, customer=$2, date=$3, day_of_week=$4, notes=$5, is_closed=$6 WHERE id=$7', [name, customer, date, day_of_week, notes, is_closed, tourId]);
         } else {
-            const result = await pool.query('INSERT INTO tours (uuid, driver_name, name, customer, date, day_of_week, notes, is_closed) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id', [uuid || null, driver_name, name, customer, date, day_of_week, notes, is_closed]);
+            const result = await pool.query('INSERT INTO tours (uuid, driver_name, name, customer, date, day_of_week, notes, is_closed) VALUES (COALESCE($1, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8) RETURNING id', [uuid || null, driver_name, name, customer, date, day_of_week, notes, is_closed]);
             tourId = result.rows[0].id;
         }
 
