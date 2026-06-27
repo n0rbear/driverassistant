@@ -552,12 +552,12 @@ app.get('/driver/:name', async (req, res) => {
                     const div = document.createElement('div');
                     div.className = 'stop-row';
                     div.style = 'background:#333; padding:15px; margin-bottom:10px; border-radius:8px; display:grid; grid-template-columns: 1fr 1fr auto; gap:10px;';
-                    div.innerHTML = `
-                        <input type="text" placeholder="Cím" value="${s ? s.address : ''}" style="grid-column: span 2;">
-                        <input type="text" placeholder="Név" value="${s ? s.contact_name : ''}">
-                        <input type="text" placeholder="Időablak" value="${s ? s.time_window : ''}">
+                    div.innerHTML = \`
+                        <input type="text" placeholder="Cím" value="\${s ? s.address : ''}" style="grid-column: span 2;">
+                        <input type="text" placeholder="Név" value="\${s ? s.contact_name : ''}">
+                        <input type="text" placeholder="Időablak" value="\${s ? s.time_window : ''}">
                         <button onclick="this.parentElement.remove()" style="background:#e74c3c;">X</button>
-                    `;
+                    \`;
                     document.getElementById('modalStops').appendChild(div);
                 }
 
