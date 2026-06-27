@@ -445,9 +445,15 @@ app.get('/driver/:name', async (req, res) => {
             </div>
 
             <div id="report" class="tab-content">
-                <h3>Napi menetlevél adatok</h3>
-                <div id="timelineContainer" style="margin-bottom: 20px;"></div>
-                <table>
+                <h3>Napi menetlevél (Tagesfahrblatt) - Utolsó 28 nap</h3>
+                <div style="display:flex; gap:20px; margin-bottom:20px; background:#222; padding:15px; border-radius:8px; font-size:14px;">
+                    <div style="display:flex; align-items:center; gap:8px;"><div style="width:20px; height:20px; background:#3498db; border-radius:4px;"></div> Vezetés</div>
+                    <div style="display:flex; align-items:center; gap:8px;"><div style="width:20px; height:20px; background:#e67e22; border-radius:4px;"></div> Rakodás</div>
+                    <div style="display:flex; align-items:center; gap:8px;"><div style="width:20px; height:20px; background:#f1c40f; border-radius:4px;"></div> Egyéb munka</div>
+                    <div style="display:flex; align-items:center; gap:8px;"><div style="width:20px; height:20px; background:#2ecc71; border-radius:4px;"></div> Pihenő</div>
+                </div>
+                <div id="timelineContainer" style="background:#111; padding:20px; border-radius:12px;"></div>
+                <table style="margin-top:30px;">
                     <tr><th>Típus</th><th>Időtartam</th><th>Rendszám</th><th>KM állás</th><th>Megjegyzés</th></tr>
                     ${work.rows.map(w => `<tr><td>${w.type}</td><td>${new Date(Number(w.start_time)).toLocaleTimeString()} - ${w.end_time ? new Date(Number(w.end_time)).toLocaleTimeString() : '...'}</td><td>${w.license_plate || '-'}</td><td>${w.mileage || ''} - ${w.end_mileage || ''}</td><td>${w.notes || ''}</td></tr>`).join('')}
                 </table>
@@ -484,7 +490,7 @@ app.get('/driver/:name', async (req, res) => {
                     const formatH = ms => (ms / 3600000).toFixed(1) + ' óra';
                     const zeitkonto = (stats.work + stats.drive + stats.loading) - (stats.days.size * 8 * 3600000);
 
-                    document.getElementById('statsBox').innerHTML = \`
+                    document.getElementById('statsBox').innerHTML = `
                         <div style="background:#333; padding:20px; border-radius:8px; border-left: 5px solid \${zeitkonto >= 0 ? '#2ecc71' : '#e74c3c'}">
                             <h4>Zeitkonto Egyenleg</h4>
                             <h2 style="margin:0">\${(zeitkonto / 3600000).toFixed(1)} óra</h2>
@@ -501,28 +507,41 @@ app.get('/driver/:name', async (req, res) => {
                             <h4>Munkanapok</h4>
                             <p>\${stats.days.size} nap</p>
                         </div>
-                    \`;
+                    `;
 
-                    // Timeline Render
+                    // Timeline Render (28 Days)
                     const colors = { 'Vezetés': '#3498db', 'Munka': '#f1c40f', 'Pihenő': '#2ecc71', 'Rakodás': '#e67e22' };
                     let timelineHtml = '';
-                    const sortedDates = Object.keys(workByDate).sort().reverse();
 
-                    sortedDates.forEach(date => {
-                        timelineHtml += \`<div style="margin-bottom:15px;">
-                            <small>\${date}</small>
-                            <div style="height:30px; width:100%; background:#222; border-radius:15px; overflow:hidden; display:flex; position:relative; margin-top:5px;">\`;
+                    const today = new Date();
+                    for (let i = 0; i < 28; i++) {
+                        const d = new Date(today);
+                        d.setDate(today.getDate() - i);
+                        const dateKey = d.toISOString().split('T')[0];
+                        const dayEvents = workByDate[dateKey] || [];
 
-                        workByDate[date].forEach(w => {
-                            const dayStart = new Date(date).setHours(0,0,0,0);
-                            const startOffset = ((Number(w.start_time) - dayStart) / 86400000) * 100;
-                            const duration = (w.end_time ? Number(w.end_time) : Date.now()) - Number(w.start_time);
-                            const width = (duration / 86400000) * 100;
+                        timelineHtml += `
+                            <div style="margin-bottom:20px; position:relative;">
+                                <div style="display:flex; justify-content:space-between; margin-bottom:5px;">
+                                    <span style="font-weight:bold; color:#aaa;">\${dateKey}</span>
+                                    <span style="font-size:12px; color:#666;">00:00 ------------------- 12:00 ------------------- 24:00</span>
+                                </div>
+                                <div style="height:40px; width:100%; background:#222; border-radius:4px; overflow:hidden; display:flex; position:relative; border:1px solid #333;">
+                                    \${Array.from({length: 24}).map((_, h) => \`<div style="position:absolute; left:\${(h/24)*100}%; top:0; bottom:0; width:1px; background:rgba(255,255,255,0.05);"></div>\`).join('')}
 
-                            timelineHtml += \`<div style="height:100%; width:\${width}%; background:\${colors[w.type] || '#555'}; position:absolute; left:\${startOffset}%;" title="\${w.type}: \${new Date(Number(w.start_time)).toLocaleTimeString()}"></div>\`;
-                        });
-                        timelineHtml += \`</div></div>\`;
-                    });
+                                    \${dayEvents.map(w => {
+                                        const dayStart = new Date(dateKey).setHours(0,0,0,0);
+                                        const startOffset = ((Number(w.start_time) - dayStart) / 86400000) * 100;
+                                        const duration = (w.end_time ? Number(w.end_time) : Date.now()) - Number(w.start_time);
+                                        const width = (duration / 86400000) * 100;
+                                        const title = \`\${w.type}: \${new Date(Number(w.start_time)).toLocaleTimeString()} - \${w.end_time ? new Date(Number(w.end_time)).toLocaleTimeString() : 'aktív'}\`;
+
+                                        return \`<div style="height:100%; width:\${Math.min(width, 100)}%; background:\${colors[w.type] || '#555'}; position:absolute; left:\${Math.max(0, startOffset)}%;" title="\${title}"></div>\`;
+                                    }).join('')}
+                                </div>
+                            </div>
+                        `;
+                    }
                     document.getElementById('timelineContainer').innerHTML = timelineHtml;
                 }
 
