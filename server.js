@@ -184,12 +184,12 @@ app.get('/driver/:name', async (req, res) => {
             </header>
             <nav id="mainNav">
                 <button onclick="openTab(event, 'dashboard')">DASHBOARD</button>
-                <button onclick="openTab(event, 'report')">MENETLEVÉL</button>
                 <button onclick="openTab(event, 'tours')">TÚRÁK</button>
                 <button onclick="openTab(event, 'costs')">KÖLTSÉGEK</button>
                 <button onclick="openTab(event, 'hotels')">HOTELEK</button>
                 <button onclick="openTab(event, 'chat')">CHAT</button>
                 <button onclick="openTab(event, 'stats')">STATISZTIKA</button>
+                <button onclick="openTab(event, 'report')">MENETLEVÉL</button>
                 <button onclick="openTab(event, 'profile')">PROFIL</button>
                 <button onclick="openTab(event, 'access')">HOZZÁFÉRÉS</button>
             </nav>
@@ -206,14 +206,6 @@ app.get('/driver/:name', async (req, res) => {
                         <p id="distBox" style="color:#2ecc71; font-weight:bold; font-size:20px;">Távolság: -- km</p>
                     </div>
                 </div>
-            </div>
-
-            <div id="report" class="tab-content">
-                <h3>Napi menetlevél adatok</h3>
-                <table>
-                    <tr><th>Típus</th><th>Időtartam</th><th>Rendszám</th><th>KM állás</th><th>Megjegyzés</th></tr>
-                    ${work.rows.map(w => `<tr><td>${w.type}</td><td>${new Date(Number(w.start_time)).toLocaleTimeString()} - ${w.end_time ? new Date(Number(w.end_time)).toLocaleTimeString() : '...'}</td><td>${w.license_plate || '-'}</td><td>${w.mileage || ''} - ${w.end_mileage || ''}</td><td>${w.notes || ''}</td></tr>`).join('')}
-                </table>
             </div>
 
             <div id="tours" class="tab-content">
@@ -265,7 +257,18 @@ app.get('/driver/:name', async (req, res) => {
 
             <div id="stats" class="tab-content">
                 <h3>Zeitkonto / Statisztika</h3>
-                <p>Havi összesítés...</p>
+                <div id="statsBox" style="display:grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px;">
+                    <!-- JS fills this -->
+                </div>
+            </div>
+
+            <div id="report" class="tab-content">
+                <h3>Napi menetlevél adatok</h3>
+                <div id="timelineContainer" style="margin-bottom: 20px;"></div>
+                <table>
+                    <tr><th>Típus</th><th>Időtartam</th><th>Rendszám</th><th>KM állás</th><th>Megjegyzés</th></tr>
+                    ${work.rows.map(w => `<tr><td>${w.type}</td><td>${new Date(Number(w.start_time)).toLocaleTimeString()} - ${w.end_time ? new Date(Number(w.end_time)).toLocaleTimeString() : '...'}</td><td>${w.license_plate || '-'}</td><td>${w.mileage || ''} - ${w.end_mileage || ''}</td><td>${w.notes || ''}</td></tr>`).join('')}
+                </table>
             </div>
 
             <div id="profile" class="tab-content">
@@ -277,6 +280,72 @@ app.get('/driver/:name', async (req, res) => {
             </div>
 
             <script>
+                const workData = ${JSON.stringify(work.rows)};
+
+                function updateStatsAndTimeline() {
+                    const stats = { drive: 0, work: 0, rest: 0, loading: 0, days: new Set() };
+                    const workByDate = {};
+
+                    workData.forEach(w => {
+                        const duration = (w.end_time ? Number(w.end_time) : Date.now()) - Number(w.start_time);
+                        if (w.type === 'Vezetés') stats.drive += duration;
+                        else if (w.type === 'Munka') stats.work += duration;
+                        else if (w.type === 'Pihenő') stats.rest += duration;
+                        else if (w.type === 'Rakodás') stats.loading += duration;
+                        stats.days.add(w.date);
+
+                        if (!workByDate[w.date]) workByDate[w.date] = [];
+                        workByDate[w.date].push(w);
+                    });
+
+                    // Stats Render
+                    const formatH = ms => (ms / 3600000).toFixed(1) + ' óra';
+                    const zeitkonto = (stats.work + stats.drive + stats.loading) - (stats.days.size * 8 * 3600000);
+
+                    document.getElementById('statsBox').innerHTML = \`
+                        <div style="background:#333; padding:20px; border-radius:8px; border-left: 5px solid \${zeitkonto >= 0 ? '#2ecc71' : '#e74c3c'}">
+                            <h4>Zeitkonto Egyenleg</h4>
+                            <h2 style="margin:0">\${(zeitkonto / 3600000).toFixed(1)} óra</h2>
+                        </div>
+                        <div style="background:#222; padding:20px; border-radius:8px;">
+                            <h4>Összes vezetés</h4>
+                            <p>\${formatH(stats.drive)}</p>
+                        </div>
+                        <div style="background:#222; padding:20px; border-radius:8px;">
+                            <h4>Összes egyéb munka</h4>
+                            <p>\${formatH(stats.work + stats.loading)}</p>
+                        </div>
+                        <div style="background:#222; padding:20px; border-radius:8px;">
+                            <h4>Munkanapok</h4>
+                            <p>\${stats.days.size} nap</p>
+                        </div>
+                    \`;
+
+                    // Timeline Render
+                    const colors = { 'Vezetés': '#3498db', 'Munka': '#f1c40f', 'Pihenő': '#2ecc71', 'Rakodás': '#e67e22' };
+                    let timelineHtml = '';
+                    const sortedDates = Object.keys(workByDate).sort().reverse();
+
+                    sortedDates.forEach(date => {
+                        timelineHtml += \`<div style="margin-bottom:15px;">
+                            <small>\${date}</small>
+                            <div style="height:30px; width:100%; background:#222; border-radius:15px; overflow:hidden; display:flex; position:relative; margin-top:5px;">\`;
+
+                        workByDate[date].forEach(w => {
+                            const dayStart = new Date(date).setHours(0,0,0,0);
+                            const startOffset = ((Number(w.start_time) - dayStart) / 86400000) * 100;
+                            const duration = (w.end_time ? Number(w.end_time) : Date.now()) - Number(w.start_time);
+                            const width = (duration / 86400000) * 100;
+
+                            timelineHtml += \`<div style="height:100%; width:\${width}%; background:\${colors[w.type] || '#555'}; position:absolute; left:\${startOffset}%;" title="\${w.type}: \${new Date(Number(w.start_time)).toLocaleTimeString()}"></div>\`;
+                        });
+                        timelineHtml += \`</div></div>\`;
+                    });
+                    document.getElementById('timelineContainer').innerHTML = timelineHtml;
+                }
+
+                updateStatsAndTimeline();
+
                 function openTab(evt, tabName) {
                     var i, tabcontent, tablinks;
                     tabcontent = document.getElementsByClassName("tab-content");
