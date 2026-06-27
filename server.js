@@ -17,6 +17,11 @@ const initDb = async () => {
         `CREATE TABLE IF NOT EXISTS stops (id SERIAL PRIMARY KEY, tour_id INT, address TEXT, contact_name TEXT, phone_number TEXT, email TEXT, time_window TEXT, notes TEXT, alternative_names TEXT, order_index INT, latitude DOUBLE PRECISION, longitude DOUBLE PRECISION, is_completed BOOLEAN, arrival_time BIGINT)`
     ];
     for (let q of queries) { await pool.query(q); }
+
+    // Egyedi megszorítások hozzáadása a szinkronizációhoz
+    try { await pool.query('ALTER TABLE work_times ADD CONSTRAINT unique_worktime UNIQUE (driver_name, start_time)'); } catch(e) {}
+    try { await pool.query('ALTER TABLE costs ADD CONSTRAINT unique_cost UNIQUE (driver_name, timestamp, amount)'); } catch(e) {}
+    try { await pool.query('ALTER TABLE hotels ADD CONSTRAINT unique_hotel UNIQUE (driver_name, timestamp, name)'); } catch(e) {}
     try { await pool.query('ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS driver_name TEXT'); } catch(e) {}
 };
 initDb().catch(console.error);
@@ -57,22 +62,43 @@ app.post('/api/sync-costs', async (req, res) => {
 });
 
 app.post('/api/sync-tours', async (req, res) => {
-    for (const item of req.body) {
-        const t = item.tour;
-        const result = await pool.query('INSERT INTO tours (driver_name, name, customer, date, day_of_week, notes, is_closed, is_current) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id',
-            [t.driverName, t.name, t.customer, t.date, t.dayOfWeek, t.notes, t.isClosed, t.isCurrent]);
-        const tourId = result.rows[0].id;
-        for (const s of item.stops) {
-            await pool.query('INSERT INTO stops (tour_id, address, contact_name, phone_number, email, time_window, notes, alternative_names, order_index, latitude, longitude, is_completed, arrival_time) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)',
-                [tourId, s.address, s.contactName, s.phoneNumber, s.email, s.timeWindow, s.notes, s.alternativeNames, s.orderIndex, s.latitude, s.longitude, s.isCompleted, s.arrivalTime]);
+    if (!req.body || req.body.length === 0) return res.sendStatus(200);
+
+    const driverName = req.body[0].tour.driverName;
+    if (!driverName) return res.sendStatus(400);
+
+    try {
+        await pool.query('BEGIN');
+        // Először töröljük a sofőr meglévő túráit és megállóit, hogy ne legyenek duplikációk
+        const oldTours = await pool.query('SELECT id FROM tours WHERE driver_name = $1', [driverName]);
+        const tourIds = oldTours.rows.map(r => r.id);
+        if (tourIds.length > 0) {
+            await pool.query('DELETE FROM stops WHERE tour_id = ANY($1)', [tourIds]);
+            await pool.query('DELETE FROM tours WHERE id = ANY($1)', [tourIds]);
         }
+
+        for (const item of req.body) {
+            const t = item.tour;
+            const result = await pool.query('INSERT INTO tours (driver_name, name, customer, date, day_of_week, notes, is_closed, is_current) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id',
+                [t.driverName, t.name, t.customer, t.date, t.dayOfWeek, t.notes, t.isClosed, t.isCurrent]);
+            const tourId = result.rows[0].id;
+            for (const s of item.stops) {
+                await pool.query('INSERT INTO stops (tour_id, address, contact_name, phone_number, email, time_window, notes, alternative_names, order_index, latitude, longitude, is_completed, arrival_time) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)',
+                    [tourId, s.address, s.contactName, s.phoneNumber, s.email, s.timeWindow, s.notes, s.alternativeNames, s.orderIndex, s.latitude, s.longitude, s.isCompleted, s.arrivalTime]);
+            }
+        }
+        await pool.query('COMMIT');
+        res.sendStatus(200);
+    } catch (e) {
+        await pool.query('ROLLBACK');
+        console.error(e);
+        res.sendStatus(500);
     }
-    res.sendStatus(200);
 });
 
 app.post('/api/sync-hotels', async (req, res) => {
     for (const h of req.body) {
-        await pool.query('INSERT INTO hotels (driver_name, name, address, timestamp) VALUES ($1, $2, $3, $4)', [h.driverName, h.name, h.address, h.timestamp]);
+        await pool.query('INSERT INTO hotels (driver_name, name, address, timestamp) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING', [h.driverName, h.name, h.address, h.timestamp]);
     }
     res.sendStatus(200);
 });
