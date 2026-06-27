@@ -25,6 +25,13 @@ const initDb = async () => {
     try { await pool.query('ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS driver_name TEXT'); } catch(e) {}
     try { await pool.query('ALTER TABLE live_updates ADD COLUMN IF NOT EXISTS driver_phone TEXT'); } catch(e) {}
     try { await pool.query('ALTER TABLE live_updates ADD COLUMN IF NOT EXISTS driver_email TEXT'); } catch(e) {}
+    try { await pool.query('ALTER TABLE tours ADD COLUMN IF NOT EXISTS is_closed BOOLEAN'); } catch(e) {}
+    try { await pool.query('ALTER TABLE tours ADD COLUMN IF NOT EXISTS is_current BOOLEAN'); } catch(e) {}
+    try { await pool.query('ALTER TABLE tours ADD COLUMN IF NOT EXISTS day_of_week TEXT'); } catch(e) {}
+    try { await pool.query('ALTER TABLE stops ADD COLUMN IF NOT EXISTS latitude DOUBLE PRECISION'); } catch(e) {}
+    try { await pool.query('ALTER TABLE stops ADD COLUMN IF NOT EXISTS longitude DOUBLE PRECISION'); } catch(e) {}
+    try { await pool.query('ALTER TABLE stops ADD COLUMN IF NOT EXISTS is_completed BOOLEAN'); } catch(e) {}
+    try { await pool.query('ALTER TABLE stops ADD COLUMN IF NOT EXISTS arrival_time BIGINT'); } catch(e) {}
 };
 initDb().catch(console.error);
 
@@ -69,32 +76,45 @@ app.post('/api/sync-tours/:driverName', async (req, res) => {
 
     try {
         await pool.query('BEGIN');
+
         // Töröljük a sofőr meglévő túráit és megállóit
         const oldTours = await pool.query('SELECT id FROM tours WHERE driver_name = $1', [driverName]);
         const tourIds = oldTours.rows.map(r => r.id);
+
         if (tourIds.length > 0) {
             await pool.query('DELETE FROM stops WHERE tour_id = ANY($1)', [tourIds]);
             await pool.query('DELETE FROM tours WHERE id = ANY($1)', [tourIds]);
         }
 
-        if (req.body && req.body.length > 0) {
+        if (req.body && Array.isArray(req.body) && req.body.length > 0) {
             for (const item of req.body) {
+                if (!item.tour) continue;
                 const t = item.tour;
-                const result = await pool.query('INSERT INTO tours (driver_name, name, customer, date, day_of_week, notes, is_closed, is_current) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id',
-                    [driverName, t.name, t.customer, t.date, t.dayOfWeek, t.notes, t.isClosed, t.isCurrent]);
+
+                const result = await pool.query(
+                    'INSERT INTO tours (driver_name, name, customer, date, day_of_week, notes, is_closed, is_current) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id',
+                    [driverName, t.name || 'Túra', t.customer || '', t.date || Date.now(), t.dayOfWeek || '', t.notes || '', !!t.isClosed, !!t.isCurrent]
+                );
+
                 const tourId = result.rows[0].id;
-                for (const s of item.stops) {
-                    await pool.query('INSERT INTO stops (tour_id, address, contact_name, phone_number, email, time_window, notes, alternative_names, order_index, latitude, longitude, is_completed, arrival_time) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)',
-                        [tourId, s.address, s.contactName, s.phoneNumber, s.email, s.timeWindow, s.notes, s.alternativeNames, s.orderIndex, s.latitude, s.longitude, s.isCompleted, s.arrivalTime]);
+
+                if (item.stops && Array.isArray(item.stops)) {
+                    for (const s of item.stops) {
+                        await pool.query(
+                            'INSERT INTO stops (tour_id, address, contact_name, phone_number, email, time_window, notes, alternative_names, order_index, latitude, longitude, is_completed, arrival_time) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)',
+                            [tourId, s.address || '', s.contactName || '', s.phoneNumber || '', s.email || '', s.timeWindow || '', s.notes || '', s.alternativeNames || null, s.orderIndex || 0, s.latitude || null, s.longitude || null, !!s.isCompleted, s.arrivalTime || null]
+                        );
+                    }
                 }
             }
         }
+
         await pool.query('COMMIT');
         res.sendStatus(200);
     } catch (e) {
         await pool.query('ROLLBACK');
-        console.error(e);
-        res.sendStatus(500);
+        console.error('SYNC TOURS ERROR:', e);
+        res.status(500).send(e.message);
     }
 });
 
@@ -117,9 +137,9 @@ app.get('/', async (req, res) => {
         FROM (
             SELECT driver_name, driver_photo, status, license_plate, timestamp FROM live_updates
             UNION ALL
-            SELECT driver_name, NULL as driver_photo, 'Túra feltöltve' as status, '' as license_plate, 0 as timestamp FROM tours
+            SELECT driver_name, NULL as driver_photo, 'Túra feltöltve' as status, '' as license_plate, date as timestamp FROM tours
             UNION ALL
-            SELECT driver_name, NULL as driver_photo, 'Munkaidő feltöltve' as status, license_plate, 0 as timestamp FROM work_times
+            SELECT driver_name, NULL as driver_photo, 'Munkaidő feltöltve' as status, license_plate, start_time as timestamp FROM work_times
         ) AS all_drivers
         ORDER BY driver_name, timestamp DESC
     `);
