@@ -81,8 +81,15 @@ app.post('/api/send-chat', async (req, res) => {
 });
 
 app.get('/api/get-chat/:driverName', async (req, res) => {
-    const result = await pool.query('SELECT uuid, sender, message, timestamp FROM chat_messages WHERE driver_name = $1 ORDER BY timestamp ASC', [req.params.driverName]);
-    res.json(result.rows);
+    const driverName = req.params.driverName;
+    const result = await pool.query('SELECT uuid, sender, message, timestamp FROM chat_messages WHERE driver_name = $1 ORDER BY timestamp ASC', [driverName]);
+    res.json(result.rows.map(r => ({
+        uuid: r.uuid,
+        driverName: driverName,
+        sender: r.sender || 'RENDSZER',
+        message: r.message || '',
+        timestamp: Number(r.timestamp) || Date.now()
+    })));
 });
 
 app.post('/api/sync-worktimes', async (req, res) => {
@@ -201,7 +208,13 @@ app.post('/admin/update-cost', async (req, res) => {
 
 app.get('/api/cost-status/:driverName', async (req, res) => {
     const result = await pool.query('SELECT id, uuid, status, timestamp, amount FROM costs WHERE driver_name = $1', [req.params.driverName]);
-    res.json(result.rows.map(r => ({ id: r.id, uuid: r.uuid, status: r.status, timestamp: Number(r.timestamp), amount: Number(r.amount) })));
+    res.json(result.rows.map(r => ({
+        id: r.id,
+        uuid: r.uuid,
+        status: r.status || 'Rögzítve',
+        timestamp: Number(r.timestamp) || Date.now(),
+        amount: Number(r.amount) || 0
+    })));
 });
 
 app.post('/admin/save-tour', async (req, res) => {
@@ -264,8 +277,37 @@ app.get('/api/get-tours/:driverName', async (req, res) => {
         for (let tour of toursRes.rows) {
             const stopsRes = await pool.query('SELECT * FROM stops WHERE tour_id = $1 ORDER BY order_index ASC', [tour.id]);
             results.push({
-                tour: { id: tour.id, uuid: tour.uuid, driverName: tour.driver_name, name: tour.name, customer: tour.customer, date: Number(tour.date), dayOfWeek: tour.day_of_week, notes: tour.notes, isClosed: tour.is_closed, isCurrent: tour.is_current },
-                stops: stopsRes.rows.map(s => ({ id: s.id, uuid: s.uuid, tourId: s.tour_id, address: s.address, contactName: s.contact_name, phoneNumber: s.phone_number, email: s.email, timeWindow: s.time_window, notes: s.notes, alternativeNames: s.alternative_names, orderIndex: s.order_index, latitude: s.latitude, longitude: s.longitude, isCompleted: s.is_completed, arrivalTime: s.arrival_time ? Number(s.arrival_time) : null }))
+                tour: {
+                    id: tour.id,
+                    uuid: tour.uuid,
+                    driverName: tour.driver_name || 'Ismeretlen',
+                    name: tour.name || 'Túra',
+                    customer: tour.customer || '',
+                    date: Number(tour.date) || Date.now(),
+                    dayOfWeek: tour.day_of_week || '',
+                    notes: tour.notes || '',
+                    isClosed: !!tour.is_closed,
+                    isCurrent: !!tour.is_current,
+                    deletedAt: tour.deleted_at ? Number(tour.deleted_at) : null
+                },
+                stops: stopsRes.rows.map(s => ({
+                    id: s.id,
+                    uuid: s.uuid,
+                    tourId: s.tour_id,
+                    address: s.address || '',
+                    contactName: s.contact_name || '',
+                    phoneNumber: s.phone_number || '',
+                    email: s.email || '',
+                    timeWindow: s.time_window || '',
+                    notes: s.notes || '',
+                    alternativeNames: s.alternative_names || null,
+                    orderIndex: s.order_index || 0,
+                    latitude: s.latitude !== null ? Number(s.latitude) : null,
+                    longitude: s.longitude !== null ? Number(s.longitude) : null,
+                    isCompleted: !!s.is_completed,
+                    arrivalTime: s.arrival_time ? Number(s.arrival_time) : null,
+                    deletedAt: s.deleted_at ? Number(s.deleted_at) : null
+                }))
             });
         }
         res.json(results);
