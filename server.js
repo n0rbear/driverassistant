@@ -1,37 +1,29 @@
-// FIXED SERVER v4
-const express = require('express');
-const { Pool } = require('pg');
-const app = express();
-app.use(express.json());
+// FIXED SERVER v4 const express = require(‘express’); const { Pool } =
+require(‘pg’); const app = express(); app.use(express.json());
 
-const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
+const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl:
+{ rejectUnauthorized: false } });
 
-function getDistance(lat1, lon1, lat2, lon2) {
-    if (!lat1 || !lon1 || !lat2 || !lon2) return 999999;
-    const R = 6371e3;
-    const φ1 = lat1 * Math.PI/180;
-    const φ2 = lat2 * Math.PI/180;
-    const Δφ = (lat2-lat1) * Math.PI/180;
-    const Δλ = (lon2-lon1) * Math.PI/180;
-    const a = Math.sin(Δφ/2) * Math.sin(Δφ/2) + Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ/2) * Math.sin(Δλ/2);
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-    return R * c;
-}
+function getDistance(lat1, lon1, lat2, lon2) { if (!lat1 || !lon1 ||
+!lat2 || !lon2) return 999999; const R = 6371e3; const φ1 = lat1 *
+Math.PI/180; const φ2 = lat2 * Math.PI/180; const Δφ = (lat2-lat1) *
+Math.PI/180; const Δλ = (lon2-lon1) * Math.PI/180; const a =
+Math.sin(Δφ/2) * Math.sin(Δφ/2) + Math.cos(φ1) * Math.cos(φ2) *
+Math.sin(Δλ/2) * Math.sin(Δλ/2); const c = 2 * Math.atan2(Math.sqrt(a),
+Math.sqrt(1-a)); return R * c; }
 
-// ADATBÁZIS SÉMA FRISSÍTÉSE
-const initDb = async () => {
-    await pool.query('CREATE EXTENSION IF NOT EXISTS "pgcrypto"');
-    const queries = [
-        `CREATE TABLE IF NOT EXISTS drivers (uuid UUID UNIQUE DEFAULT gen_random_uuid(), name TEXT UNIQUE, email TEXT, phone TEXT, license_plate TEXT, photo_url TEXT, is_active BOOLEAN DEFAULT TRUE)`,
-        `CREATE TABLE IF NOT EXISTS live_updates (id SERIAL PRIMARY KEY, uuid UUID UNIQUE DEFAULT gen_random_uuid(), driver_name TEXT, driver_photo TEXT, driver_phone TEXT, driver_email TEXT, license_plate TEXT, latitude DOUBLE PRECISION, longitude DOUBLE PRECISION, speed FLOAT, status TEXT, current_tour TEXT, next_stop TEXT, next_lat DOUBLE PRECISION, next_lng DOUBLE PRECISION, next_stop_dist FLOAT, tour_remaining_dist FLOAT, timestamp BIGINT)`,
-        `CREATE TABLE IF NOT EXISTS costs (id SERIAL PRIMARY KEY, uuid UUID UNIQUE DEFAULT gen_random_uuid(), driver_name TEXT, amount DECIMAL, currency TEXT, category TEXT, notes TEXT, mileage INT, status TEXT DEFAULT 'Rögzítve', timestamp BIGINT)`,
-        `CREATE TABLE IF NOT EXISTS chat_messages (id SERIAL PRIMARY KEY, uuid UUID UNIQUE DEFAULT gen_random_uuid(), driver_name TEXT, sender TEXT, message TEXT, timestamp BIGINT)`,
-        `CREATE TABLE IF NOT EXISTS work_times (id SERIAL PRIMARY KEY, uuid UUID UNIQUE DEFAULT gen_random_uuid(), driver_name TEXT, type TEXT, start_time BIGINT, end_time BIGINT, mileage INT, end_mileage INT, license_plate TEXT, notes TEXT, date TEXT)`,
-        `CREATE TABLE IF NOT EXISTS hotels (id SERIAL PRIMARY KEY, uuid UUID UNIQUE DEFAULT gen_random_uuid(), driver_name TEXT, name TEXT, address TEXT, timestamp BIGINT)`,
-        `CREATE TABLE IF NOT EXISTS tours (id SERIAL PRIMARY KEY, uuid UUID UNIQUE DEFAULT gen_random_uuid(), driver_name TEXT, name TEXT, customer TEXT, date BIGINT, day_of_week TEXT, notes TEXT, is_closed BOOLEAN, is_current BOOLEAN, depot_name TEXT, depot_lat DOUBLE PRECISION, depot_lng DOUBLE PRECISION, deleted_at BIGINT, updated_at BIGINT)`,
-        `CREATE TABLE IF NOT EXISTS stops (id SERIAL PRIMARY KEY, uuid UUID UNIQUE DEFAULT gen_random_uuid(), tour_id INT, address TEXT, recipient TEXT, street TEXT, house_number TEXT, postal_code TEXT, city TEXT, address_full TEXT, contact_name TEXT, phone_number TEXT, email TEXT, time_window TEXT, notes TEXT, alternative_names TEXT, order_index INT, latitude DOUBLE PRECISION, longitude DOUBLE PRECISION, is_completed BOOLEAN, arrival_time BIGINT, deleted_at BIGINT, updated_at BIGINT)`
-    ];
-    for (let q of queries) { await pool.query(q); }
+// ADATBÁZIS SÉMA FRISSÍTÉSE const initDb = async () => { await
+pool.query(‘CREATE EXTENSION IF NOT EXISTS “pgcrypto”’); const queries =
+[
+CREATE TABLE IF NOT EXISTS drivers (uuid UUID UNIQUE DEFAULT gen_random_uuid(), name TEXT UNIQUE, email TEXT, phone TEXT, license_plate TEXT, photo_url TEXT, is_active BOOLEAN DEFAULT TRUE),
+CREATE TABLE IF NOT EXISTS live_updates (id SERIAL PRIMARY KEY, uuid UUID UNIQUE DEFAULT gen_random_uuid(), driver_name TEXT, driver_photo TEXT, driver_phone TEXT, driver_email TEXT, license_plate TEXT, latitude DOUBLE PRECISION, longitude DOUBLE PRECISION, speed FLOAT, status TEXT, current_tour TEXT, next_stop TEXT, next_lat DOUBLE PRECISION, next_lng DOUBLE PRECISION, next_stop_dist FLOAT, tour_remaining_dist FLOAT, timestamp BIGINT),
+CREATE TABLE IF NOT EXISTS costs (id SERIAL PRIMARY KEY, uuid UUID UNIQUE DEFAULT gen_random_uuid(), driver_name TEXT, amount DECIMAL, currency TEXT, category TEXT, notes TEXT, mileage INT, status TEXT DEFAULT 'Rögzítve', timestamp BIGINT),
+CREATE TABLE IF NOT EXISTS chat_messages (id SERIAL PRIMARY KEY, uuid UUID UNIQUE DEFAULT gen_random_uuid(), driver_name TEXT, sender TEXT, message TEXT, timestamp BIGINT),
+CREATE TABLE IF NOT EXISTS work_times (id SERIAL PRIMARY KEY, uuid UUID UNIQUE DEFAULT gen_random_uuid(), driver_name TEXT, type TEXT, start_time BIGINT, end_time BIGINT, mileage INT, end_mileage INT, license_plate TEXT, notes TEXT, date TEXT),
+CREATE TABLE IF NOT EXISTS hotels (id SERIAL PRIMARY KEY, uuid UUID UNIQUE DEFAULT gen_random_uuid(), driver_name TEXT, name TEXT, address TEXT, timestamp BIGINT),
+CREATE TABLE IF NOT EXISTS tours (id SERIAL PRIMARY KEY, uuid UUID UNIQUE DEFAULT gen_random_uuid(), driver_name TEXT, name TEXT, customer TEXT, date BIGINT, day_of_week TEXT, notes TEXT, is_closed BOOLEAN, is_current BOOLEAN, depot_name TEXT, depot_lat DOUBLE PRECISION, depot_lng DOUBLE PRECISION, deleted_at BIGINT, updated_at BIGINT),
+CREATE TABLE IF NOT EXISTS stops (id SERIAL PRIMARY KEY, uuid UUID UNIQUE DEFAULT gen_random_uuid(), tour_id INT, address TEXT, recipient TEXT, street TEXT, house_number TEXT, postal_code TEXT, city TEXT, address_full TEXT, contact_name TEXT, phone_number TEXT, email TEXT, time_window TEXT, notes TEXT, alternative_names TEXT, order_index INT, latitude DOUBLE PRECISION, longitude DOUBLE PRECISION, is_completed BOOLEAN, arrival_time BIGINT, deleted_at BIGINT, updated_at BIGINT)
+]; for (let q of queries) { await pool.query(q); }
 
     const addColumns = [
         ['tours', 'day_of_week', 'TEXT'],
@@ -91,14 +83,21 @@ const initDb = async () => {
         await pool.query('ALTER TABLE costs ADD CONSTRAINT unique_cost UNIQUE (driver_name, timestamp, amount)');
     } catch(e) {}
     try { await pool.query('ALTER TABLE hotels ADD CONSTRAINT unique_hotel UNIQUE (driver_name, timestamp, name)'); } catch(e) {}
-};
-initDb().catch(console.error);
 
-// API-K
-app.post('/api/live-update', async (req, res) => {
-    const d = req.body;
-    await pool.query('INSERT INTO live_updates (uuid, driver_name, driver_photo, driver_phone, driver_email, license_plate, latitude, longitude, speed, status, current_tour, next_stop, next_lat, next_lng, next_stop_dist, tour_remaining_dist, depot_name, depot_lat, depot_lng, timestamp) VALUES (COALESCE($1, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)',
-        [d.uuid || null, d.driverName, d.driverPhoto, d.driverPhone, d.driverEmail, d.licensePlate, d.latitude, d.longitude, d.speed, d.status, d.currentTour, d.nextStop, d.nextLat, d.nextLng, d.nextStopDistance, d.tourRemainingDistance, d.depotName, d.depotLat, d.depotLng, d.timestamp]);
+}; initDb().catch(console.error);
+
+// API-K app.post(‘/api/live-update’, async (req, res) => { const d =
+req.body; await pool.query(‘INSERT INTO live_updates (uuid, driver_name,
+driver_photo, driver_phone, driver_email, license_plate, latitude,
+longitude, speed, status, current_tour, next_stop, next_lat, next_lng,
+next_stop_dist, tour_remaining_dist, depot_name, depot_lat, depot_lng,
+timestamp) VALUES (COALESCE($1, gen_random_uuid()), $2, $3, $4, $5, $6,
+$7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)’,
+[d.uuid || null, d.driverName, d.driverPhoto, d.driverPhone,
+d.driverEmail, d.licensePlate, d.latitude, d.longitude, d.speed,
+d.status, d.currentTour, d.nextStop, d.nextLat, d.nextLng,
+d.nextStopDistance, d.tourRemainingDistance, d.depotName, d.depotLat,
+d.depotLng, d.timestamp]);
 
     if (d.currentTour) {
         const tourRes = await pool.query('SELECT * FROM tours WHERE (name = $1 OR uuid::text = $1) AND driver_name = $2 AND is_closed = FALSE', [d.currentTour, d.driverName]);
@@ -118,48 +117,44 @@ app.post('/api/live-update', async (req, res) => {
         }
     }
     res.sendStatus(200);
+
 });
 
-app.post('/api/send-chat', async (req, res) => {
-    const { uuid, driverName, sender, message, timestamp } = req.body;
-    if (!message) return res.sendStatus(400);
-    await pool.query('INSERT INTO chat_messages (uuid, driver_name, sender, message, timestamp) VALUES (COALESCE($1, gen_random_uuid()), $2, $3, $4, $5)', [uuid || null, driverName, sender, message, timestamp || Date.now()]);
-    res.sendStatus(200);
-});
+app.post(‘/api/send-chat’, async (req, res) => { const { uuid,
+driverName, sender, message, timestamp } = req.body; if (!message)
+return res.sendStatus(400); await pool.query(‘INSERT INTO chat_messages
+(uuid, driver_name, sender, message, timestamp) VALUES (COALESCE($1,
+gen_random_uuid()), $2, $3, $4, $5)’, [uuid || null, driverName, sender,
+message, timestamp || Date.now()]); res.sendStatus(200); });
 
-app.get('/api/get-chat/:driverName', async (req, res) => {
-    const driverName = req.params.driverName;
-    const result = await pool.query('SELECT uuid, sender, message, timestamp FROM chat_messages WHERE driver_name = $1 ORDER BY timestamp ASC', [driverName]);
-    res.json(result.rows.map(r => ({
-        uuid: r.uuid,
-        driverName: driverName,
-        sender: r.sender || 'RENDSZER',
-        message: r.message || '',
-        timestamp: Number(r.timestamp) || Date.now()
-    })));
-});
+app.get(‘/api/get-chat/:driverName’, async (req, res) => { const
+driverName = req.params.driverName; const result = await
+pool.query(‘SELECT uuid, sender, message, timestamp FROM chat_messages
+WHERE driver_name = $1 ORDER BY timestamp ASC’, [driverName]);
+res.json(result.rows.map(r => ({ uuid: r.uuid, driverName: driverName,
+sender: r.sender || ‘RENDSZER’, message: r.message || ’’, timestamp:
+Number(r.timestamp) || Date.now() }))); });
 
-app.post('/api/sync-worktimes', async (req, res) => {
-    for (const wt of req.body) {
-        await pool.query(`INSERT INTO work_times (uuid, driver_name, type, start_time, end_time, mileage, end_mileage, license_plate, notes, date) VALUES (COALESCE($1, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8, $9, $10) ON CONFLICT (driver_name, start_time) DO UPDATE SET end_time = EXCLUDED.end_time, end_mileage = EXCLUDED.end_mileage, notes = EXCLUDED.notes`,
-            [wt.uuid || null, wt.driverName, wt.type, wt.startTime, wt.endTime, wt.mileage, wt.endMileage, wt.licensePlate, wt.notes, wt.date]);
-    }
-    res.sendStatus(200);
-});
+app.post(‘/api/sync-worktimes’, async (req, res) => { for (const wt of
+req.body) { await
+pool.query(INSERT INTO work_times (uuid, driver_name, type, start_time, end_time, mileage, end_mileage, license_plate, notes, date) VALUES (COALESCE($1, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8, $9, $10) ON CONFLICT (driver_name, start_time) DO UPDATE SET end_time = EXCLUDED.end_time, end_mileage = EXCLUDED.end_mileage, notes = EXCLUDED.notes,
+[wt.uuid || null, wt.driverName, wt.type, wt.startTime, wt.endTime,
+wt.mileage, wt.endMileage, wt.licensePlate, wt.notes, wt.date]); }
+res.sendStatus(200); });
 
-app.post('/api/sync-costs', async (req, res) => {
-    for (const c of req.body) {
-        await pool.query('INSERT INTO costs (uuid, driver_name, amount, currency, category, notes, mileage, timestamp) VALUES (COALESCE($1, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8) ON CONFLICT (driver_name, timestamp, amount) DO UPDATE SET status = EXCLUDED.status, notes = EXCLUDED.notes', [c.uuid || null, c.driverName, c.amount, c.currency, c.category, c.notes, c.mileage, c.timestamp]);
-    }
-    res.sendStatus(200);
-});
+app.post(‘/api/sync-costs’, async (req, res) => { for (const c of
+req.body) { await pool.query(‘INSERT INTO costs (uuid, driver_name,
+amount, currency, category, notes, mileage, timestamp) VALUES
+(COALESCE($1, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8) ON
+CONFLICT (driver_name, timestamp, amount) DO UPDATE SET status =
+EXCLUDED.status, notes = EXCLUDED.notes’, [c.uuid || null, c.driverName,
+c.amount, c.currency, c.category, c.notes, c.mileage, c.timestamp]); }
+res.sendStatus(200); });
 
-app.post('/api/sync-tours/:driverName', async (req, res) => {
-    const driverName = req.params.driverName;
-    try {
-        await pool.query('BEGIN');
-        const incomingTours = req.body || [];
-        const incomingTourUuids = incomingTours.map(item => item.tour.uuid).filter(u => !!u);
+app.post(‘/api/sync-tours/:driverName’, async (req, res) => { const
+driverName = req.params.driverName; try { await pool.query(‘BEGIN’);
+const incomingTours = req.body || []; const incomingTourUuids =
+incomingTours.map(item => item.tour.uuid).filter(u => !!u);
 
         for (const item of incomingTours) {
             if (!item.tour) continue;
@@ -291,41 +286,38 @@ app.post('/api/sync-tours/:driverName', async (req, res) => {
         await pool.query('ROLLBACK');
         res.status(500).send(e.message);
     }
+
 });
 
-app.post('/api/sync-hotels', async (req, res) => {
-    for (const h of req.body) {
-        await pool.query('INSERT INTO hotels (uuid, driver_name, name, address, timestamp) VALUES (COALESCE($1, gen_random_uuid()), $2, $3, $4, $5) ON CONFLICT DO NOTHING', [h.uuid || null, h.driverName, h.name, h.address, h.timestamp]);
-    }
-    res.sendStatus(200);
-});
+app.post(‘/api/sync-hotels’, async (req, res) => { for (const h of
+req.body) { await pool.query(‘INSERT INTO hotels (uuid, driver_name,
+name, address, timestamp) VALUES (COALESCE($1, gen_random_uuid()), $2,
+$3, $4, $5) ON CONFLICT DO NOTHING’, [h.uuid || null, h.driverName,
+h.name, h.address, h.timestamp]); } res.sendStatus(200); });
 
-app.post('/admin/update-cost', async (req, res) => {
-    await pool.query('UPDATE costs SET status = $1 WHERE id = $2', [req.body.status, req.body.id]);
-    res.json({ success: true });
-});
+app.post(‘/admin/update-cost’, async (req, res) => { await
+pool.query(‘UPDATE costs SET status = $1 WHERE id = $2’,
+[req.body.status, req.body.id]); res.json({ success: true }); });
 
-app.get('/api/cost-status/:driverName', async (req, res) => {
-    const result = await pool.query('SELECT id, uuid, status, timestamp, amount FROM costs WHERE driver_name = $1', [req.params.driverName]);
-    res.json(result.rows.map(r => ({
-        id: r.id,
-        uuid: r.uuid,
-        status: r.status || 'Rögzítve',
-        timestamp: Number(r.timestamp) || Date.now(),
-        amount: Number(r.amount) || 0
-    })));
-});
+app.get(‘/api/cost-status/:driverName’, async (req, res) => { const
+result = await pool.query(‘SELECT id, uuid, status, timestamp, amount
+FROM costs WHERE driver_name = $1’, [req.params.driverName]);
+res.json(result.rows.map(r => ({ id: r.id, uuid: r.uuid, status:
+r.status || ‘Rögzítve’, timestamp: Number(r.timestamp) || Date.now(),
+amount: Number(r.amount) || 0 }))); });
 
-app.get('/api/dashboard-status/:driverName', async (req, res) => {
-    const name = req.params.driverName;
-    const update = await pool.query('SELECT * FROM live_updates WHERE driver_name = $1 ORDER BY timestamp DESC LIMIT 1', [name]);
-    const toursRes = await pool.query('SELECT * FROM tours WHERE driver_name = $1 AND deleted_at IS NULL ORDER BY date DESC', [name]);
-    for (let tour of toursRes.rows) {
-        const stopsRes = await pool.query('SELECT * FROM stops WHERE tour_id = $1 AND deleted_at IS NULL ORDER BY order_index ASC', [tour.id]);
-        tour.stops = stopsRes.rows;
-    }
-    const costs = await pool.query('SELECT * FROM costs WHERE driver_name = $1 ORDER BY timestamp DESC', [name]);
-    const chat = await pool.query('SELECT * FROM chat_messages WHERE driver_name = $1 ORDER BY timestamp ASC', [name]);
+app.get(‘/api/dashboard-status/:driverName’, async (req, res) => { const
+name = req.params.driverName; const update = await pool.query(‘SELECT *
+FROM live_updates WHERE driver_name = $1 ORDER BY timestamp DESC LIMIT
+1’, [name]); const toursRes = await pool.query(‘SELECT * FROM tours
+WHERE driver_name = $1 AND deleted_at IS NULL ORDER BY date DESC’,
+[name]); for (let tour of toursRes.rows) { const stopsRes = await
+pool.query(‘SELECT * FROM stops WHERE tour_id = $1 AND deleted_at IS
+NULL ORDER BY order_index ASC’, [tour.id]); tour.stops = stopsRes.rows;
+} const costs = await pool.query(‘SELECT * FROM costs WHERE driver_name
+= $1 ORDER BY timestamp DESC’, [name]); const chat = await
+pool.query(‘SELECT * FROM chat_messages WHERE driver_name = $1 ORDER BY
+timestamp ASC’, [name]);
 
     res.json({
         live: update.rows[0] || { driver_name: name },
@@ -333,12 +325,12 @@ app.get('/api/dashboard-status/:driverName', async (req, res) => {
         costs: costs.rows,
         chat: chat.rows
     });
+
 });
 
-app.post('/admin/save-tour', async (req, res) => {
-    try {
-        const { id, uuid, driver_name, name, customer, date, day_of_week, notes, is_closed, stops } = req.body;
-        let tourId = id;
+app.post(‘/admin/save-tour’, async (req, res) => { try { const { id,
+uuid, driver_name, name, customer, date, day_of_week, notes, is_closed,
+stops } = req.body; let tourId = id;
 
         if (!tourId && uuid) {
             const resUuid = await pool.query('SELECT id FROM tours WHERE uuid::text = $1', [uuid]);
@@ -435,105 +427,75 @@ app.post('/admin/save-tour', async (req, res) => {
         }
         res.json({ success: true });
     } catch (e) { console.error(e); res.status(500).send(e.message); }
+
 });
 
-app.post('/admin/delete-tour', async (req, res) => {
-    const now = Date.now();
-    await pool.query('UPDATE stops SET deleted_at = $1, updated_at = $1 WHERE tour_id = $2', [now, req.body.id]);
-    await pool.query('UPDATE tours SET deleted_at = $1, updated_at = $1 WHERE id = $2', [now, req.body.id]);
-    res.json({ success: true });
-});
+app.post(‘/admin/delete-tour’, async (req, res) => { const now =
+Date.now(); await pool.query(‘UPDATE stops SET deleted_at = $1,
+updated_at = $1 WHERE tour_id = $2’, [now, req.body.id]); await
+pool.query(‘UPDATE tours SET deleted_at = $1, updated_at = $1 WHERE id =
+$2’, [now, req.body.id]); res.json({ success: true }); });
 
-app.get('/api/get-tours/:driverName', async (req, res) => {
-    try {
-        const toursRes = await pool.query('SELECT * FROM tours WHERE driver_name = $1 ORDER BY date DESC', [req.params.driverName]);
-        const results = [];
-        for (let tour of toursRes.rows) {
-            const stopsRes = await pool.query('SELECT * FROM stops WHERE tour_id = $1 ORDER BY order_index ASC', [tour.id]);
-            results.push({
-                tour: {
-                    id: tour.id,
-                    uuid: tour.uuid,
-                    driverName: tour.driver_name || 'Ismeretlen',
-                    name: tour.name || 'Túra',
-                    customer: tour.customer || '',
-                    date: Number(tour.date) || Date.now(),
-                    dayOfWeek: tour.day_of_week || '',
-                    notes: tour.notes || '',
-                    isClosed: !!tour.is_closed,
-                    isCurrent: !!tour.is_current,
-                    depotName: tour.depot_name || '',
-                    depotLatitude: tour.depot_lat !== null ? Number(tour.depot_lat) : null,
-                    depotLongitude: tour.depot_lng !== null ? Number(tour.depot_lng) : null,
-                    deletedAt: tour.deleted_at ? Number(tour.deleted_at) : null,
-                    updatedAt: tour.updated_at ? Number(tour.updated_at) : null
-                },
-                stops: stopsRes.rows.map(s => ({
-                    id: s.id,
-                    uuid: s.uuid,
-                    tourId: s.tour_id,
-                    address: s.address || '',
-                    recipient: s.recipient || '',
-                    street: s.street || '',
-                    houseNumber: s.house_number || '',
-                    postalCode: s.postal_code || '',
-                    city: s.city || '',
-                    addressFull: s.address_full || '',
-                    contactName: s.contact_name || '',
-                    phoneNumber: s.phone_number || '',
-                    email: s.email || '',
-                    timeWindow: s.time_window || '',
-                    notes: s.notes || '',
-                    alternativeNames: s.alternative_names || null,
-                    orderIndex: s.order_index || 0,
-                    latitude: s.latitude !== null ? Number(s.latitude) : null,
-                    longitude: s.longitude !== null ? Number(s.longitude) : null,
-                    isCompleted: !!s.is_completed,
-                    stopType: s.stop_type || 'DELIVERY',
-                    arrivalTime: s.arrival_time ? Number(s.arrival_time) : null,
-                    deletedAt: s.deleted_at ? Number(s.deleted_at) : null,
-                    updatedAt: s.updated_at ? Number(s.updated_at) : null
-                }))
-            });
-        }
-        res.json(results);
-    } catch (e) { res.status(500).send(e.message); }
-});
+app.get(‘/api/get-tours/:driverName’, async (req, res) => { try { const
+toursRes = await pool.query(‘SELECT * FROM tours WHERE driver_name = $1
+ORDER BY date DESC’, [req.params.driverName]); const results = []; for
+(let tour of toursRes.rows) { const stopsRes = await
+pool.query(‘SELECT * FROM stops WHERE tour_id = $1 ORDER BY order_index
+ASC’, [tour.id]); results.push({ tour: { id: tour.id, uuid: tour.uuid,
+driverName: tour.driver_name || ‘Ismeretlen’, name: tour.name || ‘Túra’,
+customer: tour.customer || ’‘, date: Number(tour.date) || Date.now(),
+dayOfWeek: tour.day_of_week ||’‘, notes: tour.notes ||’‘, isClosed:
+!!tour.is_closed, isCurrent: !!tour.is_current, depotName:
+tour.depot_name ||’‘, depotLatitude: tour.depot_lat !== null ?
+Number(tour.depot_lat) : null, depotLongitude: tour.depot_lng !== null ?
+Number(tour.depot_lng) : null, deletedAt: tour.deleted_at ?
+Number(tour.deleted_at) : null, updatedAt: tour.updated_at ?
+Number(tour.updated_at) : null }, stops: stopsRes.rows.map(s => ({ id:
+s.id, uuid: s.uuid, tourId: s.tour_id, address: s.address ||’‘,
+recipient: s.recipient ||’‘, street: s.street ||’‘, houseNumber:
+s.house_number ||’‘, postalCode: s.postal_code ||’‘, city: s.city ||’‘,
+addressFull: s.address_full ||’‘, contactName: s.contact_name ||’‘,
+phoneNumber: s.phone_number ||’‘, email: s.email ||’‘, timeWindow:
+s.time_window ||’‘, notes: s.notes ||’‘, alternativeNames:
+s.alternative_names || null, orderIndex: s.order_index || 0, latitude:
+s.latitude !== null ? Number(s.latitude) : null, longitude: s.longitude
+!== null ? Number(s.longitude) : null, isCompleted: !!s.is_completed,
+stopType: s.stop_type || ’DELIVERY’, arrivalTime: s.arrival_time ?
+Number(s.arrival_time) : null, deletedAt: s.deleted_at ?
+Number(s.deleted_at) : null, updatedAt: s.updated_at ?
+Number(s.updated_at) : null })) }); } res.json(results); } catch (e) {
+res.status(500).send(e.message); } });
 
-// FRONTEND
-app.get('/', async (req, res) => {
-    try {
-        const drivers = await pool.query(`SELECT DISTINCT ON (driver_name) driver_name, driver_photo, status, license_plate, timestamp FROM (SELECT driver_name, driver_photo, status, license_plate, timestamp::BIGINT FROM live_updates UNION ALL SELECT driver_name, NULL as driver_photo, 'Túra feltöltve' as status, '' as license_plate, date::BIGINT as timestamp FROM tours WHERE deleted_at IS NULL UNION ALL SELECT driver_name, NULL as driver_photo, 'Munkaidő feltöltve' as status, license_plate, start_time::BIGINT as timestamp FROM work_times) AS all_drivers ORDER BY driver_name, timestamp DESC`);
-        let list = drivers.rows.map(d => `<div class="card" onclick="location.href='/driver/${encodeURIComponent(d.driver_name)}'"><img src="${d.driver_photo || ''}" style="width:50px;height:50px;border-radius:50%;float:right;background:#444"><h3>${d.driver_name}</h3><p>${d.status} ${d.license_plate ? '| ' + d.license_plate : ''}</p></div>`).join('');
-        res.send(`<html><head><title>Driver ERP</title><style>body { font-family: sans-serif; background: #1a1a1a; color: white; padding: 40px; } .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 20px; } .card { background: #333; padding: 20px; border-radius: 12px; cursor: pointer; border-left: 8px solid #3498db; transition: 0.2s; } .card:hover { transform: scale(1.02); background: #444; }</style></head><body><h1>🚛 Flotta kiválasztása</h1><div class="grid">${list}</div></body></html>`);
-    } catch (e) { res.status(500).send(e.message); }
-});
+// FRONTEND app.get(‘/’, async (req, res) => { try { const drivers =
+await
+pool.query(SELECT DISTINCT ON (driver_name) driver_name, driver_photo, status, license_plate, timestamp FROM (SELECT driver_name, driver_photo, status, license_plate, timestamp::BIGINT FROM live_updates UNION ALL SELECT driver_name, NULL as driver_photo, 'Túra feltöltve' as status, '' as license_plate, date::BIGINT as timestamp FROM tours WHERE deleted_at IS NULL UNION ALL SELECT driver_name, NULL as driver_photo, 'Munkaidő feltöltve' as status, license_plate, start_time::BIGINT as timestamp FROM work_times) AS all_drivers ORDER BY driver_name, timestamp DESC);
+let list = drivers.rows.map(d =>
+<div class="card" onclick="location.href='/driver/${encodeURIComponent(d.driver_name)}'"><img src="${d.driver_photo || ''}" style="width:50px;height:50px;border-radius:50%;float:right;background:#444"><h3>${d.driver_name}</h3><p>${d.status} ${d.license_plate ? '| ' + d.license_plate : ''}</p></div>).join(’’);
+res.send(<html><head><title>Driver ERP</title><style>body { font-family: sans-serif; background: #1a1a1a; color: white; padding: 40px; } .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 20px; } .card { background: #333; padding: 20px; border-radius: 12px; cursor: pointer; border-left: 8px solid #3498db; transition: 0.2s; } .card:hover { transform: scale(1.02); background: #444; }</style></head><body><h1>🚛 Flotta kiválasztása</h1><div class="grid">${list}</div></body></html>);
+} catch (e) { res.status(500).send(e.message); } });
 
-app.get('/driver/:name', async (req, res) => {
-    const name = req.params.name;
-    const update = await pool.query('SELECT * FROM live_updates WHERE driver_name = $1 ORDER BY timestamp DESC LIMIT 1', [name]);
-    const costs = await pool.query('SELECT * FROM costs WHERE driver_name = $1 ORDER BY timestamp DESC', [name]);
-    const chat = await pool.query('SELECT * FROM chat_messages WHERE driver_name = $1 ORDER BY timestamp ASC', [name]);
-    const work = await pool.query('SELECT DISTINCT ON (start_time) * FROM work_times WHERE driver_name = $1 ORDER BY start_time DESC, id DESC', [name]);
-    const toursRes = await pool.query('SELECT * FROM tours WHERE driver_name = $1 AND deleted_at IS NULL ORDER BY date DESC', [name]);
-    const hotelsRes = await pool.query(`
-        SELECT name, address, timestamp FROM hotels WHERE driver_name = $1
-        UNION ALL
-        SELECT COALESCE(recipient, address_full) as name, address_full as address, COALESCE(arrival_time, (SELECT date FROM tours WHERE id = tour_id)) as timestamp FROM stops
-        WHERE tour_id IN (SELECT id FROM tours WHERE driver_name = $1) AND stop_type = 'HOTEL'
-        ORDER BY timestamp DESC
-    `, [name]);
-    for (let tour of toursRes.rows) {
-        const stopsRes = await pool.query('SELECT * FROM stops WHERE tour_id = $1 AND deleted_at IS NULL ORDER BY order_index ASC', [tour.id]);
-        tour.stops = stopsRes.rows;
-    }
-    let currentTour = toursRes.rows.find(t => t.is_current);
-    if (!currentTour && toursRes.rows.length > 0) {
-        currentTour = toursRes.rows[0]; // Pick the latest one as fallback
-    }
-    const stopsData = currentTour ? (currentTour.stops || []).filter(s => !s.is_completed) : [];
-    const d = update.rows[0] || { driver_name: name };
-    const depotData = currentTour ? { name: currentTour.depot_name || '', lat: currentTour.depot_lat, lng: currentTour.depot_lng } : null;
+app.get(‘/driver/:name’, async (req, res) => { const name =
+req.params.name; const update = await pool.query(‘SELECT * FROM
+live_updates WHERE driver_name = $1 ORDER BY timestamp DESC LIMIT 1’,
+[name]); const costs = await pool.query(‘SELECT * FROM costs WHERE
+driver_name = $1 ORDER BY timestamp DESC’, [name]); const chat = await
+pool.query(‘SELECT * FROM chat_messages WHERE driver_name = $1 ORDER BY
+timestamp ASC’, [name]); const work = await pool.query(‘SELECT DISTINCT
+ON (start_time) * FROM work_times WHERE driver_name = $1 ORDER BY
+start_time DESC, id DESC’, [name]); const toursRes = await
+pool.query(‘SELECT * FROM tours WHERE driver_name = $1 AND deleted_at IS
+NULL ORDER BY date DESC’, [name]); const hotelsRes = await
+pool.query(SELECT name, address, timestamp FROM hotels WHERE driver_name = $1         UNION ALL         SELECT COALESCE(recipient, address_full) as name, address_full as address, COALESCE(arrival_time, (SELECT date FROM tours WHERE id = tour_id)) as timestamp FROM stops         WHERE tour_id IN (SELECT id FROM tours WHERE driver_name = $1) AND stop_type = 'HOTEL'         ORDER BY timestamp DESC,
+[name]); for (let tour of toursRes.rows) { const stopsRes = await
+pool.query(‘SELECT * FROM stops WHERE tour_id = $1 AND deleted_at IS
+NULL ORDER BY order_index ASC’, [tour.id]); tour.stops = stopsRes.rows;
+} let currentTour = toursRes.rows.find(t => t.is_current); if
+(!currentTour && toursRes.rows.length > 0) { currentTour =
+toursRes.rows[0]; // Pick the latest one as fallback } const stopsData =
+currentTour ? (currentTour.stops || []).filter(s => !s.is_completed) :
+[]; const d = update.rows[0] || { driver_name: name }; const depotData =
+currentTour ? { name: currentTour.depot_name || ’’, lat:
+currentTour.depot_lat, lng: currentTour.depot_lng } : null;
 
     res.send(`<html><head><title>ERP - ${name}</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
@@ -957,7 +919,8 @@ app.get('/driver/:name', async (req, res) => {
             function deleteTour(id) { if(confirm('Törlöd?')) fetch('/admin/delete-tour', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({id}) }).then(() => location.reload()); }
         </script>
     </body></html>`);
+
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log('🚀 ERP Rendszer elindult a ' + PORT + ' porton.'));
+const PORT = process.env.PORT || 3000; app.listen(PORT, () =>
+console.log(‘🚀 ERP Rendszer elindult a’ + PORT + ’ porton.’));
