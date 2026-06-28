@@ -16,8 +16,8 @@ const initDb = async () => {
         `CREATE TABLE IF NOT EXISTS chat_messages (id SERIAL PRIMARY KEY, uuid UUID UNIQUE DEFAULT gen_random_uuid(), driver_name TEXT, sender TEXT, message TEXT, timestamp BIGINT)`,
         `CREATE TABLE IF NOT EXISTS work_times (id SERIAL PRIMARY KEY, uuid UUID UNIQUE DEFAULT gen_random_uuid(), driver_name TEXT, type TEXT, start_time BIGINT, end_time BIGINT, mileage INT, end_mileage INT, license_plate TEXT, notes TEXT, date TEXT)`,
         `CREATE TABLE IF NOT EXISTS hotels (id SERIAL PRIMARY KEY, uuid UUID UNIQUE DEFAULT gen_random_uuid(), driver_name TEXT, name TEXT, address TEXT, timestamp BIGINT)`,
-        `CREATE TABLE IF NOT EXISTS tours (id SERIAL PRIMARY KEY, uuid UUID UNIQUE DEFAULT gen_random_uuid(), driver_name TEXT, name TEXT, customer TEXT, date BIGINT, day_of_week TEXT, notes TEXT, is_closed BOOLEAN, is_current BOOLEAN, deleted_at BIGINT)`,
-        `CREATE TABLE IF NOT EXISTS stops (id SERIAL PRIMARY KEY, uuid UUID UNIQUE DEFAULT gen_random_uuid(), tour_id INT, address TEXT, contact_name TEXT, phone_number TEXT, email TEXT, time_window TEXT, notes TEXT, alternative_names TEXT, order_index INT, latitude DOUBLE PRECISION, longitude DOUBLE PRECISION, is_completed BOOLEAN, arrival_time BIGINT, deleted_at BIGINT)`
+        `CREATE TABLE IF NOT EXISTS tours (id SERIAL PRIMARY KEY, uuid UUID UNIQUE DEFAULT gen_random_uuid(), driver_name TEXT, name TEXT, customer TEXT, date BIGINT, day_of_week TEXT, notes TEXT, is_closed BOOLEAN, is_current BOOLEAN, deleted_at BIGINT, updated_at BIGINT)`,
+        `CREATE TABLE IF NOT EXISTS stops (id SERIAL PRIMARY KEY, uuid UUID UNIQUE DEFAULT gen_random_uuid(), tour_id INT, address TEXT, recipient TEXT, street TEXT, house_number TEXT, postal_code TEXT, city TEXT, address_full TEXT, contact_name TEXT, phone_number TEXT, email TEXT, time_window TEXT, notes TEXT, alternative_names TEXT, order_index INT, latitude DOUBLE PRECISION, longitude DOUBLE PRECISION, is_completed BOOLEAN, arrival_time BIGINT, deleted_at BIGINT, updated_at BIGINT)`
     ];
     for (let q of queries) { await pool.query(q); }
 
@@ -33,6 +33,12 @@ const initDb = async () => {
         ['stops', 'longitude', 'DOUBLE PRECISION'],
         ['stops', 'is_completed', 'BOOLEAN'],
         ['stops', 'arrival_time', 'BIGINT'],
+        ['stops', 'recipient', 'TEXT'],
+        ['stops', 'street', 'TEXT'],
+        ['stops', 'house_number', 'TEXT'],
+        ['stops', 'postal_code', 'TEXT'],
+        ['stops', 'city', 'TEXT'],
+        ['stops', 'address_full', 'TEXT'],
         ['tours', 'deleted_at', 'BIGINT'],
         ['stops', 'deleted_at', 'BIGINT'],
         ['tours', 'updated_at', 'BIGINT'],
@@ -163,13 +169,26 @@ app.post('/api/sync-tours/:driverName', async (req, res) => {
                         }
                         continue;
                     }
+                    const stopFields = [
+                        s.uuid || null, tourId, s.address || '', s.recipient || '', s.street || '',
+                        s.houseNumber || '', s.postalCode || '', s.city || '', s.addressFull || '',
+                        s.contactName || '', s.phoneNumber || '', s.email || '', s.timeWindow || '',
+                        s.notes || '', s.alternativeNames || null, s.orderIndex || 0,
+                        s.latitude || null, s.longitude || null, !!s.isCompleted, s.arrivalTime || null
+                    ];
                     if (s.uuid) {
                         await pool.query(`
-                            INSERT INTO stops (uuid, tour_id, address, contact_name, phone_number, email, time_window, notes, alternative_names, order_index, latitude, longitude, is_completed, arrival_time)
-                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+                            INSERT INTO stops (uuid, tour_id, address, recipient, street, house_number, postal_code, city, address_full, contact_name, phone_number, email, time_window, notes, alternative_names, order_index, latitude, longitude, is_completed, arrival_time)
+                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
                             ON CONFLICT (uuid) DO UPDATE SET
                                 tour_id = EXCLUDED.tour_id,
                                 address = EXCLUDED.address,
+                                recipient = EXCLUDED.recipient,
+                                street = EXCLUDED.street,
+                                house_number = EXCLUDED.house_number,
+                                postal_code = EXCLUDED.postal_code,
+                                city = EXCLUDED.city,
+                                address_full = EXCLUDED.address_full,
                                 contact_name = EXCLUDED.contact_name,
                                 phone_number = EXCLUDED.phone_number,
                                 email = EXCLUDED.email,
@@ -181,12 +200,12 @@ app.post('/api/sync-tours/:driverName', async (req, res) => {
                                 longitude = EXCLUDED.longitude,
                                 is_completed = EXCLUDED.is_completed,
                                 arrival_time = EXCLUDED.arrival_time
-                        `, [s.uuid, tourId, s.address || '', s.contactName || '', s.phoneNumber || '', s.email || '', s.timeWindow || '', s.notes || '', s.alternativeNames || null, s.orderIndex || 0, s.latitude || null, s.longitude || null, !!s.isCompleted, s.arrivalTime || null]);
+                        `, stopFields);
                     } else {
                         await pool.query(`
-                            INSERT INTO stops (tour_id, address, contact_name, phone_number, email, time_window, notes, alternative_names, order_index, latitude, longitude, is_completed, arrival_time)
-                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-                        `, [tourId, s.address || '', s.contactName || '', s.phoneNumber || '', s.email || '', s.timeWindow || '', s.notes || '', s.alternativeNames || null, s.orderIndex || 0, s.latitude || null, s.longitude || null, !!s.isCompleted, s.arrivalTime || null]);
+                            INSERT INTO stops (tour_id, address, recipient, street, house_number, postal_code, city, address_full, contact_name, phone_number, email, time_window, notes, alternative_names, order_index, latitude, longitude, is_completed, arrival_time)
+                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+                        `, stopFields.slice(1));
                     }
                 }
             }
@@ -258,32 +277,50 @@ app.post('/admin/save-tour', async (req, res) => {
                     s.uuid || null,
                     tourId,
                     s.address || '',
+                    s.recipient || '',
+                    s.street || '',
+                    s.house_number || '',
+                    s.postal_code || '',
+                    s.city || '',
+                    s.address_full || '',
                     s.contact_name === undefined ? (s.contactName === undefined ? null : s.contactName) : s.contact_name,
                     s.phone_number === undefined ? (s.phoneNumber === undefined ? null : s.phoneNumber) : s.phone_number,
                     s.email || null,
                     s.time_window === undefined ? (s.timeWindow === undefined ? null : s.timeWindow) : s.time_window,
                     s.notes || null,
                     s.order_index || 0,
-                    s.is_completed === undefined ? (s.isCompleted === undefined ? null : !!s.isCompleted) : !!s.is_completed
+                    s.is_completed === undefined ? (s.isCompleted === undefined ? null : !!s.isCompleted) : !!s.is_completed,
+                    s.latitude || null,
+                    s.longitude || null,
+                    s.alternative_names || null
                 ];
 
                 if (s.uuid) {
                     await pool.query(`
-                        INSERT INTO stops (uuid, tour_id, address, contact_name, phone_number, email, time_window, notes, order_index, is_completed)
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                        INSERT INTO stops (uuid, tour_id, address, recipient, street, house_number, postal_code, city, address_full, contact_name, phone_number, email, time_window, notes, order_index, is_completed, latitude, longitude, alternative_names)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
                         ON CONFLICT (uuid) DO UPDATE SET
                             tour_id = EXCLUDED.tour_id,
                             address = EXCLUDED.address,
+                            recipient = EXCLUDED.recipient,
+                            street = EXCLUDED.street,
+                            house_number = EXCLUDED.house_number,
+                            postal_code = EXCLUDED.postal_code,
+                            city = EXCLUDED.city,
+                            address_full = EXCLUDED.address_full,
                             contact_name = COALESCE(EXCLUDED.contact_name, stops.contact_name),
                             phone_number = COALESCE(EXCLUDED.phone_number, stops.phone_number),
                             email = COALESCE(EXCLUDED.email, stops.email),
                             time_window = COALESCE(EXCLUDED.time_window, stops.time_window),
                             notes = COALESCE(EXCLUDED.notes, stops.notes),
                             order_index = EXCLUDED.order_index,
-                            is_completed = COALESCE(EXCLUDED.is_completed, stops.is_completed)
+                            is_completed = COALESCE(EXCLUDED.is_completed, stops.is_completed),
+                            latitude = EXCLUDED.latitude,
+                            longitude = EXCLUDED.longitude,
+                            alternative_names = EXCLUDED.alternative_names
                     `, params);
                 } else {
-                    await pool.query('INSERT INTO stops (tour_id, address, contact_name, phone_number, email, time_window, notes, order_index, is_completed) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)', params.slice(1));
+                    await pool.query('INSERT INTO stops (tour_id, address, recipient, street, house_number, postal_code, city, address_full, contact_name, phone_number, email, time_window, notes, order_index, is_completed, latitude, longitude, alternative_names) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)', params.slice(1));
                 }
             }
             if (incomingStopUuids.length > 0) {
@@ -327,6 +364,12 @@ app.get('/api/get-tours/:driverName', async (req, res) => {
                     uuid: s.uuid,
                     tourId: s.tour_id,
                     address: s.address || '',
+                    recipient: s.recipient || '',
+                    street: s.street || '',
+                    houseNumber: s.house_number || '',
+                    postalCode: s.postal_code || '',
+                    city: s.city || '',
+                    addressFull: s.address_full || '',
                     contactName: s.contact_name || '',
                     phoneNumber: s.phone_number || '',
                     email: s.email || '',
@@ -388,6 +431,8 @@ app.get('/driver/:name', async (req, res) => {
         .msg { padding: 8px; margin: 5px 0; border-radius: 8px; max-width: 80%; }
         .msg-boss { background: #F57F17; color: black; align-self: flex-end; margin-left: auto; }
         .msg-driver { background: #34495e; color: white; }
+        .stop-edit-row label { display: block; font-size: 11px; color: #aaa; margin-bottom: 2px; }
+        .stop-edit-row input, .stop-edit-row select { width: 100%; padding: 8px; background: #333; border: 1px solid #444; color: white; border-radius: 4px; box-sizing: border-box; }
     </style></head>
     <body>
         <header><button onclick="location.href='/'">⬅</button><img src="${d.driver_photo || ''}" style="width:40px;height:40px;border-radius:50%;margin-left:15px;margin-right:15px;"><h2>${name} - ERP</h2></header>
@@ -440,7 +485,7 @@ app.get('/driver/:name', async (req, res) => {
                     <input type="date" id="tDate"><input type="text" id="tDay" placeholder="Nap">
                 </div>
                 <textarea id="tNotes" placeholder="Megjegyzések" style="width:100%; height:60px; margin-bottom:20px;"></textarea>
-                <h3>Megállók</h3><div id="modalStops"></div><button onclick="addStopRow()">+ Megálló</button>
+                <h3>Megállók</h3><div id="modalStops"></div><button id="addStopBtn" onclick="addStopRow()">+ Megálló</button>
                 <div style="margin-top:30px; display:flex; gap:10px; justify-content:flex-end;"><button onclick="closeModal()">Mégse</button><button onclick="saveTour()" style="background:#3498db; color:white; padding:10px 30px;">Mentés</button></div>
             </div>
         </div>
@@ -520,34 +565,133 @@ app.get('/driver/:name', async (req, res) => {
                 document.getElementById('tourId').value = t ? t.id : '';
                 document.getElementById('tourUuid').value = t ? t.uuid : '';
                 document.getElementById('tName').value = t ? t.name : '';
+                document.getElementById('tName').disabled = !!t;
                 document.getElementById('tCustomer').value = t ? t.customer : '';
+                document.getElementById('tCustomer').disabled = !!t;
                 document.getElementById('tDate').value = t ? new Date(Number(t.date)).toISOString().split('T')[0] : '';
+                document.getElementById('tDate').disabled = !!t;
+                document.getElementById('tDay').value = t ? (t.day_of_week || t.dayOfWeek || '') : '';
+                document.getElementById('tDay').disabled = !!t;
+                document.getElementById('tNotes').value = t ? t.notes : '';
+                document.getElementById('tNotes').disabled = !!t;
+
+                document.getElementById('addStopBtn').style.display = t ? 'none' : 'block';
                 document.getElementById('modalStops').innerHTML = '';
-                if(t && t.stops) t.stops.forEach(s => addStopRow(s)); else addStopRow();
+                if(t && t.stops) t.stops.forEach(s => addStopRow(s, !!t)); else addStopRow(null, false);
                 document.getElementById('tourModal').style.display = 'block';
             }
-            function addStopRow(s) {
+
+            async function geocodeStop(row) {
+                const street = row.querySelector('.stop-street').value;
+                const house = row.querySelector('.stop-house').value;
+                const postal = row.querySelector('.stop-postal').value;
+                const city = row.querySelector('.stop-city').value;
+                if (!street || !city) return;
+                const q = `${street} ${house}, ${postal} ${city}`;
+                try {
+                    const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(q)}`);
+                    const data = await res.json();
+                    if (data && data.length > 0) {
+                        row.querySelector('.stop-lat').value = data[0].lat;
+                        row.querySelector('.stop-lon').value = data[0].lon;
+                    }
+                } catch (e) { console.error(e); }
+            }
+
+            function addStopRow(s, isReadOnlyStructure) {
                 const d = document.createElement('div');
-                d.dataset.uuid = s ? s.uuid : '';
-                d.dataset.contact_name = s ? (s.contact_name || s.contactName || '') : '';
-                d.dataset.phone_number = s ? (s.phone_number || s.phoneNumber || '') : '';
-                d.dataset.time_window = s ? (s.time_window || s.timeWindow || '') : '';
-                d.dataset.is_completed = s ? (s.is_completed || s.isCompleted || false) : false;
-                d.innerHTML = '<input type="text" value="' + (s?s.address:'') + '" placeholder="Cím"><button onclick="this.parentElement.remove()">X</button>';
+                d.className = 'stop-edit-row';
+                d.style = 'border:1px solid #444; padding:15px; margin-bottom:15px; border-radius:8px; position:relative;';
+
+                const uuid = s ? (s.uuid || '') : '';
+                const altNames = s ? (s.alternativeNames || s.alternative_names || '') : '';
+                const lat = s ? (s.latitude || '') : '';
+                const lon = s ? (s.longitude || '') : '';
+
+                let recipientHtml = '';
+                const altList = altNames ? altNames.split('|') : [];
+                if (altList.length > 1) {
+                    recipientHtml = '<select class="stop-recipient" style="margin-bottom:5px;">' +
+                        altList.map(name => `<option value="${name}" ${name === (s.recipient || '') ? 'selected' : ''}>${name}</option>`).join('') +
+                        '<option value="custom">-- Egyéni --</option></select>' +
+                        '<input type="text" class="stop-recipient-input" value="' + (s ? (s.recipient || '') : '') + '" placeholder="Címzett" style="display:none;">';
+                } else {
+                    recipientHtml = '<input type="text" class="stop-recipient-input" value="' + (s ? (s.recipient || '') : '') + '" placeholder="Címzett" style="margin-bottom:5px;">';
+                }
+
+                d.innerHTML = `
+                    ${!isReadOnlyStructure ? '<button onclick="this.parentElement.remove()" style="position:absolute; right:10px; top:10px; background:#e74c3c; color:white; border:none; padding:5px 10px; border-radius:4px; cursor:pointer;">X</button>' : ''}
+                    <input type="hidden" class="stop-uuid" value="${uuid}">
+                    <input type="hidden" class="stop-lat" value="${lat}">
+                    <input type="hidden" class="stop-lon" value="${lon}">
+                    <input type="hidden" class="stop-alt-names" value="${altNames}">
+
+                    <label>Címzett</label>
+                    ${recipientHtml}
+
+                    <div style="display:grid; grid-template-columns: 2fr 1fr; gap:10px; margin-bottom:5px;">
+                        <div><label>Utca</label><input type="text" class="stop-street" value="${s ? (s.street || '') : ''}" placeholder="Utca" onchange="geocodeStop(this.parentElement.parentElement.parentElement)"></div>
+                        <div><label>Házszám</label><input type="text" class="stop-house" value="${s ? (s.house_number || s.houseNumber || '') : ''}" placeholder="Házszám" onchange="geocodeStop(this.parentElement.parentElement.parentElement)"></div>
+                    </div>
+
+                    <div style="display:grid; grid-template-columns: 1fr 2fr; gap:10px; margin-bottom:5px;">
+                        <div><label>Irányítószám</label><input type="text" class="stop-postal" value="${s ? (s.postal_code || s.postalCode || '') : ''}" placeholder="Irsz" onchange="geocodeStop(this.parentElement.parentElement.parentElement)"></div>
+                        <div><label>Város</label><input type="text" class="stop-city" value="${s ? (s.city || '') : ''}" placeholder="Város" onchange="geocodeStop(this.parentElement.parentElement.parentElement)"></div>
+                    </div>
+
+                    <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px; margin-bottom:5px;">
+                        <div><label>Kapcsolattartó</label><input type="text" class="stop-contact" value="${s ? (s.contact_name || s.contactName || '') : ''}" placeholder="Kapcsolattartó"></div>
+                        <div><label>Telefonszám</label><input type="text" class="stop-phone" value="${s ? (s.phone_number || s.phoneNumber || '') : ''}" placeholder="Telefon"></div>
+                    </div>
+
+                    <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px; margin-bottom:5px;">
+                        <div><label>Időablak</label><input type="text" class="stop-time" value="${s ? (s.time_window || s.timeWindow || '') : ''}" placeholder="Időablak"></div>
+                        <div><label>Megjegyzés</label><input type="text" class="stop-notes" value="${s ? (s.notes || '') : ''}" placeholder="Megjegyzés"></div>
+                    </div>
+                `;
+
+                const select = d.querySelector('.stop-recipient');
+                const input = d.querySelector('.stop-recipient-input');
+                if (select) {
+                    select.addEventListener('change', () => {
+                        if (select.value === 'custom') { input.style.display = 'block'; } else { input.style.display = 'none'; input.value = select.value; }
+                    });
+                }
                 document.getElementById('modalStops').appendChild(d);
             }
+
             function closeModal() { document.getElementById('tourModal').style.display = 'none'; }
             function saveTour() {
                 const stops = [];
-                document.querySelectorAll('#modalStops div').forEach((r, i) => {
+                document.querySelectorAll('#modalStops .stop-edit-row').forEach((r, i) => {
+                    const street = r.querySelector('.stop-street').value;
+                    const house = r.querySelector('.stop-house').value;
+                    const postal = r.querySelector('.stop-postal').value;
+                    const city = r.querySelector('.stop-city').value;
+                    const address_full = (street + ' ' + house + ', ' + postal + ' ' + city).trim().replace(/^,/, '').trim();
+
+                    const select = r.querySelector('.stop-recipient');
+                    const recipientInput = r.querySelector('.stop-recipient-input');
+                    let recipient = recipientInput.value;
+                    if (select && select.value !== 'custom') { recipient = select.value; }
+
                     stops.push({
-                        uuid: r.dataset.uuid || null,
-                        address: r.querySelector('input').value,
+                        uuid: r.querySelector('.stop-uuid').value || null,
+                        recipient: recipient,
+                        street: street,
+                        house_number: house,
+                        postal_code: postal,
+                        city: city,
+                        address_full: address_full,
+                        address: address_full,
+                        contact_name: r.querySelector('.stop-contact').value,
+                        phone_number: r.querySelector('.stop-phone').value,
+                        time_window: r.querySelector('.stop-time').value,
+                        notes: r.querySelector('.stop-notes').value,
                         order_index: i,
-                        contact_name: r.dataset.contact_name || undefined,
-                        phone_number: r.dataset.phone_number || undefined,
-                        time_window: r.dataset.time_window || undefined,
-                        is_completed: r.dataset.is_completed === 'true' || r.dataset.is_completed === true
+                        latitude: r.querySelector('.stop-lat').value ? parseFloat(r.querySelector('.stop-lat').value) : null,
+                        longitude: r.querySelector('.stop-lon').value ? parseFloat(r.querySelector('.stop-lon').value) : null,
+                        alternative_names: r.querySelector('.stop-alt-names').value || null
                     });
                 });
                 const data = {
@@ -557,6 +701,8 @@ app.get('/driver/:name', async (req, res) => {
                     name: document.getElementById('tName').value,
                     customer: document.getElementById('tCustomer').value,
                     date: new Date(document.getElementById('tDate').value).getTime(),
+                    day_of_week: document.getElementById('tDay').value,
+                    notes: document.getElementById('tNotes').value,
                     stops
                 };
                 fetch('/admin/save-tour', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) }).then(() => location.reload());
