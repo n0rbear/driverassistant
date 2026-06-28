@@ -233,16 +233,40 @@ app.post('/admin/save-tour', async (req, res) => {
             if (resUuid.rows.length > 0) tourId = resUuid.rows[0].id;
         }
 
+        const safeDate = (date && !isNaN(Number(date))) ? Number(date) : null;
+
         if (tourId) {
-            await pool.query('UPDATE tours SET name=$1, customer=$2, date=$3, day_of_week=$4, notes=$5, is_closed=$6 WHERE id=$7', [name, customer, date, day_of_week, notes, is_closed, tourId]);
+            await pool.query(`
+                UPDATE tours SET
+                    name = COALESCE($1, name),
+                    customer = COALESCE($2, customer),
+                    date = COALESCE($3, date),
+                    day_of_week = COALESCE($4, day_of_week),
+                    notes = COALESCE($5, notes),
+                    is_closed = COALESCE($6, is_closed)
+                WHERE id = $7
+            `, [name || null, customer || null, safeDate, day_of_week || null, notes || null, is_closed === undefined ? null : !!is_closed, tourId]);
         } else {
-            const result = await pool.query('INSERT INTO tours (uuid, driver_name, name, customer, date, day_of_week, notes, is_closed) VALUES (COALESCE($1, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8) RETURNING id', [uuid || null, driver_name, name, customer, date, day_of_week, notes, is_closed]);
+            const result = await pool.query('INSERT INTO tours (uuid, driver_name, name, customer, date, day_of_week, notes, is_closed) VALUES (COALESCE($1, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8) RETURNING id', [uuid || null, driver_name || 'Ismeretlen', name || 'Túra', customer || '', safeDate || Date.now(), day_of_week || '', notes || '', !!is_closed]);
             tourId = result.rows[0].id;
         }
 
         if (stops && Array.isArray(stops)) {
             const incomingStopUuids = stops.map(s => s.uuid).filter(u => !!u);
             for (const s of stops) {
+                const params = [
+                    s.uuid || null,
+                    tourId,
+                    s.address || '',
+                    s.contact_name === undefined ? (s.contactName === undefined ? null : s.contactName) : s.contact_name,
+                    s.phone_number === undefined ? (s.phoneNumber === undefined ? null : s.phoneNumber) : s.phone_number,
+                    s.email || null,
+                    s.time_window === undefined ? (s.timeWindow === undefined ? null : s.timeWindow) : s.time_window,
+                    s.notes || null,
+                    s.order_index || 0,
+                    s.is_completed === undefined ? (s.isCompleted === undefined ? null : !!s.isCompleted) : !!s.is_completed
+                ];
+
                 if (s.uuid) {
                     await pool.query(`
                         INSERT INTO stops (uuid, tour_id, address, contact_name, phone_number, email, time_window, notes, order_index, is_completed)
@@ -250,16 +274,16 @@ app.post('/admin/save-tour', async (req, res) => {
                         ON CONFLICT (uuid) DO UPDATE SET
                             tour_id = EXCLUDED.tour_id,
                             address = EXCLUDED.address,
-                            contact_name = EXCLUDED.contact_name,
-                            phone_number = EXCLUDED.phone_number,
-                            email = EXCLUDED.email,
-                            time_window = EXCLUDED.time_window,
-                            notes = EXCLUDED.notes,
+                            contact_name = COALESCE(EXCLUDED.contact_name, stops.contact_name),
+                            phone_number = COALESCE(EXCLUDED.phone_number, stops.phone_number),
+                            email = COALESCE(EXCLUDED.email, stops.email),
+                            time_window = COALESCE(EXCLUDED.time_window, stops.time_window),
+                            notes = COALESCE(EXCLUDED.notes, stops.notes),
                             order_index = EXCLUDED.order_index,
-                            is_completed = EXCLUDED.is_completed
-                    `, [s.uuid, tourId, s.address, s.contact_name, s.phone_number, s.email, s.time_window, s.notes, s.order_index, !!s.is_completed]);
+                            is_completed = COALESCE(EXCLUDED.is_completed, stops.is_completed)
+                    `, params);
                 } else {
-                    await pool.query('INSERT INTO stops (tour_id, address, contact_name, phone_number, email, time_window, notes, order_index, is_completed) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)', [tourId, s.address, s.contact_name, s.phone_number, s.email, s.time_window, s.notes, s.order_index, !!s.is_completed]);
+                    await pool.query('INSERT INTO stops (tour_id, address, contact_name, phone_number, email, time_window, notes, order_index, is_completed) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)', params.slice(1));
                 }
             }
             if (incomingStopUuids.length > 0) {
@@ -268,7 +292,7 @@ app.post('/admin/save-tour', async (req, res) => {
             }
         }
         res.json({ success: true });
-    } catch (e) { res.status(500).send(e.message); }
+    } catch (e) { console.error(e); res.status(500).send(e.message); }
 });
 
 app.post('/admin/delete-tour', async (req, res) => {
@@ -505,13 +529,36 @@ app.get('/driver/:name', async (req, res) => {
             function addStopRow(s) {
                 const d = document.createElement('div');
                 d.dataset.uuid = s ? s.uuid : '';
+                d.dataset.contact_name = s ? (s.contact_name || s.contactName || '') : '';
+                d.dataset.phone_number = s ? (s.phone_number || s.phoneNumber || '') : '';
+                d.dataset.time_window = s ? (s.time_window || s.timeWindow || '') : '';
+                d.dataset.is_completed = s ? (s.is_completed || s.isCompleted || false) : false;
                 d.innerHTML = '<input type="text" value="' + (s?s.address:'') + '" placeholder="Cím"><button onclick="this.parentElement.remove()">X</button>';
                 document.getElementById('modalStops').appendChild(d);
             }
             function closeModal() { document.getElementById('tourModal').style.display = 'none'; }
             function saveTour() {
-                const stops = []; document.querySelectorAll('#modalStops div').forEach((r, i) => stops.push({ uuid: r.dataset.uuid || null, address: r.querySelector('input').value, order_index: i }));
-                const data = { id: document.getElementById('tourId').value, uuid: document.getElementById('tourUuid').value, driver_name: '${name}', name: document.getElementById('tName').value, customer: document.getElementById('tCustomer').value, date: new Date(document.getElementById('tDate').value).getTime(), stops };
+                const stops = [];
+                document.querySelectorAll('#modalStops div').forEach((r, i) => {
+                    stops.push({
+                        uuid: r.dataset.uuid || null,
+                        address: r.querySelector('input').value,
+                        order_index: i,
+                        contact_name: r.dataset.contact_name || undefined,
+                        phone_number: r.dataset.phone_number || undefined,
+                        time_window: r.dataset.time_window || undefined,
+                        is_completed: r.dataset.is_completed === 'true' || r.dataset.is_completed === true
+                    });
+                });
+                const data = {
+                    id: document.getElementById('tourId').value,
+                    uuid: document.getElementById('tourUuid').value,
+                    driver_name: '${name}',
+                    name: document.getElementById('tName').value,
+                    customer: document.getElementById('tCustomer').value,
+                    date: new Date(document.getElementById('tDate').value).getTime(),
+                    stops
+                };
                 fetch('/admin/save-tour', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) }).then(() => location.reload());
             }
             function deleteTour(id) { if(confirm('Törlöd?')) fetch('/admin/delete-tour', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({id}) }).then(() => location.reload()); }
