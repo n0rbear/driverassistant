@@ -11,12 +11,12 @@ const initDb = async () => {
     await pool.query('CREATE EXTENSION IF NOT EXISTS "pgcrypto"');
     const queries = [
         `CREATE TABLE IF NOT EXISTS drivers (uuid UUID UNIQUE DEFAULT gen_random_uuid(), name TEXT UNIQUE, email TEXT, phone TEXT, license_plate TEXT, photo_url TEXT, is_active BOOLEAN DEFAULT TRUE)`,
-        `CREATE TABLE IF NOT EXISTS live_updates (id SERIAL PRIMARY KEY, uuid UUID UNIQUE DEFAULT gen_random_uuid(), driver_name TEXT, driver_photo TEXT, driver_phone TEXT, driver_email TEXT, license_plate TEXT, latitude DOUBLE PRECISION, longitude DOUBLE PRECISION, speed FLOAT, status TEXT, current_tour TEXT, next_stop TEXT, next_lat DOUBLE PRECISION, next_lng DOUBLE PRECISION, timestamp BIGINT)`,
+        `CREATE TABLE IF NOT EXISTS live_updates (id SERIAL PRIMARY KEY, uuid UUID UNIQUE DEFAULT gen_random_uuid(), driver_name TEXT, driver_photo TEXT, driver_phone TEXT, driver_email TEXT, license_plate TEXT, latitude DOUBLE PRECISION, longitude DOUBLE PRECISION, speed FLOAT, status TEXT, current_tour TEXT, next_stop TEXT, next_lat DOUBLE PRECISION, next_lng DOUBLE PRECISION, next_stop_dist FLOAT, tour_remaining_dist FLOAT, timestamp BIGINT)`,
         `CREATE TABLE IF NOT EXISTS costs (id SERIAL PRIMARY KEY, uuid UUID UNIQUE DEFAULT gen_random_uuid(), driver_name TEXT, amount DECIMAL, currency TEXT, category TEXT, notes TEXT, mileage INT, status TEXT DEFAULT 'Rögzítve', timestamp BIGINT)`,
         `CREATE TABLE IF NOT EXISTS chat_messages (id SERIAL PRIMARY KEY, uuid UUID UNIQUE DEFAULT gen_random_uuid(), driver_name TEXT, sender TEXT, message TEXT, timestamp BIGINT)`,
         `CREATE TABLE IF NOT EXISTS work_times (id SERIAL PRIMARY KEY, uuid UUID UNIQUE DEFAULT gen_random_uuid(), driver_name TEXT, type TEXT, start_time BIGINT, end_time BIGINT, mileage INT, end_mileage INT, license_plate TEXT, notes TEXT, date TEXT)`,
         `CREATE TABLE IF NOT EXISTS hotels (id SERIAL PRIMARY KEY, uuid UUID UNIQUE DEFAULT gen_random_uuid(), driver_name TEXT, name TEXT, address TEXT, timestamp BIGINT)`,
-        `CREATE TABLE IF NOT EXISTS tours (id SERIAL PRIMARY KEY, uuid UUID UNIQUE DEFAULT gen_random_uuid(), driver_name TEXT, name TEXT, customer TEXT, date BIGINT, day_of_week TEXT, notes TEXT, is_closed BOOLEAN, is_current BOOLEAN, deleted_at BIGINT, updated_at BIGINT)`,
+        `CREATE TABLE IF NOT EXISTS tours (id SERIAL PRIMARY KEY, uuid UUID UNIQUE DEFAULT gen_random_uuid(), driver_name TEXT, name TEXT, customer TEXT, date BIGINT, day_of_week TEXT, notes TEXT, is_closed BOOLEAN, is_current BOOLEAN, depot_name TEXT, depot_lat DOUBLE PRECISION, depot_lng DOUBLE PRECISION, deleted_at BIGINT, updated_at BIGINT)`,
         `CREATE TABLE IF NOT EXISTS stops (id SERIAL PRIMARY KEY, uuid UUID UNIQUE DEFAULT gen_random_uuid(), tour_id INT, address TEXT, recipient TEXT, street TEXT, house_number TEXT, postal_code TEXT, city TEXT, address_full TEXT, contact_name TEXT, phone_number TEXT, email TEXT, time_window TEXT, notes TEXT, alternative_names TEXT, order_index INT, latitude DOUBLE PRECISION, longitude DOUBLE PRECISION, is_completed BOOLEAN, arrival_time BIGINT, deleted_at BIGINT, updated_at BIGINT)`
     ];
     for (let q of queries) { await pool.query(q); }
@@ -27,6 +27,9 @@ const initDb = async () => {
         ['tours', 'customer', 'TEXT'],
         ['tours', 'is_closed', 'BOOLEAN'],
         ['tours', 'is_current', 'BOOLEAN'],
+        ['tours', 'depot_name', 'TEXT'],
+        ['tours', 'depot_lat', 'DOUBLE PRECISION'],
+        ['tours', 'depot_lng', 'DOUBLE PRECISION'],
         ['live_updates', 'driver_phone', 'TEXT'],
         ['live_updates', 'driver_email', 'TEXT'],
         ['stops', 'latitude', 'DOUBLE PRECISION'],
@@ -43,6 +46,8 @@ const initDb = async () => {
         ['stops', 'deleted_at', 'BIGINT'],
         ['tours', 'updated_at', 'BIGINT'],
         ['stops', 'updated_at', 'BIGINT'],
+        ['live_updates', 'next_stop_dist', 'FLOAT'],
+        ['live_updates', 'tour_remaining_dist', 'FLOAT'],
         ['live_updates', 'uuid', 'UUID UNIQUE DEFAULT gen_random_uuid()'],
         ['costs', 'uuid', 'UUID UNIQUE DEFAULT gen_random_uuid()'],
         ['chat_messages', 'uuid', 'UUID UNIQUE DEFAULT gen_random_uuid()'],
@@ -76,8 +81,8 @@ initDb().catch(console.error);
 // API-K
 app.post('/api/live-update', async (req, res) => {
     const d = req.body;
-    await pool.query('INSERT INTO live_updates (uuid, driver_name, driver_photo, driver_phone, driver_email, license_plate, latitude, longitude, speed, status, current_tour, next_stop, next_lat, next_lng, timestamp) VALUES (COALESCE($1, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)',
-        [d.uuid || null, d.driverName, d.driverPhoto, d.driverPhone, d.driverEmail, d.licensePlate, d.latitude, d.longitude, d.speed, d.status, d.currentTour, d.nextStop, d.nextLat, d.nextLng, d.timestamp]);
+    await pool.query('INSERT INTO live_updates (uuid, driver_name, driver_photo, driver_phone, driver_email, license_plate, latitude, longitude, speed, status, current_tour, next_stop, next_lat, next_lng, next_stop_dist, tour_remaining_dist, timestamp) VALUES (COALESCE($1, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)',
+        [d.uuid || null, d.driverName, d.driverPhoto, d.driverPhone, d.driverEmail, d.licensePlate, d.latitude, d.longitude, d.speed, d.status, d.currentTour, d.nextStop, d.nextLat, d.nextLng, d.nextStopDistance, d.tourRemainingDistance, d.timestamp]);
     res.sendStatus(200);
 });
 
@@ -148,24 +153,25 @@ app.post('/api/sync-tours/:driverName', async (req, res) => {
                         await pool.query(`
                             UPDATE tours SET
                                 name = $1, customer = $2, date = $3, day_of_week = $4,
-                                notes = $5, is_closed = $6, is_current = $7, updated_at = $8
-                            WHERE id = $9
-                        `, [t.name || 'Túra', t.customer || '', t.date || Date.now(), t.dayOfWeek || '', t.notes || '', !!t.isClosed, !!t.isCurrent, incomingUpdatedAt, tourId]);
+                                notes = $5, is_closed = $6, is_current = $7, depot_name = $8,
+                                depot_lat = $9, depot_lng = $10, updated_at = $11
+                            WHERE id = $12
+                        `, [t.name || 'Túra', t.customer || '', t.date || Date.now(), t.dayOfWeek || '', t.notes || '', !!t.isClosed, !!t.isCurrent, t.depotName || '', t.depotLatitude || null, t.depotLongitude || null, incomingUpdatedAt, tourId]);
                     }
                 } else {
                     const resT = await pool.query(`
-                        INSERT INTO tours (uuid, driver_name, name, customer, date, day_of_week, notes, is_closed, is_current, updated_at)
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                        INSERT INTO tours (uuid, driver_name, name, customer, date, day_of_week, notes, is_closed, is_current, depot_name, depot_lat, depot_lng, updated_at)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
                         RETURNING id
-                    `, [t.uuid, driverName, t.name || 'Túra', t.customer || '', t.date || Date.now(), t.dayOfWeek || '', t.notes || '', !!t.isClosed, !!t.isCurrent, Number(t.updatedAt || t.updated_at || Date.now())]);
+                    `, [t.uuid, driverName, t.name || 'Túra', t.customer || '', t.date || Date.now(), t.dayOfWeek || '', t.notes || '', !!t.isClosed, !!t.isCurrent, t.depotName || '', t.depotLatitude || null, t.depotLongitude || null, Number(t.updatedAt || t.updated_at || Date.now())]);
                     tourId = resT.rows[0].id;
                 }
             } else {
                 const resT = await pool.query(`
-                    INSERT INTO tours (driver_name, name, customer, date, day_of_week, notes, is_closed, is_current, updated_at)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                    INSERT INTO tours (driver_name, name, customer, date, day_of_week, notes, is_closed, is_current, depot_name, depot_lat, depot_lng, updated_at)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
                     RETURNING id
-                `, [driverName, t.name || 'Túra', t.customer || '', t.date || Date.now(), t.dayOfWeek || '', t.notes || '', !!t.isClosed, !!t.isCurrent, Date.now()]);
+                `, [driverName, t.name || 'Túra', t.customer || '', t.date || Date.now(), t.dayOfWeek || '', t.notes || '', !!t.isClosed, !!t.isCurrent, t.depotName || '', t.depotLatitude || null, t.depotLongitude || null, Date.now()]);
                 tourId = resT.rows[0].id;
             }
 
@@ -296,11 +302,14 @@ app.post('/admin/save-tour', async (req, res) => {
                     day_of_week = COALESCE($4, day_of_week),
                     notes = COALESCE($5, notes),
                     is_closed = COALESCE($6, is_closed),
+                    depot_name = COALESCE($7, depot_name),
+                    depot_lat = COALESCE($8, depot_lat),
+                    depot_lng = COALESCE($9, depot_lng),
                     updated_at = ${Date.now()}
-                WHERE id = $7
-            `, [name || null, customer || null, safeDate, day_of_week || null, notes || null, is_closed === undefined ? null : !!is_closed, tourId]);
+                WHERE id = $10
+            `, [name || null, customer || null, safeDate, day_of_week || null, notes || null, is_closed === undefined ? null : !!is_closed, req.body.depot_name || null, req.body.depot_lat || null, req.body.depot_lng || null, tourId]);
         } else {
-            const result = await pool.query('INSERT INTO tours (uuid, driver_name, name, customer, date, day_of_week, notes, is_closed, updated_at) VALUES (COALESCE($1, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id', [uuid || null, driver_name || 'Ismeretlen', name || 'Túra', customer || '', safeDate || Date.now(), day_of_week || '', notes || '', !!is_closed, Date.now()]);
+            const result = await pool.query('INSERT INTO tours (uuid, driver_name, name, customer, date, day_of_week, notes, is_closed, depot_name, depot_lat, depot_lng, updated_at) VALUES (COALESCE($1, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING id', [uuid || null, driver_name || 'Ismeretlen', name || 'Túra', customer || '', safeDate || Date.now(), day_of_week || '', notes || '', !!is_closed, req.body.depot_name || '', req.body.depot_lat || null, req.body.depot_lng || null, Date.now()]);
             tourId = result.rows[0].id;
         }
 
@@ -397,6 +406,9 @@ app.get('/api/get-tours/:driverName', async (req, res) => {
                     notes: tour.notes || '',
                     isClosed: !!tour.is_closed,
                     isCurrent: !!tour.is_current,
+                    depotName: tour.depot_name || '',
+                    depotLatitude: tour.depot_lat !== null ? Number(tour.depot_lat) : null,
+                    depotLongitude: tour.depot_lng !== null ? Number(tour.depot_lng) : null,
                     deletedAt: tour.deleted_at ? Number(tour.deleted_at) : null,
                     updatedAt: tour.updated_at ? Number(tour.updated_at) : null
                 },
@@ -452,6 +464,9 @@ app.get('/driver/:name', async (req, res) => {
         const stopsRes = await pool.query('SELECT * FROM stops WHERE tour_id = $1 AND deleted_at IS NULL ORDER BY order_index ASC', [tour.id]);
         tour.stops = stopsRes.rows;
     }
+    const currentTour = toursRes.rows.find(t => t.is_current);
+    const stopsData = currentTour ? currentTour.stops : [];
+    const depotData = currentTour ? { name: currentTour.depot_name || 'Depó', lat: currentTour.depot_lat, lng: currentTour.depot_lng } : null;
     const d = update.rows[0] || { driver_name: name };
 
     res.send(`<html><head><title>ERP - ${name}</title>
@@ -494,6 +509,8 @@ app.get('/driver/:name', async (req, res) => {
                 <div style="background:#222; padding:20px; border-radius:8px;">
                     <h3>Státusz: <span style="color:#3498db">${d.status}</span></h3>
                     <p>Sebesség: ${Math.round(d.speed || 0)} km/h</p>
+                    <p id="nextDistBox">📍 Következő megálló: - km</p>
+                    <p id="tourDistBox">🏁 Túra összesen: - km</p>
                     <hr><p>🎯 Cél: ${d.next_stop || 'Nincs'}</p>
                 </div>
             </div>
@@ -527,6 +544,14 @@ app.get('/driver/:name', async (req, res) => {
                     <input type="date" id="tDate"><input type="text" id="tDay" placeholder="Nap">
                 </div>
                 <textarea id="tNotes" placeholder="Megjegyzések" style="width:100%; height:60px; margin-bottom:20px;"></textarea>
+
+                <h3>Depó (Visszatérés ide)</h3>
+                <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; margin-bottom:20px;">
+                    <input type="text" id="tDepotName" placeholder="Depó név">
+                    <input type="text" id="tDepotLat" placeholder="Lat">
+                    <input type="text" id="tDepotLng" placeholder="Lng">
+                </div>
+
                 <h3>Megállók</h3><div id="modalStops"></div><button id="addStopBtn" onclick="addStopRow()">+ Megálló</button>
                 <div style="margin-top:30px; display:flex; gap:10px; justify-content:flex-end;"><button onclick="closeModal()">Mégse</button><button onclick="saveTour()" style="background:#3498db; color:white; padding:10px 30px;">Mentés</button></div>
             </div>
@@ -593,6 +618,58 @@ app.get('/driver/:name', async (req, res) => {
             L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png').addTo(map);
             L.marker([${d.latitude || 47.5}, ${d.longitude || 19.0}]).addTo(map);
 
+            const tourStops = ${JSON.stringify(stopsData)};
+            const tourDepot = ${JSON.stringify(depotData)};
+            async function updateRoute() {
+                const incomplete = tourStops.filter(s => !s.is_completed && s.latitude && s.longitude);
+                if (incomplete.length === 0) return;
+
+                // 1. Distance to NEXT STOP
+                const nextStop = incomplete[0];
+                const nextCoords = [[${d.longitude || 19.0}, ${d.latitude || 47.5}], [nextStop.longitude, nextStop.latitude]];
+                const nextUrl = \`https://router.project-osrm.org/route/v1/driving/\` + nextCoords.map(c => c.join(',')).join(';') + \`?overview=false\`;
+
+                try {
+                    const resNext = await fetch(nextUrl);
+                    const dataNext = await resNext.json();
+                    if (dataNext.routes && dataNext.routes[0]) {
+                        document.getElementById('nextDistBox').innerText = '📍 Következő megálló: ' + (dataNext.routes[0].distance / 1000).toFixed(1) + ' km';
+                    }
+                } catch (e) { console.error('Next stop routing error:', e); }
+
+                // 2. TOTAL Remaining Distance (GPS -> Remaining Stops -> Depot)
+                const totalCoords = [[${d.longitude || 19.0}, ${d.latitude || 47.5}], ...incomplete.map(s => [s.longitude, s.latitude])];
+                if (tourDepot && tourDepot.lat && tourDepot.lng) {
+                    totalCoords.push([tourDepot.lng, tourDepot.lat]);
+                }
+
+                const totalUrl = \`https://router.project-osrm.org/route/v1/driving/\` + totalCoords.map(c => c.join(',')).join(';') + \`?overview=full&geometries=geojson\`;
+
+                try {
+                    const resTotal = await fetch(totalUrl);
+                    const dataTotal = await resTotal.json();
+                    if (dataTotal.routes && dataTotal.routes[0]) {
+                        const route = dataTotal.routes[0];
+                        L.geoJSON(route.geometry, { style: { color: '#3498db', weight: 5, opacity: 0.7 } }).addTo(map);
+                        document.getElementById('tourDistBox').innerText = '🏁 Túra összesen: ' + (route.distance / 1000).toFixed(1) + ' km';
+
+                        incomplete.forEach((s, i) => {
+                            L.circleMarker([s.latitude, s.longitude], { radius: 8, color: '#e74c3c', fillOpacity: 1 }).addTo(map)
+                                .bindPopup((i+1) + '. ' + s.address);
+                        });
+
+                        if (tourDepot && tourDepot.lat && tourDepot.lng) {
+                             L.marker([tourDepot.lat, tourDepot.lng]).addTo(map)
+                                .bindPopup('Depó: ' + tourDepot.name);
+                        }
+
+                        const bounds = L.latLngBounds([[${d.latitude || 47.5}, ${d.longitude || 19.0}], ...totalCoords.map(c => [c[1], c[0]])]);
+                        map.fitBounds(bounds, { padding: [50, 50] });
+                    }
+                } catch (e) { console.error('Total routing error:', e); }
+            }
+            if (tourStops.length > 0) updateRoute();
+
             function sendMsg() {
                 const val = document.getElementById('m').value;
                 if(!val) return;
@@ -616,6 +693,13 @@ app.get('/driver/:name', async (req, res) => {
                 document.getElementById('tDay').disabled = !!t;
                 document.getElementById('tNotes').value = t ? t.notes : '';
                 document.getElementById('tNotes').disabled = !!t;
+
+                document.getElementById('tDepotName').value = t ? (t.depot_name || t.depotName || '') : '';
+                document.getElementById('tDepotName').disabled = !!t;
+                document.getElementById('tDepotLat').value = t ? (t.depot_lat || t.depotLatitude || '') : '';
+                document.getElementById('tDepotLat').disabled = !!t;
+                document.getElementById('tDepotLng').value = t ? (t.depot_lng || t.depotLongitude || '') : '';
+                document.getElementById('tDepotLng').disabled = !!t;
 
                 document.getElementById('addStopBtn').style.display = 'block';
                 document.getElementById('modalStops').innerHTML = '';
@@ -750,6 +834,9 @@ app.get('/driver/:name', async (req, res) => {
                     date: new Date(document.getElementById('tDate').value).getTime(),
                     day_of_week: document.getElementById('tDay').value,
                     notes: document.getElementById('tNotes').value,
+                    depot_name: document.getElementById('tDepotName').value,
+                    depot_lat: document.getElementById('tDepotLat').value ? parseFloat(document.getElementById('tDepotLat').value) : null,
+                    depot_lng: document.getElementById('tDepotLng').value ? parseFloat(document.getElementById('tDepotLng').value) : null,
                     stops
                 };
                 fetch('/admin/save-tour', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) }).then(() => location.reload());
