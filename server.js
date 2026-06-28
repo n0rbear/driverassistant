@@ -102,6 +102,49 @@ const initDb = async () => {
         await pool.query('ALTER TABLE costs ADD CONSTRAINT unique_cost UNIQUE (driver_name, timestamp, amount)');
     } catch(e) {}
     try { await pool.query('ALTER TABLE hotels ADD CONSTRAINT unique_hotel UNIQUE (driver_name, timestamp, name)'); } catch(e) {}
+
+    // ADRESS MIGRATION
+    try {
+        let stopsUpdated = 0;
+        let toursUpdated = 0;
+        const addressRegex = /^(.+)\s+([^,]+),\s*(\d{4})\s+(.+)$/;
+
+        const stops = await pool.query("SELECT id, address, address_full, street, house_number, postal_code, city FROM stops WHERE street IS NULL OR house_number IS NULL OR postal_code IS NULL OR city IS NULL");
+        for (const s of stops.rows) {
+            const source = s.address_full || s.address;
+            if (!source) continue;
+            const match = source.match(addressRegex);
+            if (match) {
+                const [, street, house, postal, city] = match;
+                await pool.query(
+                    "UPDATE stops SET street = COALESCE(street, $1), house_number = COALESCE(house_number, $2), postal_code = COALESCE(postal_code, $3), city = COALESCE(city, $4), address_full = COALESCE(address_full, $5) WHERE id = $6",
+                    [street, house, postal, city, source, s.id]
+                );
+                stopsUpdated++;
+            } else if (!s.address_full && s.address) {
+                await pool.query("UPDATE stops SET address_full = $1 WHERE id = $2", [s.address, s.id]);
+                stopsUpdated++;
+            }
+        }
+
+        const tours = await pool.query("SELECT id, depot_name, depot_address_full, depot_street FROM tours WHERE depot_street IS NULL");
+        for (const t of tours.rows) {
+            const source = t.depot_address_full || t.depot_name;
+            if (!source) continue;
+            const match = source.match(addressRegex);
+            if (match) {
+                const [, street, house, postal, city] = match;
+                await pool.query(
+                    "UPDATE tours SET depot_street = COALESCE(depot_street, $1), depot_house_number = COALESCE(depot_house_number, $2), depot_postal_code = COALESCE(depot_postal_code, $3), depot_city = COALESCE(depot_city, $4), depot_address_full = COALESCE(depot_address_full, $5) WHERE id = $6",
+                    [street, house, postal, city, source, t.id]
+                );
+                toursUpdated++;
+            }
+        }
+        if (stopsUpdated > 0 || toursUpdated > 0) {
+            console.log(`[MIGRATION] Backfilled ${stopsUpdated} stops and ${toursUpdated} tours with structured address data.`);
+        }
+    } catch (err) { console.error("Migration error:", err); }
 };
 initDb().catch(console.error);
 
