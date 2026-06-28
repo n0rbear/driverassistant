@@ -98,7 +98,7 @@ app.post('/api/live-update', async (req, res) => {
         [d.uuid || null, d.driverName, d.driverPhoto, d.driverPhone, d.driverEmail, d.licensePlate, d.latitude, d.longitude, d.speed, d.status, d.currentTour, d.nextStop, d.nextLat, d.nextLng, d.nextStopDistance, d.tourRemainingDistance, d.timestamp]);
 
     if (d.currentTour) {
-        const tourRes = await pool.query('SELECT * FROM tours WHERE (name = $1 OR uuid = $1) AND driver_name = $2 AND is_closed = FALSE', [d.currentTour, d.driverName]);
+        const tourRes = await pool.query('SELECT * FROM tours WHERE (name = $1 OR uuid::text = $1) AND driver_name = $2 AND is_closed = FALSE', [d.currentTour, d.driverName]);
         if (tourRes.rows.length > 0) {
             const tour = tourRes.rows[0];
             if (tour.depot_lat && tour.depot_lng) {
@@ -163,15 +163,15 @@ app.post('/api/sync-tours/:driverName', async (req, res) => {
             if (t.deletedAt) {
                 if (t.uuid) {
                     const now = Date.now();
-                    await pool.query('UPDATE stops SET deleted_at = $1, updated_at = $1 WHERE tour_id IN (SELECT id FROM tours WHERE uuid = $2)', [now, t.uuid]);
-                    await pool.query('UPDATE tours SET deleted_at = $1, updated_at = $1 WHERE uuid = $2', [now, t.uuid]);
+                    await pool.query('UPDATE stops SET deleted_at = $1, updated_at = $1 WHERE tour_id IN (SELECT id FROM tours WHERE uuid::text = $2)', [now, t.uuid]);
+                    await pool.query('UPDATE tours SET deleted_at = $1, updated_at = $1 WHERE uuid::text = $2', [now, t.uuid]);
                 }
                 continue;
             }
 
             let tourId;
             if (t.uuid) {
-                const existing = await pool.query('SELECT id, updated_at FROM tours WHERE uuid = $1', [t.uuid]);
+                const existing = await pool.query('SELECT id, updated_at FROM tours WHERE uuid::text = $1', [t.uuid]);
                 if (existing.rows.length > 0) {
                     const dbTour = existing.rows[0];
                     tourId = dbTour.id;
@@ -209,7 +209,7 @@ app.post('/api/sync-tours/:driverName', async (req, res) => {
                     if (s.deletedAt) {
                         if (s.uuid) {
                             const now = Date.now();
-                            await pool.query('UPDATE stops SET deleted_at = $1, updated_at = $1 WHERE uuid = $2', [now, s.uuid]);
+                            await pool.query('UPDATE stops SET deleted_at = $1, updated_at = $1 WHERE uuid::text = $2', [now, s.uuid]);
                         }
                         continue;
                     }
@@ -217,7 +217,7 @@ app.post('/api/sync-tours/:driverName', async (req, res) => {
                     const incomingUpdatedAt = Number(s.updatedAt || s.updated_at || Date.now());
 
                     if (s.uuid) {
-                        const existingStop = await pool.query('SELECT id, updated_at FROM stops WHERE uuid = $1', [s.uuid]);
+                        const existingStop = await pool.query('SELECT id, updated_at FROM stops WHERE uuid::text = $1', [s.uuid]);
                         if (existingStop.rows.length > 0) {
                             const dbStop = existingStop.rows[0];
                             const dbUpdatedAt = Number(dbStop.updated_at || 0);
@@ -231,7 +231,7 @@ app.post('/api/sync-tours/:driverName', async (req, res) => {
                                 alternative_names = $14, order_index = $15, latitude = $16,
                                 longitude = $17, is_completed = $18, arrival_time = $19,
                                 stop_type = $20, updated_at = $21
-                            WHERE uuid = $22
+                            WHERE uuid::text = $22
                         `, [
                             tourId, s.address || '', s.recipient || '', s.street || '', s.houseNumber || s.house_number || '',
                             s.postalCode || s.postal_code || '', s.city || '', s.addressFull || s.address_full || '',
@@ -336,7 +336,7 @@ app.post('/admin/save-tour', async (req, res) => {
         let tourId = id;
 
         if (!tourId && uuid) {
-            const resUuid = await pool.query('SELECT id FROM tours WHERE uuid = $1', [uuid]);
+            const resUuid = await pool.query('SELECT id FROM tours WHERE uuid::text = $1', [uuid]);
             if (resUuid.rows.length > 0) tourId = resUuid.rows[0].id;
         }
 
