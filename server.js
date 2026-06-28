@@ -28,8 +28,8 @@ const initDb = async () => {
         `CREATE TABLE IF NOT EXISTS chat_messages (id SERIAL PRIMARY KEY, uuid UUID UNIQUE DEFAULT gen_random_uuid(), driver_name TEXT, sender TEXT, message TEXT, timestamp BIGINT)`,
         `CREATE TABLE IF NOT EXISTS work_times (id SERIAL PRIMARY KEY, uuid UUID UNIQUE DEFAULT gen_random_uuid(), driver_name TEXT, type TEXT, start_time BIGINT, end_time BIGINT, mileage INT, end_mileage INT, license_plate TEXT, notes TEXT, date TEXT)`,
         `CREATE TABLE IF NOT EXISTS hotels (id SERIAL PRIMARY KEY, uuid UUID UNIQUE DEFAULT gen_random_uuid(), driver_name TEXT, name TEXT, address TEXT, timestamp BIGINT)`,
-        `CREATE TABLE IF NOT EXISTS tours (id SERIAL PRIMARY KEY, uuid UUID UNIQUE DEFAULT gen_random_uuid(), driver_name TEXT, name TEXT, customer TEXT, date BIGINT, day_of_week TEXT, notes TEXT, is_closed BOOLEAN, is_current BOOLEAN, depot_name TEXT, depot_lat DOUBLE PRECISION, depot_lng DOUBLE PRECISION, deleted_at BIGINT, updated_at BIGINT)`,
-        `CREATE TABLE IF NOT EXISTS stops (id SERIAL PRIMARY KEY, uuid UUID UNIQUE DEFAULT gen_random_uuid(), tour_id INT, address TEXT, recipient TEXT, street TEXT, house_number TEXT, postal_code TEXT, city TEXT, address_full TEXT, contact_name TEXT, phone_number TEXT, email TEXT, time_window TEXT, notes TEXT, alternative_names TEXT, order_index INT, latitude DOUBLE PRECISION, longitude DOUBLE PRECISION, is_completed BOOLEAN, arrival_time BIGINT, deleted_at BIGINT, updated_at BIGINT)`
+        `CREATE TABLE IF NOT EXISTS tours (id SERIAL PRIMARY KEY, uuid UUID UNIQUE DEFAULT gen_random_uuid(), driver_name TEXT, name TEXT, customer TEXT, date BIGINT, day_of_week TEXT, notes TEXT, is_closed BOOLEAN, is_current BOOLEAN, depot_name TEXT, depot_company TEXT, depot_street TEXT, depot_house_number TEXT, depot_postal_code TEXT, depot_city TEXT, depot_state TEXT, depot_country TEXT, depot_address_full TEXT, depot_lat DOUBLE PRECISION, depot_lng DOUBLE PRECISION, deleted_at BIGINT, updated_at BIGINT)`,
+        `CREATE TABLE IF NOT EXISTS stops (id SERIAL PRIMARY KEY, uuid UUID UNIQUE DEFAULT gen_random_uuid(), tour_id INT, address TEXT, recipient TEXT, company TEXT, street TEXT, house_number TEXT, postal_code TEXT, city TEXT, state TEXT, country TEXT, address_full TEXT, contact_name TEXT, phone_number TEXT, email TEXT, time_window TEXT, notes TEXT, alternative_names TEXT, order_index INT, latitude DOUBLE PRECISION, longitude DOUBLE PRECISION, is_completed BOOLEAN, arrival_time BIGINT, deleted_at BIGINT, updated_at BIGINT, stop_type TEXT DEFAULT 'DELIVERY')`
     ];
     for (let q of queries) { await pool.query(q); }
 
@@ -63,6 +63,17 @@ const initDb = async () => {
         ['live_updates', 'depot_name', 'TEXT'],
         ['live_updates', 'depot_lat', 'DOUBLE PRECISION'],
         ['live_updates', 'depot_lng', 'DOUBLE PRECISION'],
+        ['tours', 'depot_company', 'TEXT'],
+        ['tours', 'depot_street', 'TEXT'],
+        ['tours', 'depot_house_number', 'TEXT'],
+        ['tours', 'depot_postal_code', 'TEXT'],
+        ['tours', 'depot_city', 'TEXT'],
+        ['tours', 'depot_state', 'TEXT'],
+        ['tours', 'depot_country', 'TEXT'],
+        ['tours', 'depot_address_full', 'TEXT'],
+        ['stops', 'company', 'TEXT'],
+        ['stops', 'state', 'TEXT'],
+        ['stops', 'country', 'TEXT'],
         ['stops', 'stop_type', 'TEXT DEFAULT \'DELIVERY\''],
         ['live_updates', 'uuid', 'UUID UNIQUE DEFAULT gen_random_uuid()'],
         ['costs', 'uuid', 'UUID UNIQUE DEFAULT gen_random_uuid()'],
@@ -339,7 +350,8 @@ app.get('/api/dashboard-status/:driverName', async (req, res) => {
 
 app.post('/admin/save-tour', async (req, res) => {
     try {
-        const { id, uuid, driver_name, name, customer, date, day_of_week, notes, is_closed, stops } = req.body;
+        const { id, uuid, driver_name, name, customer, date, day_of_week, notes, is_closed, stops,
+                depot_name, depot_company, depot_street, depot_house_number, depot_postal_code, depot_city, depot_state, depot_country, depot_address_full, depot_lat, depot_lng } = req.body;
         let tourId = id;
 
         if (!tourId && uuid) {
@@ -359,13 +371,32 @@ app.post('/admin/save-tour', async (req, res) => {
                     notes = COALESCE($5::TEXT, notes),
                     is_closed = COALESCE($6::BOOLEAN, is_closed),
                     depot_name = COALESCE($7::TEXT, depot_name),
-                    depot_lat = COALESCE($8::DOUBLE PRECISION, depot_lat),
-                    depot_lng = COALESCE($9::DOUBLE PRECISION, depot_lng),
+                    depot_company = COALESCE($8::TEXT, depot_company),
+                    depot_street = COALESCE($9::TEXT, depot_street),
+                    depot_house_number = COALESCE($10::TEXT, depot_house_number),
+                    depot_postal_code = COALESCE($11::TEXT, depot_postal_code),
+                    depot_city = COALESCE($12::TEXT, depot_city),
+                    depot_state = COALESCE($13::TEXT, depot_state),
+                    depot_country = COALESCE($14::TEXT, depot_country),
+                    depot_address_full = COALESCE($15::TEXT, depot_address_full),
+                    depot_lat = COALESCE($16::DOUBLE PRECISION, depot_lat),
+                    depot_lng = COALESCE($17::DOUBLE PRECISION, depot_lng),
                     updated_at = ${Date.now()}
-                WHERE id = $10
-            `, [name || null, customer || null, safeDate, day_of_week || null, notes || null, is_closed === undefined ? null : !!is_closed, req.body.depot_name || null, req.body.depot_lat || null, req.body.depot_lng || null, tourId]);
+                WHERE id = $18
+            `, [name || null, customer || null, safeDate, day_of_week || null, notes || null, is_closed === undefined ? null : !!is_closed,
+                depot_name || null, depot_company || null, depot_street || null, depot_house_number || null, depot_postal_code || null,
+                depot_city || null, depot_state || null, depot_country || null, depot_address_full || null,
+                depot_lat || null, depot_lng || null, tourId]);
         } else {
-            const result = await pool.query('INSERT INTO tours (uuid, driver_name, name, customer, date, day_of_week, notes, is_closed, depot_name, depot_lat, depot_lng, updated_at) VALUES (COALESCE($1::UUID, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING id', [uuid || null, driver_name || 'Ismeretlen', name || 'Túra', customer || '', safeDate || Date.now(), day_of_week || '', notes || '', !!is_closed, req.body.depot_name || '', req.body.depot_lat || null, req.body.depot_lng || null, Date.now()]);
+            const result = await pool.query(`
+                INSERT INTO tours (uuid, driver_name, name, customer, date, day_of_week, notes, is_closed,
+                                   depot_name, depot_company, depot_street, depot_house_number, depot_postal_code, depot_city, depot_state, depot_country, depot_address_full,
+                                   depot_lat, depot_lng, updated_at)
+                VALUES (COALESCE($1::UUID, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+                RETURNING id`,
+                [uuid || null, driver_name || 'Ismeretlen', name || 'Túra', customer || '', safeDate || Date.now(), day_of_week || '', notes || '', !!is_closed,
+                 depot_name || '', depot_company || '', depot_street || '', depot_house_number || '', depot_postal_code || '', depot_city || '', depot_state || '', depot_country || '', depot_address_full || '',
+                 depot_lat || null, depot_lng || null, Date.now()]);
             tourId = result.rows[0].id;
         }
 
@@ -373,8 +404,6 @@ app.post('/admin/save-tour', async (req, res) => {
             const incomingStopUuids = stops.map(s => s.uuid).filter(u => !!u);
             const now = Date.now();
 
-            // Delete stops NOT in the incoming list for this tour
-            // We do this BEFORE upserting to avoid deleting newly created stops that don't have UUIDs in the request yet
             if (tourId) {
                 await pool.query('UPDATE stops SET deleted_at = $1, updated_at = $1 WHERE tour_id = $2 AND uuid IS NOT NULL AND NOT (uuid = ANY($3))', [now, tourId, incomingStopUuids]);
             }
@@ -383,13 +412,16 @@ app.post('/admin/save-tour', async (req, res) => {
                 const params = [
                     s.uuid || null,
                     tourId,
-                    s.address || '',
+                    s.address || s.address_full || '',
                     s.recipient || '',
+                    s.company || '',
                     s.street || '',
                     s.house_number || s.houseNumber || '',
                     s.postal_code || s.postalCode || '',
                     s.city || '',
-                    s.address_full || s.addressFull || '',
+                    s.state || '',
+                    s.country || '',
+                    s.address_full || s.address || '',
                     s.contact_name !== undefined ? s.contact_name : (s.contactName !== undefined ? s.contactName : null),
                     s.phone_number !== undefined ? s.phone_number : (s.phoneNumber !== undefined ? s.phoneNumber : null),
                     s.email || null,
@@ -405,16 +437,19 @@ app.post('/admin/save-tour', async (req, res) => {
 
                 if (s.uuid) {
                     await pool.query(`
-                        INSERT INTO stops (uuid, tour_id, address, recipient, street, house_number, postal_code, city, address_full, contact_name, phone_number, email, time_window, notes, order_index, is_completed, latitude, longitude, alternative_names, stop_type, updated_at, deleted_at)
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, NULL)
+                        INSERT INTO stops (uuid, tour_id, address, recipient, company, street, house_number, postal_code, city, state, country, address_full, contact_name, phone_number, email, time_window, notes, order_index, is_completed, latitude, longitude, alternative_names, stop_type, updated_at, deleted_at)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, NULL)
                         ON CONFLICT (uuid) DO UPDATE SET
                             tour_id = EXCLUDED.tour_id,
                             address = COALESCE(EXCLUDED.address::TEXT, stops.address),
                             recipient = COALESCE(EXCLUDED.recipient::TEXT, stops.recipient),
+                            company = COALESCE(EXCLUDED.company::TEXT, stops.company),
                             street = COALESCE(EXCLUDED.street::TEXT, stops.street),
                             house_number = COALESCE(EXCLUDED.house_number::TEXT, stops.house_number),
                             postal_code = COALESCE(EXCLUDED.postal_code::TEXT, stops.postal_code),
                             city = COALESCE(EXCLUDED.city::TEXT, stops.city),
+                            state = COALESCE(EXCLUDED.state::TEXT, stops.state),
+                            country = COALESCE(EXCLUDED.country::TEXT, stops.country),
                             address_full = COALESCE(EXCLUDED.address_full::TEXT, stops.address_full),
                             contact_name = COALESCE(EXCLUDED.contact_name::TEXT, stops.contact_name),
                             phone_number = COALESCE(EXCLUDED.phone_number::TEXT, stops.phone_number),
@@ -431,7 +466,10 @@ app.post('/admin/save-tour', async (req, res) => {
                             deleted_at = NULL
                     `, [...params, now]);
                 } else {
-                    await pool.query('INSERT INTO stops (tour_id, address, recipient, street, house_number, postal_code, city, address_full, contact_name, phone_number, email, time_window, notes, order_index, is_completed, latitude, longitude, alternative_names, stop_type, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)', [...params.slice(1), now]);
+                    await pool.query(`
+                        INSERT INTO stops (tour_id, address, recipient, company, street, house_number, postal_code, city, state, country, address_full, contact_name, phone_number, email, time_window, notes, order_index, is_completed, latitude, longitude, alternative_names, stop_type, updated_at)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)`,
+                        [...params.slice(1), now]);
                 }
             }
         }
@@ -444,6 +482,26 @@ app.post('/admin/delete-tour', async (req, res) => {
     await pool.query('UPDATE stops SET deleted_at = $1, updated_at = $1 WHERE tour_id = $2', [now, req.body.id]);
     await pool.query('UPDATE tours SET deleted_at = $1, updated_at = $1 WHERE id = $2', [now, req.body.id]);
     res.json({ success: true });
+});
+
+app.post('/admin/transfer-tour', async (req, res) => {
+    const { tourId, newDriverName } = req.body;
+    try {
+        await pool.query('BEGIN');
+        const now = Date.now();
+        // Update tour ownership
+        await pool.query('UPDATE tours SET driver_name = $1, updated_at = $2 WHERE id = $3', [newDriverName, now, tourId]);
+        // Update all related stops (optional if stops are linked by tour_id, but good for consistency if stops table also has driver_name - checking schema...)
+        // The stops table does NOT have driver_name, it uses tour_id. So updating tours is enough.
+        // Wait, what about hotels? Standalone hotels have driver_name.
+        // If there were any standalone hotels in the `hotels` table for the old driver related to this tour...
+        // but hotels are usually stops with stop_type='HOTEL'.
+        await pool.query('COMMIT');
+        res.json({ success: true });
+    } catch (e) {
+        await pool.query('ROLLBACK');
+        res.status(500).send(e.message);
+    }
 });
 
 app.get('/api/get-tours/:driverName', async (req, res) => {
@@ -465,6 +523,14 @@ app.get('/api/get-tours/:driverName', async (req, res) => {
                     isClosed: !!tour.is_closed,
                     isCurrent: !!tour.is_current,
                     depotName: tour.depot_name || '',
+                    depotCompany: tour.depot_company || '',
+                    depotStreet: tour.depot_street || '',
+                    depotHouseNumber: tour.depot_house_number || '',
+                    depotPostalCode: tour.depot_postal_code || '',
+                    depotCity: tour.depot_city || '',
+                    depotState: tour.depot_state || '',
+                    depotCountry: tour.depot_country || '',
+                    depotAddressFull: tour.depot_address_full || '',
                     depotLatitude: tour.depot_lat !== null ? Number(tour.depot_lat) : null,
                     depotLongitude: tour.depot_lng !== null ? Number(tour.depot_lng) : null,
                     deletedAt: tour.deleted_at ? Number(tour.deleted_at) : null,
@@ -476,10 +542,13 @@ app.get('/api/get-tours/:driverName', async (req, res) => {
                     tourId: s.tour_id,
                     address: s.address || '',
                     recipient: s.recipient || '',
+                    company: s.company || '',
                     street: s.street || '',
                     houseNumber: s.house_number || '',
                     postalCode: s.postal_code || '',
                     city: s.city || '',
+                    state: s.state || '',
+                    country: s.country || '',
                     addressFull: s.address_full || '',
                     contactName: s.contact_name || '',
                     phoneNumber: s.phone_number || '',
@@ -513,6 +582,9 @@ app.get('/', async (req, res) => {
 
 app.get('/driver/:name', async (req, res) => {
     const name = req.params.name;
+    const allDriversRes = await pool.query('SELECT DISTINCT driver_name FROM live_updates UNION SELECT DISTINCT driver_name FROM tours UNION SELECT DISTINCT driver_name FROM work_times');
+    const allDrivers = allDriversRes.rows.map(r => r.driver_name).filter(n => n && n !== name);
+
     const update = await pool.query('SELECT * FROM live_updates WHERE driver_name = $1 ORDER BY timestamp DESC LIMIT 1', [name]);
     const costs = await pool.query('SELECT * FROM costs WHERE driver_name = $1 ORDER BY timestamp DESC', [name]);
     const chat = await pool.query('SELECT * FROM chat_messages WHERE driver_name = $1 ORDER BY timestamp ASC', [name]);
@@ -585,7 +657,20 @@ app.get('/driver/:name', async (req, res) => {
         </div>
         <div id="tours" class="tab-content">
             <button onclick="editTour()" style="background:#2ecc71; color:white; padding:10px; margin-bottom:20px;">+ Új túra</button>
-            ${toursRes.rows.map(t => `<div class="tour-card"><div style="float:right;"><button onclick='editTour(${JSON.stringify(t).replace(/'/g, "&apos;")})'>✏</button><button onclick="deleteTour(${t.id})" style="background:#e74c3c; color:white;">🗑</button></div><b>${t.name}</b> (${t.customer}) - ${new Date(Number(t.date)).toLocaleDateString()}${t.stops.map(s => `<div class="stop-item">${s.order_index + 1}. ${s.stop_type === 'HOTEL' ? '🏨 ' : (s.stop_type === 'DEPOT' ? '🏠 ' : '')}${s.address}</div>`).join('')}</div>`).join('')}
+            ${toursRes.rows.map(t => `
+                <div class="tour-card">
+                    <div style="float:right; display:flex; gap:5px; align-items:center;">
+                        <select onchange="transferTour(${t.id}, this.value)" style="background:#333; color:white; border:1px solid #444; padding:5px; border-radius:4px;">
+                            <option value="">-- Áthelyezés --</option>
+                            ${allDrivers.map(dName => `<option value="${dName}">${dName}</option>`).join('')}
+                        </select>
+                        <button onclick='editTour(${JSON.stringify(t).replace(/'/g, "&apos;")})'>✏</button>
+                        <button onclick="deleteTour(${t.id})" style="background:#e74c3c; color:white;">🗑</button>
+                    </div>
+                    <b>${t.name}</b> (${t.customer}) - ${new Date(Number(t.date)).toLocaleDateString()}
+                    ${t.stops.map(s => `<div class="stop-item">${s.order_index + 1}. ${s.stop_type === 'HOTEL' ? '🏨 ' : (s.stop_type === 'DEPOT' ? '🏠 ' : '')}${s.address}</div>`).join('')}
+                </div>
+            `).join('')}
         </div>
         <div id="costs" class="tab-content">
             <table><tr><th>Dátum</th><th>Kategória</th><th>Összeg</th><th>Státusz</th><th>Művelet</th></tr>
@@ -614,10 +699,26 @@ app.get('/driver/:name', async (req, res) => {
                 <textarea id="tNotes" placeholder="Megjegyzések" style="width:100%; height:60px; margin-bottom:20px;"></textarea>
 
                 <h3>Depó (Visszatérés ide)</h3>
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:10px;">
+                    <div><label style="font-size:11px; color:#aaa;">Név</label><input type="text" id="tDepotName" placeholder="Depó név" style="width:100%;"></div>
+                    <div><label style="font-size:11px; color:#aaa;">Cég</label><input type="text" id="tDepotCompany" placeholder="Cég" style="width:100%;"></div>
+                </div>
+                <div style="display:grid; grid-template-columns:2fr 1fr; gap:10px; margin-bottom:10px;">
+                    <div><label style="font-size:11px; color:#aaa;">Utca</label><input type="text" id="tDepotStreet" placeholder="Utca" style="width:100%;"></div>
+                    <div><label style="font-size:11px; color:#aaa;">Házszám</label><input type="text" id="tDepotHouse" placeholder="Házszám" style="width:100%;"></div>
+                </div>
+                <div style="display:grid; grid-template-columns:1fr 2fr; gap:10px; margin-bottom:10px;">
+                    <div><label style="font-size:11px; color:#aaa;">Irsz</label><input type="text" id="tDepotPostal" placeholder="Irsz" style="width:100%;"></div>
+                    <div><label style="font-size:11px; color:#aaa;">Város</label><input type="text" id="tDepotCity" placeholder="Város" style="width:100%;"></div>
+                </div>
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:10px;">
+                    <div><label style="font-size:11px; color:#aaa;">Megye</label><input type="text" id="tDepotState" placeholder="Megye" style="width:100%;"></div>
+                    <div><label style="font-size:11px; color:#aaa;">Ország</label><input type="text" id="tDepotCountry" placeholder="Ország" style="width:100%;"></div>
+                </div>
                 <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; margin-bottom:20px;">
-                    <input type="text" id="tDepotName" placeholder="Depó név">
-                    <input type="text" id="tDepotLat" placeholder="Lat">
-                    <input type="text" id="tDepotLng" placeholder="Lng">
+                    <div><label style="font-size:11px; color:#aaa;">Teljes cím</label><input type="text" id="tDepotAddressFull" placeholder="Teljes cím" style="width:100%;"></div>
+                    <div><label style="font-size:11px; color:#aaa;">Lat</label><input type="text" id="tDepotLat" placeholder="Lat" style="width:100%;"></div>
+                    <div><label style="font-size:11px; color:#aaa;">Lng</label><input type="text" id="tDepotLng" placeholder="Lng" style="width:100%;"></div>
                 </div>
 
                 <h3>Megállók</h3><div id="modalStops"></div><button id="addStopBtn" onclick="addStopRow()">+ Megálló</button>
@@ -784,6 +885,17 @@ app.get('/driver/:name', async (req, res) => {
                 fetch('/admin/update-cost', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({id, status}) }).then(() => location.reload());
             }
 
+            function transferTour(tourId, newDriverName) {
+                if (!newDriverName) return;
+                if (confirm(\`Biztosan átadod ezt a túrát \${newDriverName} részére?\`)) {
+                    fetch('/admin/transfer-tour', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ tourId, newDriverName })
+                    }).then(() => location.reload());
+                }
+            }
+
             function editTour(t) {
                 document.getElementById('tourId').value = t ? t.id : '';
                 document.getElementById('tourUuid').value = t ? t.uuid : '';
@@ -799,11 +911,16 @@ app.get('/driver/:name', async (req, res) => {
                 document.getElementById('tNotes').disabled = !!t;
 
                 document.getElementById('tDepotName').value = t ? (t.depot_name || t.depotName || '') : '';
-                document.getElementById('tDepotName').disabled = !!t;
+                document.getElementById('tDepotCompany').value = t ? (t.depot_company || t.depotCompany || '') : '';
+                document.getElementById('tDepotStreet').value = t ? (t.depot_street || t.depotStreet || '') : '';
+                document.getElementById('tDepotHouse').value = t ? (t.depot_house_number || t.depotHouseNumber || '') : '';
+                document.getElementById('tDepotPostal').value = t ? (t.depot_postal_code || t.depotPostalCode || '') : '';
+                document.getElementById('tDepotCity').value = t ? (t.depot_city || t.depotCity || '') : '';
+                document.getElementById('tDepotState').value = t ? (t.depot_state || t.depotState || '') : '';
+                document.getElementById('tDepotCountry').value = t ? (t.depot_country || t.depotCountry || '') : '';
+                document.getElementById('tDepotAddressFull').value = t ? (t.depot_address_full || t.depotAddressFull || '') : '';
                 document.getElementById('tDepotLat').value = t ? (t.depot_lat || t.depotLatitude || '') : '';
-                document.getElementById('tDepotLat').disabled = !!t;
                 document.getElementById('tDepotLng').value = t ? (t.depot_lng || t.depotLongitude || '') : '';
-                document.getElementById('tDepotLng').disabled = !!t;
 
                 document.getElementById('addStopBtn').style.display = 'block';
                 document.getElementById('modalStops').innerHTML = '';
@@ -861,6 +978,10 @@ app.get('/driver/:name', async (req, res) => {
                     <label>Címzett</label>
                     \${recipientHtml}
 
+                    <div style="margin-bottom:5px;">
+                        <label>Cég</label><input type="text" class="stop-company" value="\${s ? (s.company || '') : ''}" placeholder="Cég">
+                    </div>
+
                     <div style="display:grid; grid-template-columns: 2fr 1fr; gap:10px; margin-bottom:5px;">
                         <div><label>Utca</label><input type="text" class="stop-street" value="\${s ? (s.street || '') : ''}" placeholder="Utca" onchange="geocodeStop(this.parentElement.parentElement.parentElement)"></div>
                         <div><label>Házszám</label><input type="text" class="stop-house" value="\${s ? (s.house_number || s.houseNumber || '') : ''}" placeholder="Házszám" onchange="geocodeStop(this.parentElement.parentElement.parentElement)"></div>
@@ -869,6 +990,15 @@ app.get('/driver/:name', async (req, res) => {
                     <div style="display:grid; grid-template-columns: 1fr 2fr; gap:10px; margin-bottom:5px;">
                         <div><label>Irányítószám</label><input type="text" class="stop-postal" value="\${s ? (s.postal_code || s.postalCode || '') : ''}" placeholder="Irsz" onchange="geocodeStop(this.parentElement.parentElement.parentElement)"></div>
                         <div><label>Város</label><input type="text" class="stop-city" value="\${s ? (s.city || '') : ''}" placeholder="Város" onchange="geocodeStop(this.parentElement.parentElement.parentElement)"></div>
+                    </div>
+
+                    <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px; margin-bottom:5px;">
+                        <div><label>Megye</label><input type="text" class="stop-state" value="\${s ? (s.state || '') : ''}" placeholder="Megye"></div>
+                        <div><label>Ország</label><input type="text" class="stop-country" value="\${s ? (s.country || '') : ''}" placeholder="Ország"></div>
+                    </div>
+
+                    <div style="margin-bottom:5px;">
+                        <label>Teljes cím (address_full)</label><input type="text" class="stop-address-full" value="\${s ? (s.address_full || s.addressFull || s.address || '') : ''}" placeholder="Teljes cím">
                     </div>
 
                     <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px; margin-bottom:5px;">
@@ -912,7 +1042,7 @@ app.get('/driver/:name', async (req, res) => {
                     const house = r.querySelector('.stop-house').value;
                     const postal = r.querySelector('.stop-postal').value;
                     const city = r.querySelector('.stop-city').value;
-                    const address_full = (street + ' ' + house + ', ' + postal + ' ' + city).trim().replace(/^,/, '').trim();
+                    const address_full = r.querySelector('.stop-address-full').value || (street + ' ' + house + ', ' + postal + ' ' + city).trim().replace(/^,/, '').trim();
 
                     const select = r.querySelector('.stop-recipient');
                     const recipientInput = r.querySelector('.stop-recipient-input');
@@ -922,10 +1052,13 @@ app.get('/driver/:name', async (req, res) => {
                     stops.push({
                         uuid: r.querySelector('.stop-uuid').value || null,
                         recipient: recipient,
+                        company: r.querySelector('.stop-company').value,
                         street: street,
                         house_number: house,
                         postal_code: postal,
                         city: city,
+                        state: r.querySelector('.stop-state').value,
+                        country: r.querySelector('.stop-country').value,
                         address_full: address_full,
                         address: address_full,
                         contact_name: r.querySelector('.stop-contact').value,
@@ -950,6 +1083,14 @@ app.get('/driver/:name', async (req, res) => {
                     day_of_week: document.getElementById('tDay').value,
                     notes: document.getElementById('tNotes').value,
                     depot_name: document.getElementById('tDepotName').value,
+                    depot_company: document.getElementById('tDepotCompany').value,
+                    depot_street: document.getElementById('tDepotStreet').value,
+                    depot_house_number: document.getElementById('tDepotHouse').value,
+                    depot_postal_code: document.getElementById('tDepotPostal').value,
+                    depot_city: document.getElementById('tDepotCity').value,
+                    depot_state: document.getElementById('tDepotState').value,
+                    depot_country: document.getElementById('tDepotCountry').value,
+                    depot_address_full: document.getElementById('tDepotAddressFull').value,
                     depot_lat: document.getElementById('tDepotLat').value ? parseFloat(document.getElementById('tDepotLat').value) : null,
                     depot_lng: document.getElementById('tDepotLng').value ? parseFloat(document.getElementById('tDepotLng').value) : null,
                     stops
