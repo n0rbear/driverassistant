@@ -868,20 +868,20 @@ app.get('/driver/:name', async (req, res) => {
                     </div>
 
                     <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px; margin-bottom:5px;">
-                        <div><label>Időablak</label><input type="text" class="stop-time" value="${s ? (s.time_window || s.timeWindow || '') : ''}" placeholder="Időablak"></div>
-                        <div><label>Megjegyzés</label><input type="text" class="stop-notes" value="${s ? (s.notes || '') : ''}" placeholder="Megjegyzés"></div>
+                        <div><label>Időablak</label><input type="text" class="stop-time" value="\${s ? (s.time_window || s.timeWindow || '') : ''}" placeholder="Időablak"></div>
+                        <div><label>Megjegyzés</label><input type="text" class="stop-notes" value="\${s ? (s.notes || '') : ''}" placeholder="Megjegyzés"></div>
                     </div>
                     <div style="margin-bottom:5px;">
                         <label>Típus</label>
                         <select class="stop-type">
-                            <option value="DELIVERY" ${stopType === 'DELIVERY' ? 'selected' : ''}>DELIVERY</option>
-                            <option value="PICKUP" ${stopType === 'PICKUP' ? 'selected' : ''}>PICKUP</option>
-                            <option value="HOTEL" ${stopType === 'HOTEL' ? 'selected' : ''}>HOTEL</option>
-                            <option value="DEPOT" ${stopType === 'DEPOT' ? 'selected' : ''}>DEPOT</option>
+                            <option value="DELIVERY" \${stopType === 'DELIVERY' ? 'selected' : ''}>DELIVERY</option>
+                            <option value="PICKUP" \${stopType === 'PICKUP' ? 'selected' : ''}>PICKUP</option>
+                            <option value="HOTEL" \${stopType === 'HOTEL' ? 'selected' : ''}>HOTEL</option>
+                            <option value="DEPOT" \${stopType === 'DEPOT' ? 'selected' : ''}>DEPOT</option>
                         </select>
                     </div>
                     <div style="margin-bottom:5px;">
-                        <label><input type="checkbox" class="stop-completed" ${s && (s.is_completed || s.isCompleted) ? 'checked' : ''}> Teljesítve</label>
+                        <label><input type="checkbox" class="stop-completed" \${s && (s.is_completed || s.isCompleted) ? 'checked' : ''}> Teljesítve</label>
                     </div>
                 \`;
 
