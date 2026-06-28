@@ -95,9 +95,11 @@ const initDb = async () => {
 initDb().catch(console.error);
 
 // API-K
+app.get('/health', (req, res) => res.sendStatus(200));
+
 app.post('/api/live-update', async (req, res) => {
     const d = req.body;
-    await pool.query('INSERT INTO live_updates (uuid, driver_name, driver_photo, driver_phone, driver_email, license_plate, latitude, longitude, speed, status, current_tour, next_stop, next_lat, next_lng, next_stop_dist, tour_remaining_dist, depot_name, depot_lat, depot_lng, timestamp) VALUES (COALESCE($1, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)',
+    await pool.query('INSERT INTO live_updates (uuid, driver_name, driver_photo, driver_phone, driver_email, license_plate, latitude, longitude, speed, status, current_tour, next_stop, next_lat, next_lng, next_stop_dist, tour_remaining_dist, depot_name, depot_lat, depot_lng, timestamp) VALUES (COALESCE($1::UUID, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)',
         [d.uuid || null, d.driverName, d.driverPhoto, d.driverPhone, d.driverEmail, d.licensePlate, d.latitude, d.longitude, d.speed, d.status, d.currentTour, d.nextStop, d.nextLat, d.nextLng, d.nextStopDistance, d.tourRemainingDistance, d.depotName, d.depotLat, d.depotLng, d.timestamp]);
 
     if (d.currentTour) {
@@ -123,7 +125,7 @@ app.post('/api/live-update', async (req, res) => {
 app.post('/api/send-chat', async (req, res) => {
     const { uuid, driverName, sender, message, timestamp } = req.body;
     if (!message) return res.sendStatus(400);
-    await pool.query('INSERT INTO chat_messages (uuid, driver_name, sender, message, timestamp) VALUES (COALESCE($1, gen_random_uuid()), $2, $3, $4, $5)', [uuid || null, driverName, sender, message, timestamp || Date.now()]);
+    await pool.query('INSERT INTO chat_messages (uuid, driver_name, sender, message, timestamp) VALUES (COALESCE($1::UUID, gen_random_uuid()), $2, $3, $4, $5)', [uuid || null, driverName, sender, message, timestamp || Date.now()]);
     res.sendStatus(200);
 });
 
@@ -141,7 +143,7 @@ app.get('/api/get-chat/:driverName', async (req, res) => {
 
 app.post('/api/sync-worktimes', async (req, res) => {
     for (const wt of req.body) {
-        await pool.query(`INSERT INTO work_times (uuid, driver_name, type, start_time, end_time, mileage, end_mileage, license_plate, notes, date) VALUES (COALESCE($1, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8, $9, $10) ON CONFLICT (driver_name, start_time) DO UPDATE SET end_time = EXCLUDED.end_time, end_mileage = EXCLUDED.end_mileage, notes = EXCLUDED.notes`,
+        await pool.query(`INSERT INTO work_times (uuid, driver_name, type, start_time, end_time, mileage, end_mileage, license_plate, notes, date) VALUES (COALESCE($1::UUID, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8, $9, $10) ON CONFLICT (driver_name, start_time) DO UPDATE SET end_time = EXCLUDED.end_time, end_mileage = EXCLUDED.end_mileage, notes = EXCLUDED.notes`,
             [wt.uuid || null, wt.driverName, wt.type, wt.startTime, wt.endTime, wt.mileage, wt.endMileage, wt.licensePlate, wt.notes, wt.date]);
     }
     res.sendStatus(200);
@@ -149,7 +151,7 @@ app.post('/api/sync-worktimes', async (req, res) => {
 
 app.post('/api/sync-costs', async (req, res) => {
     for (const c of req.body) {
-        await pool.query('INSERT INTO costs (uuid, driver_name, amount, currency, category, notes, mileage, timestamp) VALUES (COALESCE($1, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8) ON CONFLICT (driver_name, timestamp, amount) DO UPDATE SET status = EXCLUDED.status, notes = EXCLUDED.notes', [c.uuid || null, c.driverName, c.amount, c.currency, c.category, c.notes, c.mileage, c.timestamp]);
+        await pool.query('INSERT INTO costs (uuid, driver_name, amount, currency, category, notes, mileage, timestamp) VALUES (COALESCE($1::UUID, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8) ON CONFLICT (driver_name, timestamp, amount) DO UPDATE SET status = EXCLUDED.status, notes = EXCLUDED.notes', [c.uuid || null, c.driverName, c.amount, c.currency, c.category, c.notes, c.mileage, c.timestamp]);
     }
     res.sendStatus(200);
 });
@@ -295,7 +297,7 @@ app.post('/api/sync-tours/:driverName', async (req, res) => {
 
 app.post('/api/sync-hotels', async (req, res) => {
     for (const h of req.body) {
-        await pool.query('INSERT INTO hotels (uuid, driver_name, name, address, timestamp) VALUES (COALESCE($1, gen_random_uuid()), $2, $3, $4, $5) ON CONFLICT DO NOTHING', [h.uuid || null, h.driverName, h.name, h.address, h.timestamp]);
+        await pool.query('INSERT INTO hotels (uuid, driver_name, name, address, timestamp) VALUES (COALESCE($1::UUID, gen_random_uuid()), $2, $3, $4, $5) ON CONFLICT DO NOTHING', [h.uuid || null, h.driverName, h.name, h.address, h.timestamp]);
     }
     res.sendStatus(200);
 });
@@ -350,20 +352,20 @@ app.post('/admin/save-tour', async (req, res) => {
         if (tourId) {
             await pool.query(`
                 UPDATE tours SET
-                    name = COALESCE($1, name),
-                    customer = COALESCE($2, customer),
-                    date = COALESCE($3, date),
-                    day_of_week = COALESCE($4, day_of_week),
-                    notes = COALESCE($5, notes),
-                    is_closed = COALESCE($6, is_closed),
-                    depot_name = COALESCE($7, depot_name),
-                    depot_lat = COALESCE($8, depot_lat),
-                    depot_lng = COALESCE($9, depot_lng),
+                    name = COALESCE($1::TEXT, name),
+                    customer = COALESCE($2::TEXT, customer),
+                    date = COALESCE($3::BIGINT, date),
+                    day_of_week = COALESCE($4::TEXT, day_of_week),
+                    notes = COALESCE($5::TEXT, notes),
+                    is_closed = COALESCE($6::BOOLEAN, is_closed),
+                    depot_name = COALESCE($7::TEXT, depot_name),
+                    depot_lat = COALESCE($8::DOUBLE PRECISION, depot_lat),
+                    depot_lng = COALESCE($9::DOUBLE PRECISION, depot_lng),
                     updated_at = ${Date.now()}
                 WHERE id = $10
             `, [name || null, customer || null, safeDate, day_of_week || null, notes || null, is_closed === undefined ? null : !!is_closed, req.body.depot_name || null, req.body.depot_lat || null, req.body.depot_lng || null, tourId]);
         } else {
-            const result = await pool.query('INSERT INTO tours (uuid, driver_name, name, customer, date, day_of_week, notes, is_closed, depot_name, depot_lat, depot_lng, updated_at) VALUES (COALESCE($1, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING id', [uuid || null, driver_name || 'Ismeretlen', name || 'Túra', customer || '', safeDate || Date.now(), day_of_week || '', notes || '', !!is_closed, req.body.depot_name || '', req.body.depot_lat || null, req.body.depot_lng || null, Date.now()]);
+            const result = await pool.query('INSERT INTO tours (uuid, driver_name, name, customer, date, day_of_week, notes, is_closed, depot_name, depot_lat, depot_lng, updated_at) VALUES (COALESCE($1::UUID, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING id', [uuid || null, driver_name || 'Ismeretlen', name || 'Túra', customer || '', safeDate || Date.now(), day_of_week || '', notes || '', !!is_closed, req.body.depot_name || '', req.body.depot_lat || null, req.body.depot_lng || null, Date.now()]);
             tourId = result.rows[0].id;
         }
 
@@ -517,9 +519,9 @@ app.get('/driver/:name', async (req, res) => {
     const work = await pool.query('SELECT DISTINCT ON (start_time) * FROM work_times WHERE driver_name = $1 ORDER BY start_time DESC, id DESC', [name]);
     const toursRes = await pool.query('SELECT * FROM tours WHERE driver_name = $1 AND deleted_at IS NULL ORDER BY date DESC', [name]);
     const hotelsRes = await pool.query(`
-        SELECT name, address, timestamp FROM hotels WHERE driver_name = $1
+        SELECT name::TEXT, address::TEXT, timestamp::BIGINT FROM hotels WHERE driver_name = $1
         UNION ALL
-        SELECT COALESCE(recipient, address_full) as name, address_full as address, COALESCE(arrival_time, (SELECT date FROM tours WHERE id = tour_id)) as timestamp FROM stops
+        SELECT COALESCE(recipient, address_full)::TEXT as name, address_full::TEXT as address, COALESCE(arrival_time::BIGINT, (SELECT date::BIGINT FROM tours WHERE id = tour_id))::BIGINT as timestamp FROM stops
         WHERE tour_id IN (SELECT id FROM tours WHERE driver_name = $1) AND stop_type = 'HOTEL'
         ORDER BY timestamp DESC
     `, [name]);
