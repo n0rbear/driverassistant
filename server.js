@@ -1,4 +1,4 @@
-// FIXED SERVER v12 - SYNTAX ERROR RESOLVED (TERMINATING BACKTICK)
+// FIXED SERVER v13 - DEFINITIVE SYNTAX AND ESCAPING FIX
 const express = require('express');
 const { Pool } = require('pg');
 const app = express();
@@ -294,7 +294,7 @@ app.get('/driver/:name', async (req, res) => {
 
         <script>
             function openTab(e, t) { document.querySelectorAll('.tab-content').forEach(x => x.style.display = 'none'); document.querySelectorAll('nav button').forEach(x => x.classList.remove('active')); const target = document.getElementById(t); if (target) { target.style.display = 'block'; if (e) e.currentTarget.classList.add('active'); } }
-            function transferTour(tourId, newDriverName) { if (!newDriverName) return; fetch('/admin/transfer-tour', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ tourId, newDriverName }) }).then(r => { if(r.ok) location.reload(); }); }
+            function transferTour(tourId, newDriverName) { if (!newDriverName) return; if (confirm(\`Áthelyezed \${newDriverName} részére?\`)) fetch('/admin/transfer-tour', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ tourId, newDriverName }) }).then(r => { if(r.ok) location.reload(); }); }
             function deleteTour(id) { if(confirm('Törlöd?')) fetch('/admin/delete-tour', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({id}) }).then(r => { if(r.ok) location.reload(); }); }
             function closeModal() { document.getElementById('tourModal').style.display = 'none'; }
             function editTour(t) {
@@ -319,7 +319,7 @@ app.get('/driver/:name', async (req, res) => {
                 const d = document.createElement('div'); d.className = 'stop-edit-row'; d.style = 'border:1px solid #444; padding:15px; margin-bottom:15px; border-radius:8px; position:relative;';
                 const uuid = s ? s.uuid : (crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2,15));
                 const items = s && s.items ? (Array.isArray(s.items) ? s.items : [s.items]) : [{ recipient: s ? s.recipient : '', notes: s ? s.notes : '', stop_type: s ? s.stop_type : 'DELIVERY' }];
-                d.innerHTML = \`<button onclick="this.parentElement.remove()" style="position:absolute; right:10px; top:10px; background:#e74c3c; border:none; color:white;">X</button>
+                d.innerHTML = \`<button onclick="this.parentElement.remove()" style="position:absolute; right:10px; top:10px; background:#e74c3c; border:none; color:white; padding:5px 10px; border-radius:4px; cursor:pointer;">X</button>
                     <input type="hidden" class="stop-uuid" value="\${uuid}">
                     <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
                         <div><label>Címzett</label><input type="text" class="stop-recipient" value="\${items[0].recipient || ''}"></div>
@@ -344,9 +344,10 @@ app.get('/driver/:name', async (req, res) => {
                         city: r.querySelector('.stop-city').value, stop_type: r.querySelector('.stop-type').value, order_index: i
                     });
                 });
-                const tourId = document.getElementById('tourId').value;
+                const tourIdRaw = document.getElementById('tourId').value;
+                const tourId = (tourIdRaw === "" || tourIdRaw === "null") ? null : parseInt(tourIdRaw);
                 const data = {
-                    id: tourId === "" ? null : parseInt(tourId), uuid: document.getElementById('tourUuid').value,
+                    id: tourId, uuid: document.getElementById('tourUuid').value,
                     driver_name: '${name}', name: document.getElementById('tName').value, customer: document.getElementById('tCustomer').value,
                     date: new Date(document.getElementById('tDate').value).getTime(), day_of_week: document.getElementById('tDay').value, notes: document.getElementById('tNotes').value,
                     depot_name: document.getElementById('tDepotName').value, depot_company: document.getElementById('tDepotCompany').value,
