@@ -711,7 +711,7 @@ app.get('/driver/:name', async (req, res) => {
 
                 document.getElementById('nextStopName').innerText = "🎯 Cél: " + targetLabel;
 
-                const url = `https://router.project-osrm.org/route/v1/driving/` + coords.map(c => c.join(',')).join(';') + `?overview=full&geometries=geojson&steps=true`;
+                const url = \`https://router.project-osrm.org/route/v1/driving/\` + coords.map(c => c.join(',')).join(';') + \`?overview=full&geometries=geojson&steps=true\`;
 
                 try {
                     const res = await fetch(url);
@@ -724,15 +724,15 @@ app.get('/driver/:name', async (req, res) => {
                         document.getElementById('tourDistBox').innerText = '🏁 Összesen: ' + (route.distance / 1000).toFixed(1) + ' km';
 
                         incomplete.forEach((s, i) => {
-                            let icon = L.divIcon({ html: `<div style="background:#e74c3c; width:20px; height:20px; border-radius:50%; border:2px solid white; color:white; font-size:12px; display:flex; align-items:center; justify-content:center;">\${i+1}</div>`, className: '' });
+                            let icon = L.divIcon({ html: \`<div style="background:#e74c3c; width:20px; height:20px; border-radius:50%; border:2px solid white; color:white; font-size:12px; display:flex; align-items:center; justify-content:center;">\${i+1}</div>\`, className: '' });
                             if (s.stop_type === 'HOTEL' || s.stopType === 'HOTEL') {
-                                icon = L.divIcon({ html: `<div style="background:#9b59b6; width:24px; height:24px; border-radius:50%; border:2px solid white; color:white; font-size:14px; display:flex; align-items:center; justify-content:center;">🏨</div>`, className: '' });
+                                icon = L.divIcon({ html: \`<div style="background:#9b59b6; width:24px; height:24px; border-radius:50%; border:2px solid white; color:white; font-size:14px; display:flex; align-items:center; justify-content:center;">🏨</div>\`, className: '' });
                             }
                             L.marker([s.latitude, s.longitude], { icon }).addTo(stopsLayer).bindPopup(s.address);
                         });
 
                         if (currentDepot && currentDepot.lat) {
-                             L.marker([currentDepot.lat, currentDepot.lng], { icon: L.divIcon({ html: `<div style="background:#2ecc71; width:24px; height:24px; border-radius:50%; border:2px solid white; color:white; font-size:14px; display:flex; align-items:center; justify-content:center;">🏠</div>`, className: '' }) })
+                             L.marker([currentDepot.lat, currentDepot.lng], { icon: L.divIcon({ html: \`<div style="background:#2ecc71; width:24px; height:24px; border-radius:50%; border:2px solid white; color:white; font-size:14px; display:flex; align-items:center; justify-content:center;">🏠</div>\`, className: '' }) })
                                 .addTo(stopsLayer).bindPopup('Depó: ' + currentDepot.name);
                         }
 
