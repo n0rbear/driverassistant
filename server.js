@@ -170,41 +170,57 @@ app.post('/api/sync-tours/:driverName', async (req, res) => {
                         continue;
                     }
                     const stopFields = [
-                        s.uuid || null, tourId, s.address || '', s.recipient || '', s.street || '',
-                        s.houseNumber || '', s.postalCode || '', s.city || '', s.addressFull || '',
-                        s.contactName || '', s.phoneNumber || '', s.email || '', s.timeWindow || '',
-                        s.notes || '', s.alternativeNames || null, s.orderIndex || 0,
-                        s.latitude || null, s.longitude || null, !!s.isCompleted, s.arrivalTime || null
+                        s.uuid || null,
+                        tourId,
+                        s.address || '',
+                        s.recipient || '',
+                        s.street || '',
+                        s.houseNumber || s.house_number || '',
+                        s.postalCode || s.postal_code || '',
+                        s.city || '',
+                        s.addressFull || s.address_full || '',
+                        s.contactName || s.contact_name || '',
+                        s.phoneNumber || s.phone_number || '',
+                        s.email || '',
+                        s.timeWindow || s.time_window || '',
+                        s.notes || '',
+                        s.alternativeNames || s.alternative_names || null,
+                        s.orderIndex !== undefined ? s.orderIndex : (s.order_index || 0),
+                        s.latitude !== undefined ? s.latitude : (s.latitude_gps || null),
+                        s.longitude !== undefined ? s.longitude : (s.longitude_gps || null),
+                        s.isCompleted !== undefined ? !!s.isCompleted : (!!s.is_completed),
+                        s.arrivalTime || s.arrival_time || null
                     ];
                     if (s.uuid) {
                         await pool.query(`
-                            INSERT INTO stops (uuid, tour_id, address, recipient, street, house_number, postal_code, city, address_full, contact_name, phone_number, email, time_window, notes, alternative_names, order_index, latitude, longitude, is_completed, arrival_time)
-                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+                            INSERT INTO stops (uuid, tour_id, address, recipient, street, house_number, postal_code, city, address_full, contact_name, phone_number, email, time_window, notes, alternative_names, order_index, latitude, longitude, is_completed, arrival_time, updated_at)
+                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, ${Date.now()})
                             ON CONFLICT (uuid) DO UPDATE SET
                                 tour_id = EXCLUDED.tour_id,
-                                address = EXCLUDED.address,
-                                recipient = EXCLUDED.recipient,
-                                street = EXCLUDED.street,
-                                house_number = EXCLUDED.house_number,
-                                postal_code = EXCLUDED.postal_code,
-                                city = EXCLUDED.city,
-                                address_full = EXCLUDED.address_full,
-                                contact_name = EXCLUDED.contact_name,
-                                phone_number = EXCLUDED.phone_number,
-                                email = EXCLUDED.email,
-                                time_window = EXCLUDED.time_window,
-                                notes = EXCLUDED.notes,
-                                alternative_names = EXCLUDED.alternative_names,
+                                address = COALESCE(EXCLUDED.address, stops.address),
+                                recipient = COALESCE(EXCLUDED.recipient, stops.recipient),
+                                street = COALESCE(EXCLUDED.street, stops.street),
+                                house_number = COALESCE(EXCLUDED.house_number, stops.house_number),
+                                postal_code = COALESCE(EXCLUDED.postal_code, stops.postal_code),
+                                city = COALESCE(EXCLUDED.city, stops.city),
+                                address_full = COALESCE(EXCLUDED.address_full, stops.address_full),
+                                contact_name = COALESCE(EXCLUDED.contact_name, stops.contact_name),
+                                phone_number = COALESCE(EXCLUDED.phone_number, stops.phone_number),
+                                email = COALESCE(EXCLUDED.email, stops.email),
+                                time_window = COALESCE(EXCLUDED.time_window, stops.time_window),
+                                notes = COALESCE(EXCLUDED.notes, stops.notes),
+                                alternative_names = COALESCE(EXCLUDED.alternative_names, stops.alternative_names),
                                 order_index = EXCLUDED.order_index,
-                                latitude = EXCLUDED.latitude,
-                                longitude = EXCLUDED.longitude,
-                                is_completed = EXCLUDED.is_completed,
-                                arrival_time = EXCLUDED.arrival_time
+                                latitude = COALESCE(EXCLUDED.latitude, stops.latitude),
+                                longitude = COALESCE(EXCLUDED.longitude, stops.longitude),
+                                is_completed = COALESCE(EXCLUDED.is_completed, stops.is_completed),
+                                arrival_time = COALESCE(EXCLUDED.arrival_time, stops.arrival_time),
+                                updated_at = EXCLUDED.updated_at
                         `, stopFields);
                     } else {
                         await pool.query(`
-                            INSERT INTO stops (tour_id, address, recipient, street, house_number, postal_code, city, address_full, contact_name, phone_number, email, time_window, notes, alternative_names, order_index, latitude, longitude, is_completed, arrival_time)
-                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+                            INSERT INTO stops (tour_id, address, recipient, street, house_number, postal_code, city, address_full, contact_name, phone_number, email, time_window, notes, alternative_names, order_index, latitude, longitude, is_completed, arrival_time, updated_at)
+                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, ${Date.now()})
                         `, stopFields.slice(1));
                     }
                 }
@@ -262,16 +278,25 @@ app.post('/admin/save-tour', async (req, res) => {
                     date = COALESCE($3, date),
                     day_of_week = COALESCE($4, day_of_week),
                     notes = COALESCE($5, notes),
-                    is_closed = COALESCE($6, is_closed)
+                    is_closed = COALESCE($6, is_closed),
+                    updated_at = ${Date.now()}
                 WHERE id = $7
             `, [name || null, customer || null, safeDate, day_of_week || null, notes || null, is_closed === undefined ? null : !!is_closed, tourId]);
         } else {
-            const result = await pool.query('INSERT INTO tours (uuid, driver_name, name, customer, date, day_of_week, notes, is_closed) VALUES (COALESCE($1, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8) RETURNING id', [uuid || null, driver_name || 'Ismeretlen', name || 'Túra', customer || '', safeDate || Date.now(), day_of_week || '', notes || '', !!is_closed]);
+            const result = await pool.query('INSERT INTO tours (uuid, driver_name, name, customer, date, day_of_week, notes, is_closed, updated_at) VALUES (COALESCE($1, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id', [uuid || null, driver_name || 'Ismeretlen', name || 'Túra', customer || '', safeDate || Date.now(), day_of_week || '', notes || '', !!is_closed, Date.now()]);
             tourId = result.rows[0].id;
         }
 
         if (stops && Array.isArray(stops)) {
             const incomingStopUuids = stops.map(s => s.uuid).filter(u => !!u);
+            const now = Date.now();
+
+            // Delete stops NOT in the incoming list for this tour
+            // We do this BEFORE upserting to avoid deleting newly created stops that don't have UUIDs in the request yet
+            if (tourId) {
+                await pool.query('UPDATE stops SET deleted_at = $1, updated_at = $1 WHERE tour_id = $2 AND uuid IS NOT NULL AND NOT (uuid = ANY($3))', [now, tourId, incomingStopUuids]);
+            }
+
             for (const s of stops) {
                 const params = [
                     s.uuid || null,
@@ -279,35 +304,35 @@ app.post('/admin/save-tour', async (req, res) => {
                     s.address || '',
                     s.recipient || '',
                     s.street || '',
-                    s.house_number || '',
-                    s.postal_code || '',
+                    s.house_number || s.houseNumber || '',
+                    s.postal_code || s.postalCode || '',
                     s.city || '',
-                    s.address_full || '',
-                    s.contact_name === undefined ? (s.contactName === undefined ? null : s.contactName) : s.contact_name,
-                    s.phone_number === undefined ? (s.phoneNumber === undefined ? null : s.phoneNumber) : s.phone_number,
+                    s.address_full || s.addressFull || '',
+                    s.contact_name !== undefined ? s.contact_name : (s.contactName !== undefined ? s.contactName : null),
+                    s.phone_number !== undefined ? s.phone_number : (s.phoneNumber !== undefined ? s.phoneNumber : null),
                     s.email || null,
-                    s.time_window === undefined ? (s.timeWindow === undefined ? null : s.timeWindow) : s.time_window,
+                    s.time_window !== undefined ? s.time_window : (s.timeWindow !== undefined ? s.timeWindow : null),
                     s.notes || null,
-                    s.order_index || 0,
-                    s.is_completed === undefined ? (s.isCompleted === undefined ? null : !!s.isCompleted) : !!s.is_completed,
-                    s.latitude || null,
-                    s.longitude || null,
-                    s.alternative_names || null
+                    s.order_index !== undefined ? s.order_index : (s.orderIndex || 0),
+                    s.is_completed !== undefined ? !!s.is_completed : (s.isCompleted !== undefined ? !!s.isCompleted : null),
+                    s.latitude !== undefined ? s.latitude : null,
+                    s.longitude !== undefined ? s.longitude : null,
+                    s.alternative_names || s.alternativeNames || null
                 ];
 
                 if (s.uuid) {
                     await pool.query(`
-                        INSERT INTO stops (uuid, tour_id, address, recipient, street, house_number, postal_code, city, address_full, contact_name, phone_number, email, time_window, notes, order_index, is_completed, latitude, longitude, alternative_names)
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+                        INSERT INTO stops (uuid, tour_id, address, recipient, street, house_number, postal_code, city, address_full, contact_name, phone_number, email, time_window, notes, order_index, is_completed, latitude, longitude, alternative_names, updated_at, deleted_at)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, NULL)
                         ON CONFLICT (uuid) DO UPDATE SET
                             tour_id = EXCLUDED.tour_id,
-                            address = EXCLUDED.address,
-                            recipient = EXCLUDED.recipient,
-                            street = EXCLUDED.street,
-                            house_number = EXCLUDED.house_number,
-                            postal_code = EXCLUDED.postal_code,
-                            city = EXCLUDED.city,
-                            address_full = EXCLUDED.address_full,
+                            address = COALESCE(EXCLUDED.address, stops.address),
+                            recipient = COALESCE(EXCLUDED.recipient, stops.recipient),
+                            street = COALESCE(EXCLUDED.street, stops.street),
+                            house_number = COALESCE(EXCLUDED.house_number, stops.house_number),
+                            postal_code = COALESCE(EXCLUDED.postal_code, stops.postal_code),
+                            city = COALESCE(EXCLUDED.city, stops.city),
+                            address_full = COALESCE(EXCLUDED.address_full, stops.address_full),
                             contact_name = COALESCE(EXCLUDED.contact_name, stops.contact_name),
                             phone_number = COALESCE(EXCLUDED.phone_number, stops.phone_number),
                             email = COALESCE(EXCLUDED.email, stops.email),
@@ -315,17 +340,15 @@ app.post('/admin/save-tour', async (req, res) => {
                             notes = COALESCE(EXCLUDED.notes, stops.notes),
                             order_index = EXCLUDED.order_index,
                             is_completed = COALESCE(EXCLUDED.is_completed, stops.is_completed),
-                            latitude = EXCLUDED.latitude,
-                            longitude = EXCLUDED.longitude,
-                            alternative_names = EXCLUDED.alternative_names
-                    `, params);
+                            latitude = COALESCE(EXCLUDED.latitude, stops.latitude),
+                            longitude = COALESCE(EXCLUDED.longitude, stops.longitude),
+                            alternative_names = COALESCE(EXCLUDED.alternative_names, stops.alternative_names),
+                            updated_at = EXCLUDED.updated_at,
+                            deleted_at = NULL
+                    `, [...params, now]);
                 } else {
-                    await pool.query('INSERT INTO stops (tour_id, address, recipient, street, house_number, postal_code, city, address_full, contact_name, phone_number, email, time_window, notes, order_index, is_completed, latitude, longitude, alternative_names) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)', params.slice(1));
+                    await pool.query('INSERT INTO stops (tour_id, address, recipient, street, house_number, postal_code, city, address_full, contact_name, phone_number, email, time_window, notes, order_index, is_completed, latitude, longitude, alternative_names, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)', [...params.slice(1), now]);
                 }
-            }
-            if (incomingStopUuids.length > 0) {
-                const now = Date.now();
-                await pool.query('UPDATE stops SET deleted_at = $1, updated_at = $1 WHERE tour_id = $2 AND uuid IS NOT NULL AND NOT (uuid = ANY($3))', [now, tourId, incomingStopUuids]);
             }
         }
         res.json({ success: true });
@@ -575,9 +598,9 @@ app.get('/driver/:name', async (req, res) => {
                 document.getElementById('tNotes').value = t ? t.notes : '';
                 document.getElementById('tNotes').disabled = !!t;
 
-                document.getElementById('addStopBtn').style.display = t ? 'none' : 'block';
+                document.getElementById('addStopBtn').style.display = 'block';
                 document.getElementById('modalStops').innerHTML = '';
-                if(t && t.stops) t.stops.forEach(s => addStopRow(s, !!t)); else addStopRow(null, false);
+                if(t && t.stops) t.stops.forEach(s => addStopRow(s, false)); else addStopRow(null, false);
                 document.getElementById('tourModal').style.display = 'block';
             }
 
@@ -603,7 +626,8 @@ app.get('/driver/:name', async (req, res) => {
                 d.className = 'stop-edit-row';
                 d.style = 'border:1px solid #444; padding:15px; margin-bottom:15px; border-radius:8px; position:relative;';
 
-                const uuid = s ? (s.uuid || '') : '';
+                // Generate UUID for new stops on the frontend to avoid deletion bug
+                const uuid = s ? (s.uuid || '') : (crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 15));
                 const altNames = s ? (s.alternativeNames || s.alternative_names || '') : '';
                 const lat = s ? (s.latitude || '') : '';
                 const lon = s ? (s.longitude || '') : '';
@@ -620,7 +644,7 @@ app.get('/driver/:name', async (req, res) => {
                 }
 
                 d.innerHTML = `
-                    ${!isReadOnlyStructure ? '<button onclick="this.parentElement.remove()" style="position:absolute; right:10px; top:10px; background:#e74c3c; color:white; border:none; padding:5px 10px; border-radius:4px; cursor:pointer;">X</button>' : ''}
+                    <button onclick="this.parentElement.remove()" style="position:absolute; right:10px; top:10px; background:#e74c3c; color:white; border:none; padding:5px 10px; border-radius:4px; cursor:pointer;">X</button>
                     <input type="hidden" class="stop-uuid" value="${uuid}">
                     <input type="hidden" class="stop-lat" value="${lat}">
                     <input type="hidden" class="stop-lon" value="${lon}">
@@ -647,6 +671,9 @@ app.get('/driver/:name', async (req, res) => {
                     <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px; margin-bottom:5px;">
                         <div><label>Időablak</label><input type="text" class="stop-time" value="${s ? (s.time_window || s.timeWindow || '') : ''}" placeholder="Időablak"></div>
                         <div><label>Megjegyzés</label><input type="text" class="stop-notes" value="${s ? (s.notes || '') : ''}" placeholder="Megjegyzés"></div>
+                    </div>
+                    <div style="margin-bottom:5px;">
+                        <label><input type="checkbox" class="stop-completed" ${s && (s.is_completed || s.isCompleted) ? 'checked' : ''}> Teljesítve</label>
                     </div>
                 `;
 
@@ -688,6 +715,7 @@ app.get('/driver/:name', async (req, res) => {
                         phone_number: r.querySelector('.stop-phone').value,
                         time_window: r.querySelector('.stop-time').value,
                         notes: r.querySelector('.stop-notes').value,
+                        is_completed: r.querySelector('.stop-completed').checked,
                         order_index: i,
                         latitude: r.querySelector('.stop-lat').value ? parseFloat(r.querySelector('.stop-lat').value) : null,
                         longitude: r.querySelector('.stop-lon').value ? parseFloat(r.querySelector('.stop-lon').value) : null,
