@@ -610,9 +610,9 @@ app.get('/driver/:name', async (req, res) => {
                 const postal = row.querySelector('.stop-postal').value;
                 const city = row.querySelector('.stop-city').value;
                 if (!street || !city) return;
-                const q = `${street} ${house}, ${postal} ${city}`;
+                const q = \`\${street} \${house}, \${postal} \${city}\`;
                 try {
-                    const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(q)}`);
+                    const res = await fetch(\`https://nominatim.openstreetmap.org/search?format=json&q=\${encodeURIComponent(q)}\`);
                     const data = await res.json();
                     if (data && data.length > 0) {
                         row.querySelector('.stop-lat').value = data[0].lat;
@@ -635,47 +635,47 @@ app.get('/driver/:name', async (req, res) => {
                 let recipientHtml = '';
                 const altList = altNames ? altNames.split('|') : [];
                 if (altList.length > 1) {
-                    recipientHtml = '<select class="stop-recipient" style="margin-bottom:5px;">' +
-                        altList.map(name => `<option value="${name}" ${name === (s.recipient || '') ? 'selected' : ''}>${name}</option>`).join('') +
+                    recipientHtml = \`<select class="stop-recipient" style="margin-bottom:5px;">\` +
+                        altList.map(name => \`<option value="\${name}" \${name === (s.recipient || '') ? 'selected' : ''}>\${name}</option>\`).join('') +
                         '<option value="custom">-- Egyéni --</option></select>' +
                         '<input type="text" class="stop-recipient-input" value="' + (s ? (s.recipient || '') : '') + '" placeholder="Címzett" style="display:none;">';
                 } else {
                     recipientHtml = '<input type="text" class="stop-recipient-input" value="' + (s ? (s.recipient || '') : '') + '" placeholder="Címzett" style="margin-bottom:5px;">';
                 }
 
-                d.innerHTML = `
+                d.innerHTML = \`
                     <button onclick="this.parentElement.remove()" style="position:absolute; right:10px; top:10px; background:#e74c3c; color:white; border:none; padding:5px 10px; border-radius:4px; cursor:pointer;">X</button>
-                    <input type="hidden" class="stop-uuid" value="${uuid}">
-                    <input type="hidden" class="stop-lat" value="${lat}">
-                    <input type="hidden" class="stop-lon" value="${lon}">
-                    <input type="hidden" class="stop-alt-names" value="${altNames}">
+                    <input type="hidden" class="stop-uuid" value="\${uuid}">
+                    <input type="hidden" class="stop-lat" value="\${lat}">
+                    <input type="hidden" class="stop-lon" value="\${lon}">
+                    <input type="hidden" class="stop-alt-names" value="\${altNames}">
 
                     <label>Címzett</label>
-                    ${recipientHtml}
+                    \${recipientHtml}
 
                     <div style="display:grid; grid-template-columns: 2fr 1fr; gap:10px; margin-bottom:5px;">
-                        <div><label>Utca</label><input type="text" class="stop-street" value="${s ? (s.street || '') : ''}" placeholder="Utca" onchange="geocodeStop(this.parentElement.parentElement.parentElement)"></div>
-                        <div><label>Házszám</label><input type="text" class="stop-house" value="${s ? (s.house_number || s.houseNumber || '') : ''}" placeholder="Házszám" onchange="geocodeStop(this.parentElement.parentElement.parentElement)"></div>
+                        <div><label>Utca</label><input type="text" class="stop-street" value="\${s ? (s.street || '') : ''}" placeholder="Utca" onchange="geocodeStop(this.parentElement.parentElement.parentElement)"></div>
+                        <div><label>Házszám</label><input type="text" class="stop-house" value="\${s ? (s.house_number || s.houseNumber || '') : ''}" placeholder="Házszám" onchange="geocodeStop(this.parentElement.parentElement.parentElement)"></div>
                     </div>
 
                     <div style="display:grid; grid-template-columns: 1fr 2fr; gap:10px; margin-bottom:5px;">
-                        <div><label>Irányítószám</label><input type="text" class="stop-postal" value="${s ? (s.postal_code || s.postalCode || '') : ''}" placeholder="Irsz" onchange="geocodeStop(this.parentElement.parentElement.parentElement)"></div>
-                        <div><label>Város</label><input type="text" class="stop-city" value="${s ? (s.city || '') : ''}" placeholder="Város" onchange="geocodeStop(this.parentElement.parentElement.parentElement)"></div>
+                        <div><label>Irányítószám</label><input type="text" class="stop-postal" value="\${s ? (s.postal_code || s.postalCode || '') : ''}" placeholder="Irsz" onchange="geocodeStop(this.parentElement.parentElement.parentElement)"></div>
+                        <div><label>Város</label><input type="text" class="stop-city" value="\${s ? (s.city || '') : ''}" placeholder="Város" onchange="geocodeStop(this.parentElement.parentElement.parentElement)"></div>
                     </div>
 
                     <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px; margin-bottom:5px;">
-                        <div><label>Kapcsolattartó</label><input type="text" class="stop-contact" value="${s ? (s.contact_name || s.contactName || '') : ''}" placeholder="Kapcsolattartó"></div>
-                        <div><label>Telefonszám</label><input type="text" class="stop-phone" value="${s ? (s.phone_number || s.phoneNumber || '') : ''}" placeholder="Telefon"></div>
+                        <div><label>Kapcsolattartó</label><input type="text" class="stop-contact" value="\${s ? (s.contact_name || s.contactName || '') : ''}" placeholder="Kapcsolattartó"></div>
+                        <div><label>Telefonszám</label><input type="text" class="stop-phone" value="\${s ? (s.phone_number || s.phoneNumber || '') : ''}" placeholder="Telefon"></div>
                     </div>
 
                     <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px; margin-bottom:5px;">
-                        <div><label>Időablak</label><input type="text" class="stop-time" value="${s ? (s.time_window || s.timeWindow || '') : ''}" placeholder="Időablak"></div>
-                        <div><label>Megjegyzés</label><input type="text" class="stop-notes" value="${s ? (s.notes || '') : ''}" placeholder="Megjegyzés"></div>
+                        <div><label>Időablak</label><input type="text" class="stop-time" value="\${s ? (s.time_window || s.timeWindow || '') : ''}" placeholder="Időablak"></div>
+                        <div><label>Megjegyzés</label><input type="text" class="stop-notes" value="\${s ? (s.notes || '') : ''}" placeholder="Megjegyzés"></div>
                     </div>
                     <div style="margin-bottom:5px;">
-                        <label><input type="checkbox" class="stop-completed" ${s && (s.is_completed || s.isCompleted) ? 'checked' : ''}> Teljesítve</label>
+                        <label><input type="checkbox" class="stop-completed" \${s && (s.is_completed || s.isCompleted) ? 'checked' : ''}> Teljesítve</label>
                     </div>
-                `;
+                \`;
 
                 const select = d.querySelector('.stop-recipient');
                 const input = d.querySelector('.stop-recipient-input');
