@@ -6,6 +6,18 @@ app.use(express.json());
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
 
+function getDistance(lat1, lon1, lat2, lon2) {
+    if (!lat1 || !lon1 || !lat2 || !lon2) return 999999;
+    const R = 6371e3;
+    const φ1 = lat1 * Math.PI/180;
+    const φ2 = lat2 * Math.PI/180;
+    const Δφ = (lat2-lat1) * Math.PI/180;
+    const Δλ = (lon2-lon1) * Math.PI/180;
+    const a = Math.sin(Δφ/2) * Math.sin(Δφ/2) + Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ/2) * Math.sin(Δλ/2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    return R * c;
+}
+
 // ADATBÁZIS SÉMA FRISSÍTÉSE
 const initDb = async () => {
     await pool.query('CREATE EXTENSION IF NOT EXISTS "pgcrypto"');
@@ -48,6 +60,7 @@ const initDb = async () => {
         ['stops', 'updated_at', 'BIGINT'],
         ['live_updates', 'next_stop_dist', 'FLOAT'],
         ['live_updates', 'tour_remaining_dist', 'FLOAT'],
+        ['stops', 'stop_type', 'TEXT DEFAULT \'DELIVERY\''],
         ['live_updates', 'uuid', 'UUID UNIQUE DEFAULT gen_random_uuid()'],
         ['costs', 'uuid', 'UUID UNIQUE DEFAULT gen_random_uuid()'],
         ['chat_messages', 'uuid', 'UUID UNIQUE DEFAULT gen_random_uuid()'],
@@ -83,6 +96,22 @@ app.post('/api/live-update', async (req, res) => {
     const d = req.body;
     await pool.query('INSERT INTO live_updates (uuid, driver_name, driver_photo, driver_phone, driver_email, license_plate, latitude, longitude, speed, status, current_tour, next_stop, next_lat, next_lng, next_stop_dist, tour_remaining_dist, timestamp) VALUES (COALESCE($1, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)',
         [d.uuid || null, d.driverName, d.driverPhoto, d.driverPhone, d.driverEmail, d.licensePlate, d.latitude, d.longitude, d.speed, d.status, d.currentTour, d.nextStop, d.nextLat, d.nextLng, d.nextStopDistance, d.tourRemainingDistance, d.timestamp]);
+
+    if (d.currentTour) {
+        const tourRes = await pool.query('SELECT * FROM tours WHERE (name = $1 OR uuid = $1) AND driver_name = $2 AND is_closed = FALSE', [d.currentTour, d.driverName]);
+        if (tourRes.rows.length > 0) {
+            const tour = tourRes.rows[0];
+            if (tour.depot_lat && tour.depot_lng) {
+                const stopsRes = await pool.query('SELECT * FROM stops WHERE tour_id = $1 AND is_completed = FALSE AND deleted_at IS NULL', [tour.id]);
+                if (stopsRes.rows.length === 0) {
+                    const distToDepot = getDistance(d.latitude, d.longitude, tour.depot_lat, tour.depot_lng);
+                    if (distToDepot < 100) {
+                        await pool.query('UPDATE tours SET is_closed = TRUE, is_current = FALSE, updated_at = $1 WHERE id = $2', [Date.now(), tour.id]);
+                    }
+                }
+            }
+        }
+    }
     res.sendStatus(200);
 });
 
@@ -194,46 +223,15 @@ app.post('/api/sync-tours/:driverName', async (req, res) => {
                             const dbUpdatedAt = Number(dbStop.updated_at || 0);
 
                             if (incomingUpdatedAt > dbUpdatedAt) {
-                                await pool.query(`
-                                    UPDATE stops SET
-                                        tour_id = $1, address = $2, recipient = $3, street = $4, house_number = $5,
-                                        postal_code = $6, city = $7, address_full = $8, contact_name = $9,
-                                        phone_number = $10, email = $11, time_window = $12, notes = $13,
-                                        alternative_names = $14, order_index = $15, latitude = $16,
-                                        longitude = $17, is_completed = $18, arrival_time = $19, updated_at = $20
-                                    WHERE uuid = $21
-                                `, [
-                                    tourId, s.address || '', s.recipient || '', s.street || '', s.houseNumber || s.house_number || '',
-                                    s.postalCode || s.postal_code || '', s.city || '', s.addressFull || s.address_full || '',
-                                    s.contactName || s.contact_name || '', s.phoneNumber || s.phone_number || '', s.email || '',
-                                    s.timeWindow || s.time_window || '', s.notes || '', s.alternativeNames || s.alternative_names || null,
-                                    s.orderIndex !== undefined ? s.orderIndex : (s.order_index || 0),
-                                    s.latitude !== undefined ? s.latitude : (s.latitude_gps || null),
-                                    s.longitude !== undefined ? s.longitude : (s.longitude_gps || null),
-                                    s.isCompleted !== undefined ? !!s.isCompleted : (!!s.is_completed),
-                                    s.arrivalTime || s.arrival_time || null, incomingUpdatedAt, s.uuid
-                                ]);
-                            }
-                        } else {
-                            await pool.query(`
-                                INSERT INTO stops (uuid, tour_id, address, recipient, street, house_number, postal_code, city, address_full, contact_name, phone_number, email, time_window, notes, alternative_names, order_index, latitude, longitude, is_completed, arrival_time, updated_at)
-                                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
-                            `, [
-                                s.uuid, tourId, s.address || '', s.recipient || '', s.street || '', s.houseNumber || s.house_number || '',
-                                s.postalCode || s.postal_code || '', s.city || '', s.addressFull || s.address_full || '',
-                                s.contactName || s.contact_name || '', s.phoneNumber || s.phone_number || '', s.email || '',
-                                s.timeWindow || s.time_window || '', s.notes || '', s.alternativeNames || s.alternative_names || null,
-                                s.orderIndex !== undefined ? s.orderIndex : (s.order_index || 0),
-                                s.latitude !== undefined ? s.latitude : (s.latitude_gps || null),
-                                s.longitude !== undefined ? s.longitude : (s.longitude_gps || null),
-                                s.isCompleted !== undefined ? !!s.isCompleted : (!!s.is_completed),
-                                s.arrivalTime || s.arrival_time || null, incomingUpdatedAt
-                            ]);
-                        }
-                    } else {
                         await pool.query(`
-                            INSERT INTO stops (tour_id, address, recipient, street, house_number, postal_code, city, address_full, contact_name, phone_number, email, time_window, notes, alternative_names, order_index, latitude, longitude, is_completed, arrival_time, updated_at)
-                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+                            UPDATE stops SET
+                                tour_id = $1, address = $2, recipient = $3, street = $4, house_number = $5,
+                                postal_code = $6, city = $7, address_full = $8, contact_name = $9,
+                                phone_number = $10, email = $11, time_window = $12, notes = $13,
+                                alternative_names = $14, order_index = $15, latitude = $16,
+                                longitude = $17, is_completed = $18, arrival_time = $19,
+                                stop_type = $20, updated_at = $21
+                            WHERE uuid = $22
                         `, [
                             tourId, s.address || '', s.recipient || '', s.street || '', s.houseNumber || s.house_number || '',
                             s.postalCode || s.postal_code || '', s.city || '', s.addressFull || s.address_full || '',
@@ -243,9 +241,41 @@ app.post('/api/sync-tours/:driverName', async (req, res) => {
                             s.latitude !== undefined ? s.latitude : (s.latitude_gps || null),
                             s.longitude !== undefined ? s.longitude : (s.longitude_gps || null),
                             s.isCompleted !== undefined ? !!s.isCompleted : (!!s.is_completed),
-                            s.arrivalTime || s.arrival_time || null, incomingUpdatedAt
+                            s.arrivalTime || s.arrival_time || null, s.stopType || 'DELIVERY', incomingUpdatedAt, s.uuid
                         ]);
                     }
+                } else {
+                    await pool.query(`
+                        INSERT INTO stops (uuid, tour_id, address, recipient, street, house_number, postal_code, city, address_full, contact_name, phone_number, email, time_window, notes, alternative_names, order_index, latitude, longitude, is_completed, arrival_time, stop_type, updated_at)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
+                    `, [
+                        s.uuid, tourId, s.address || '', s.recipient || '', s.street || '', s.houseNumber || s.house_number || '',
+                        s.postalCode || s.postal_code || '', s.city || '', s.addressFull || s.address_full || '',
+                        s.contactName || s.contact_name || '', s.phoneNumber || s.phone_number || '', s.email || '',
+                        s.timeWindow || s.time_window || '', s.notes || '', s.alternativeNames || s.alternative_names || null,
+                        s.orderIndex !== undefined ? s.orderIndex : (s.order_index || 0),
+                        s.latitude !== undefined ? s.latitude : (s.latitude_gps || null),
+                        s.longitude !== undefined ? s.longitude : (s.longitude_gps || null),
+                        s.isCompleted !== undefined ? !!s.isCompleted : (!!s.is_completed),
+                        s.arrivalTime || s.arrival_time || null, s.stopType || 'DELIVERY', incomingUpdatedAt
+                    ]);
+                }
+            } else {
+                await pool.query(`
+                    INSERT INTO stops (tour_id, address, recipient, street, house_number, postal_code, city, address_full, contact_name, phone_number, email, time_window, notes, alternative_names, order_index, latitude, longitude, is_completed, arrival_time, stop_type, updated_at)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
+                `, [
+                    tourId, s.address || '', s.recipient || '', s.street || '', s.houseNumber || s.house_number || '',
+                    s.postalCode || s.postal_code || '', s.city || '', s.addressFull || s.address_full || '',
+                    s.contactName || s.contact_name || '', s.phoneNumber || s.phone_number || '', s.email || '',
+                    s.timeWindow || s.time_window || '', s.notes || '', s.alternativeNames || s.alternative_names || null,
+                    s.orderIndex !== undefined ? s.orderIndex : (s.order_index || 0),
+                    s.latitude !== undefined ? s.latitude : (s.latitude_gps || null),
+                    s.longitude !== undefined ? s.longitude : (s.longitude_gps || null),
+                    s.isCompleted !== undefined ? !!s.isCompleted : (!!s.is_completed),
+                    s.arrivalTime || s.arrival_time || null, s.stopType || 'DELIVERY', incomingUpdatedAt
+                ]);
+            }
                 }
             }
         }
@@ -279,6 +309,25 @@ app.get('/api/cost-status/:driverName', async (req, res) => {
         timestamp: Number(r.timestamp) || Date.now(),
         amount: Number(r.amount) || 0
     })));
+});
+
+app.get('/api/dashboard-status/:driverName', async (req, res) => {
+    const name = req.params.driverName;
+    const update = await pool.query('SELECT * FROM live_updates WHERE driver_name = $1 ORDER BY timestamp DESC LIMIT 1', [name]);
+    const toursRes = await pool.query('SELECT * FROM tours WHERE driver_name = $1 AND deleted_at IS NULL ORDER BY date DESC', [name]);
+    for (let tour of toursRes.rows) {
+        const stopsRes = await pool.query('SELECT * FROM stops WHERE tour_id = $1 AND deleted_at IS NULL ORDER BY order_index ASC', [tour.id]);
+        tour.stops = stopsRes.rows;
+    }
+    const costs = await pool.query('SELECT * FROM costs WHERE driver_name = $1 ORDER BY timestamp DESC', [name]);
+    const chat = await pool.query('SELECT * FROM chat_messages WHERE driver_name = $1 ORDER BY timestamp ASC', [name]);
+
+    res.json({
+        live: update.rows[0] || { driver_name: name },
+        tours: toursRes.rows,
+        costs: costs.rows,
+        chat: chat.rows
+    });
 });
 
 app.post('/admin/save-tour', async (req, res) => {
@@ -343,13 +392,14 @@ app.post('/admin/save-tour', async (req, res) => {
                     s.is_completed !== undefined ? !!s.is_completed : (s.isCompleted !== undefined ? !!s.isCompleted : null),
                     s.latitude !== undefined ? s.latitude : null,
                     s.longitude !== undefined ? s.longitude : null,
-                    s.alternative_names || s.alternativeNames || null
+                    s.alternative_names || s.alternativeNames || null,
+                    s.stop_type || s.stopType || 'DELIVERY'
                 ];
 
                 if (s.uuid) {
                     await pool.query(`
-                        INSERT INTO stops (uuid, tour_id, address, recipient, street, house_number, postal_code, city, address_full, contact_name, phone_number, email, time_window, notes, order_index, is_completed, latitude, longitude, alternative_names, updated_at, deleted_at)
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, NULL)
+                        INSERT INTO stops (uuid, tour_id, address, recipient, street, house_number, postal_code, city, address_full, contact_name, phone_number, email, time_window, notes, order_index, is_completed, latitude, longitude, alternative_names, stop_type, updated_at, deleted_at)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, NULL)
                         ON CONFLICT (uuid) DO UPDATE SET
                             tour_id = EXCLUDED.tour_id,
                             address = COALESCE(EXCLUDED.address, stops.address),
@@ -369,11 +419,12 @@ app.post('/admin/save-tour', async (req, res) => {
                             latitude = COALESCE(EXCLUDED.latitude, stops.latitude),
                             longitude = COALESCE(EXCLUDED.longitude, stops.longitude),
                             alternative_names = COALESCE(EXCLUDED.alternative_names, stops.alternative_names),
+                            stop_type = COALESCE(EXCLUDED.stop_type, stops.stop_type),
                             updated_at = EXCLUDED.updated_at,
                             deleted_at = NULL
                     `, [...params, now]);
                 } else {
-                    await pool.query('INSERT INTO stops (tour_id, address, recipient, street, house_number, postal_code, city, address_full, contact_name, phone_number, email, time_window, notes, order_index, is_completed, latitude, longitude, alternative_names, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)', [...params.slice(1), now]);
+                    await pool.query('INSERT INTO stops (tour_id, address, recipient, street, house_number, postal_code, city, address_full, contact_name, phone_number, email, time_window, notes, order_index, is_completed, latitude, longitude, alternative_names, stop_type, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)', [...params.slice(1), now]);
                 }
             }
         }
@@ -433,6 +484,7 @@ app.get('/api/get-tours/:driverName', async (req, res) => {
                     latitude: s.latitude !== null ? Number(s.latitude) : null,
                     longitude: s.longitude !== null ? Number(s.longitude) : null,
                     isCompleted: !!s.is_completed,
+                    stopType: s.stop_type || 'DELIVERY',
                     arrivalTime: s.arrival_time ? Number(s.arrival_time) : null,
                     deletedAt: s.deleted_at ? Number(s.deleted_at) : null,
                     updatedAt: s.updated_at ? Number(s.updated_at) : null
@@ -459,7 +511,13 @@ app.get('/driver/:name', async (req, res) => {
     const chat = await pool.query('SELECT * FROM chat_messages WHERE driver_name = $1 ORDER BY timestamp ASC', [name]);
     const work = await pool.query('SELECT DISTINCT ON (start_time) * FROM work_times WHERE driver_name = $1 ORDER BY start_time DESC, id DESC', [name]);
     const toursRes = await pool.query('SELECT * FROM tours WHERE driver_name = $1 AND deleted_at IS NULL ORDER BY date DESC', [name]);
-    const hotelsRes = await pool.query('SELECT * FROM hotels WHERE driver_name = $1 ORDER BY timestamp DESC', [name]);
+    const hotelsRes = await pool.query(`
+        SELECT name, address, timestamp FROM hotels WHERE driver_name = $1
+        UNION ALL
+        SELECT recipient as name, address_full as address, arrival_time as timestamp FROM stops
+        WHERE tour_id IN (SELECT id FROM tours WHERE driver_name = $1) AND stop_type = 'HOTEL'
+        ORDER BY timestamp DESC
+    `, [name]);
     for (let tour of toursRes.rows) {
         const stopsRes = await pool.query('SELECT * FROM stops WHERE tour_id = $1 AND deleted_at IS NULL ORDER BY order_index ASC', [tour.id]);
         tour.stops = stopsRes.rows;
@@ -495,7 +553,7 @@ app.get('/driver/:name', async (req, res) => {
         .stop-edit-row input, .stop-edit-row select { width: 100%; padding: 8px; background: #333; border: 1px solid #444; color: white; border-radius: 4px; box-sizing: border-box; }
     </style></head>
     <body>
-        <header><button onclick="location.href='/'">⬅</button><img src="${d.driver_photo || ''}" style="width:40px;height:40px;border-radius:50%;margin-left:15px;margin-right:15px;"><h2>${name} - ERP</h2></header>
+        <header><button onclick="location.href='/'">⬅</button><img src="${d.driver_photo || ''}" style="width:40px;height:40px;border-radius:50%;margin-left:15px;margin-right:15px;" id="headerPhoto"><h2><span id="headerName">${name}</span> - ERP</h2></header>
         <nav id="mainNav">
             <button onclick="openTab(event, 'dashboard')">DASHBOARD</button>
             <button onclick="openTab(event, 'tours')">TÚRÁK</button>
@@ -510,17 +568,17 @@ app.get('/driver/:name', async (req, res) => {
             <div style="display:grid; grid-template-columns: 1fr 300px; gap: 20px;">
                 <div id="map"></div>
                 <div style="background:#222; padding:20px; border-radius:8px;">
-                    <h3>Státusz: <span style="color:#3498db">${d.status}</span></h3>
-                    <p>Sebesség: ${Math.round(d.speed || 0)} km/h</p>
+                    <h3>Státusz: <span style="color:#3498db" id="statusText">${d.status}</span></h3>
+                    <p id="speedBox">Sebesség: ${Math.round(d.speed || 0)} km/h</p>
                     <p id="nextDistBox">📍 Következő megálló: - km</p>
                     <p id="tourDistBox">🏁 Túra összesen: - km</p>
-                    <hr><p>🎯 Cél: ${d.next_stop || 'Nincs'}</p>
+                    <hr><p id="nextStopName">🎯 Cél: ${d.next_stop || 'Nincs'}</p>
                 </div>
             </div>
         </div>
         <div id="tours" class="tab-content">
             <button onclick="editTour()" style="background:#2ecc71; color:white; padding:10px; margin-bottom:20px;">+ Új túra</button>
-            ${toursRes.rows.map(t => `<div class="tour-card"><div style="float:right;"><button onclick='editTour(${JSON.stringify(t).replace(/'/g, "&apos;")})'>✏</button><button onclick="deleteTour(${t.id})" style="background:#e74c3c; color:white;">🗑</button></div><b>${t.name}</b> (${t.customer}) - ${new Date(Number(t.date)).toLocaleDateString()}${t.stops.map(s => `<div class="stop-item">${s.order_index + 1}. ${s.address}</div>`).join('')}</div>`).join('')}
+            ${toursRes.rows.map(t => `<div class="tour-card"><div style="float:right;"><button onclick='editTour(${JSON.stringify(t).replace(/'/g, "&apos;")})'>✏</button><button onclick="deleteTour(${t.id})" style="background:#e74c3c; color:white;">🗑</button></div><b>${t.name}</b> (${t.customer}) - ${new Date(Number(t.date)).toLocaleDateString()}${t.stops.map(s => `<div class="stop-item">${s.order_index + 1}. ${s.stop_type === 'HOTEL' ? '🏨 ' : (s.stop_type === 'DEPOT' ? '🏠 ' : '')}${s.address}</div>`).join('')}</div>`).join('')}
         </div>
         <div id="costs" class="tab-content">
             <table><tr><th>Dátum</th><th>Kategória</th><th>Összeg</th><th>Státusz</th><th>Művelet</th></tr>
@@ -619,59 +677,93 @@ app.get('/driver/:name', async (req, res) => {
 
             var map = L.map('map').setView([${d.latitude || 47.5}, ${d.longitude || 19.0}], 13);
             L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png').addTo(map);
-            L.marker([${d.latitude || 47.5}, ${d.longitude || 19.0}]).addTo(map);
+            var driverMarker = L.marker([${d.latitude || 47.5}, ${d.longitude || 19.0}]).addTo(map);
+            var routeLayer = L.layerGroup().addTo(map);
+            var stopsLayer = L.layerGroup().addTo(map);
 
-            const tourStops = ${JSON.stringify(stopsData)};
-            const tourDepot = ${JSON.stringify(depotData)};
+            let currentStops = ${JSON.stringify(stopsData)};
+            let currentDepot = ${JSON.stringify(depotData)};
+            let currentDriverPos = [${d.latitude || 47.5}, ${d.longitude || 19.0}];
+
             async function updateRoute() {
-                const incomplete = tourStops.filter(s => !s.is_completed && s.latitude && s.longitude);
-                if (incomplete.length === 0) return;
+                const incomplete = currentStops.filter(s => !s.is_completed && s.latitude && s.longitude);
+                routeLayer.clearLayers();
+                stopsLayer.clearLayers();
 
-                // 1. Distance to NEXT STOP
-                const nextStop = incomplete[0];
-                const nextCoords = [[${d.longitude || 19.0}, ${d.latitude || 47.5}], [nextStop.longitude, nextStop.latitude]];
-                const nextUrl = \`https://router.project-osrm.org/route/v1/driving/\` + nextCoords.map(c => c.join(',')).join(';') + \`?overview=false\`;
-
-                try {
-                    const resNext = await fetch(nextUrl);
-                    const dataNext = await resNext.json();
-                    if (dataNext.routes && dataNext.routes[0]) {
-                        document.getElementById('nextDistBox').innerText = '📍 Következő megálló: ' + (dataNext.routes[0].distance / 1000).toFixed(1) + ' km';
-                    }
-                } catch (e) { console.error('Next stop routing error:', e); }
-
-                // 2. TOTAL Remaining Distance (GPS -> Remaining Stops -> Depot)
-                const totalCoords = [[${d.longitude || 19.0}, ${d.latitude || 47.5}], ...incomplete.map(s => [s.longitude, s.latitude])];
-                if (tourDepot && tourDepot.lat && tourDepot.lng) {
-                    totalCoords.push([tourDepot.lng, tourDepot.lat]);
+                if (incomplete.length === 0 && (!currentDepot || !currentDepot.lat)) {
+                    document.getElementById('nextDistBox').innerText = '📍 Következő megálló: - km';
+                    document.getElementById('tourDistBox').innerText = '🏁 Túra összesen: - km';
+                    return;
                 }
 
-                const totalUrl = \`https://router.project-osrm.org/route/v1/driving/\` + totalCoords.map(c => c.join(',')).join(';') + \`?overview=full&geometries=geojson\`;
+                const coords = [ [currentDriverPos[1], currentDriverPos[0]] ];
+
+                let targetLabel = "Nincs";
+                if (incomplete.length > 0) {
+                    incomplete.forEach(s => coords.push([s.longitude, s.latitude]));
+                    targetLabel = incomplete[0].address;
+                }
+
+                if (currentDepot && currentDepot.lat && currentDepot.lng) {
+                    coords.push([currentDepot.lng, currentDepot.lat]);
+                    if (incomplete.length === 0) targetLabel = "Visszatérés: " + currentDepot.name;
+                }
+
+                document.getElementById('nextStopName').innerText = "🎯 Cél: " + targetLabel;
+
+                const url = `https://router.project-osrm.org/route/v1/driving/` + coords.map(c => c.join(',')).join(';') + `?overview=full&geometries=geojson&steps=true`;
 
                 try {
-                    const resTotal = await fetch(totalUrl);
-                    const dataTotal = await resTotal.json();
-                    if (dataTotal.routes && dataTotal.routes[0]) {
-                        const route = dataTotal.routes[0];
-                        L.geoJSON(route.geometry, { style: { color: '#3498db', weight: 5, opacity: 0.7 } }).addTo(map);
-                        document.getElementById('tourDistBox').innerText = '🏁 Túra összesen: ' + (route.distance / 1000).toFixed(1) + ' km';
+                    const res = await fetch(url);
+                    const data = await res.json();
+                    if (data.routes && data.routes[0]) {
+                        const route = data.routes[0];
+                        L.geoJSON(route.geometry, { style: { color: '#3498db', weight: 5, opacity: 0.7 } }).addTo(routeLayer);
+
+                        document.getElementById('nextDistBox').innerText = '📍 Következő: ' + (route.legs[0].distance / 1000).toFixed(1) + ' km';
+                        document.getElementById('tourDistBox').innerText = '🏁 Összesen: ' + (route.distance / 1000).toFixed(1) + ' km';
 
                         incomplete.forEach((s, i) => {
-                            L.circleMarker([s.latitude, s.longitude], { radius: 8, color: '#e74c3c', fillOpacity: 1 }).addTo(map)
-                                .bindPopup((i+1) + '. ' + s.address);
+                            let icon = L.divIcon({ html: `<div style="background:#e74c3c; width:20px; height:20px; border-radius:50%; border:2px solid white; color:white; font-size:12px; display:flex; align-items:center; justify-content:center;">\${i+1}</div>`, className: '' });
+                            if (s.stop_type === 'HOTEL' || s.stopType === 'HOTEL') {
+                                icon = L.divIcon({ html: `<div style="background:#9b59b6; width:24px; height:24px; border-radius:50%; border:2px solid white; color:white; font-size:14px; display:flex; align-items:center; justify-content:center;">🏨</div>`, className: '' });
+                            }
+                            L.marker([s.latitude, s.longitude], { icon }).addTo(stopsLayer).bindPopup(s.address);
                         });
 
-                        if (tourDepot && tourDepot.lat && tourDepot.lng) {
-                             L.marker([tourDepot.lat, tourDepot.lng]).addTo(map)
-                                .bindPopup('Depó: ' + tourDepot.name);
+                        if (currentDepot && currentDepot.lat) {
+                             L.marker([currentDepot.lat, currentDepot.lng], { icon: L.divIcon({ html: `<div style="background:#2ecc71; width:24px; height:24px; border-radius:50%; border:2px solid white; color:white; font-size:14px; display:flex; align-items:center; justify-content:center;">🏠</div>`, className: '' }) })
+                                .addTo(stopsLayer).bindPopup('Depó: ' + currentDepot.name);
                         }
 
-                        const bounds = L.latLngBounds([[${d.latitude || 47.5}, ${d.longitude || 19.0}], ...totalCoords.map(c => [c[1], c[0]])]);
+                        const bounds = L.latLngBounds(coords.map(c => [c[1], c[0]]));
                         map.fitBounds(bounds, { padding: [50, 50] });
                     }
-                } catch (e) { console.error('Total routing error:', e); }
+                } catch (e) { console.error('Routing error:', e); }
             }
-            if (tourStops.length > 0) updateRoute();
+
+            async function pollStatus() {
+                try {
+                    const res = await fetch('/api/dashboard-status/${name}');
+                    const data = await res.json();
+                    const d = data.live;
+                    document.getElementById('statusText').innerText = d.status;
+                    document.getElementById('speedBox').innerText = 'Sebesség: ' + Math.round(d.speed || 0) + ' km/h';
+                    currentDriverPos = [d.latitude || 47.5, d.longitude || 19.0];
+                    driverMarker.setLatLng(currentDriverPos);
+                    const currentTour = data.tours.find(t => t.is_current) || data.tours[0];
+                    if (currentTour) {
+                        const newStops = currentTour.stops || [];
+                        if (JSON.stringify(newStops) !== JSON.stringify(currentStops) || JSON.stringify(currentTour.depot_lat) !== JSON.stringify(currentDepot?.lat)) {
+                            currentStops = newStops;
+                            currentDepot = currentTour ? { name: currentTour.depot_name, lat: currentTour.depot_lat, lng: currentTour.depot_lng } : null;
+                            updateRoute();
+                        }
+                    }
+                } catch (e) { console.error('Poll error:', e); }
+            }
+            setInterval(pollStatus, 5000);
+            updateRoute();
 
             function sendMsg() {
                 const val = document.getElementById('m').value;
@@ -735,6 +827,7 @@ app.get('/driver/:name', async (req, res) => {
                 // Generate UUID for new stops on the frontend to avoid deletion bug
                 const uuid = s ? (s.uuid || '') : (crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 15));
                 const altNames = s ? (s.alternativeNames || s.alternative_names || '') : '';
+                const stopType = s ? (s.stopType || s.stop_type || 'DELIVERY') : 'DELIVERY';
                 const lat = s ? (s.latitude || '') : '';
                 const lon = s ? (s.longitude || '') : '';
 
@@ -775,11 +868,20 @@ app.get('/driver/:name', async (req, res) => {
                     </div>
 
                     <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px; margin-bottom:5px;">
-                        <div><label>Időablak</label><input type="text" class="stop-time" value="\${s ? (s.time_window || s.timeWindow || '') : ''}" placeholder="Időablak"></div>
-                        <div><label>Megjegyzés</label><input type="text" class="stop-notes" value="\${s ? (s.notes || '') : ''}" placeholder="Megjegyzés"></div>
+                        <div><label>Időablak</label><input type="text" class="stop-time" value="${s ? (s.time_window || s.timeWindow || '') : ''}" placeholder="Időablak"></div>
+                        <div><label>Megjegyzés</label><input type="text" class="stop-notes" value="${s ? (s.notes || '') : ''}" placeholder="Megjegyzés"></div>
                     </div>
                     <div style="margin-bottom:5px;">
-                        <label><input type="checkbox" class="stop-completed" \${s && (s.is_completed || s.isCompleted) ? 'checked' : ''}> Teljesítve</label>
+                        <label>Típus</label>
+                        <select class="stop-type">
+                            <option value="DELIVERY" ${stopType === 'DELIVERY' ? 'selected' : ''}>DELIVERY</option>
+                            <option value="PICKUP" ${stopType === 'PICKUP' ? 'selected' : ''}>PICKUP</option>
+                            <option value="HOTEL" ${stopType === 'HOTEL' ? 'selected' : ''}>HOTEL</option>
+                            <option value="DEPOT" ${stopType === 'DEPOT' ? 'selected' : ''}>DEPOT</option>
+                        </select>
+                    </div>
+                    <div style="margin-bottom:5px;">
+                        <label><input type="checkbox" class="stop-completed" ${s && (s.is_completed || s.isCompleted) ? 'checked' : ''}> Teljesítve</label>
                     </div>
                 \`;
 
@@ -825,7 +927,8 @@ app.get('/driver/:name', async (req, res) => {
                         order_index: i,
                         latitude: r.querySelector('.stop-lat').value ? parseFloat(r.querySelector('.stop-lat').value) : null,
                         longitude: r.querySelector('.stop-lon').value ? parseFloat(r.querySelector('.stop-lon').value) : null,
-                        alternative_names: r.querySelector('.stop-alt-names').value || null
+                        alternative_names: r.querySelector('.stop-alt-names').value || null,
+                        stop_type: r.querySelector('.stop-type').value
                     });
                 });
                 const data = {
