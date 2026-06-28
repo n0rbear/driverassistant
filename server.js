@@ -105,7 +105,15 @@ const initDb = async () => {
     ];
     for (let q of queries) await pool.query(q);
     const cols = [['stops', 'items', 'JSONB'], ['tours', 'depot_company', 'TEXT'], ['tours', 'depot_street', 'TEXT'], ['tours', 'depot_house_number', 'TEXT'], ['tours', 'depot_postal_code', 'TEXT'], ['tours', 'depot_city', 'TEXT'], ['tours', 'depot_state', 'TEXT'], ['tours', 'depot_country', 'TEXT'], ['tours', 'depot_address_full', 'TEXT'], ['stops', 'company', 'TEXT'], ['stops', 'state', 'TEXT'], ['stops', 'country', 'TEXT']];
-    for (const [t, c, type] of cols) try { await pool.query(`ALTER TABLE ${t} ADD COLUMN IF NOT EXISTS ${c} ${type}`); } catch (e) {}
+    for (const [t, c, type] of cols) {
+        try {
+            const res = await pool.query("SELECT column_name FROM information_schema.columns WHERE table_name = $1 AND column_name = $2", [t, c]);
+            if (res.rows.length === 0) {
+                console.log(`[SCHEMA] Adding column ${c} to ${t}`);
+                await pool.query(`ALTER TABLE ${t} ADD COLUMN ${c} ${type}`);
+            }
+        } catch (e) { console.error(`[SCHEMA] Error adding ${c} to ${t}:`, e.message); }
+    }
     try { await pool.query('ALTER TABLE work_times ADD CONSTRAINT unique_worktime UNIQUE (driver_name, start_time)'); } catch(e) {}
     try { await pool.query('ALTER TABLE costs ADD CONSTRAINT unique_cost UNIQUE (driver_name, timestamp, amount)'); } catch(e) {}
     try { await pool.query('ALTER TABLE hotels ADD CONSTRAINT unique_hotel UNIQUE (driver_name, timestamp, name)'); } catch(e) {}
