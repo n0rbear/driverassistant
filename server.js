@@ -60,6 +60,9 @@ const initDb = async () => {
         ['stops', 'updated_at', 'BIGINT'],
         ['live_updates', 'next_stop_dist', 'FLOAT'],
         ['live_updates', 'tour_remaining_dist', 'FLOAT'],
+        ['live_updates', 'depot_name', 'TEXT'],
+        ['live_updates', 'depot_lat', 'DOUBLE PRECISION'],
+        ['live_updates', 'depot_lng', 'DOUBLE PRECISION'],
         ['stops', 'stop_type', 'TEXT DEFAULT \'DELIVERY\''],
         ['live_updates', 'uuid', 'UUID UNIQUE DEFAULT gen_random_uuid()'],
         ['costs', 'uuid', 'UUID UNIQUE DEFAULT gen_random_uuid()'],
@@ -94,17 +97,19 @@ initDb().catch(console.error);
 // API-K
 app.post('/api/live-update', async (req, res) => {
     const d = req.body;
-    await pool.query('INSERT INTO live_updates (uuid, driver_name, driver_photo, driver_phone, driver_email, license_plate, latitude, longitude, speed, status, current_tour, next_stop, next_lat, next_lng, next_stop_dist, tour_remaining_dist, timestamp) VALUES (COALESCE($1, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)',
-        [d.uuid || null, d.driverName, d.driverPhoto, d.driverPhone, d.driverEmail, d.licensePlate, d.latitude, d.longitude, d.speed, d.status, d.currentTour, d.nextStop, d.nextLat, d.nextLng, d.nextStopDistance, d.tourRemainingDistance, d.timestamp]);
+    await pool.query('INSERT INTO live_updates (uuid, driver_name, driver_photo, driver_phone, driver_email, license_plate, latitude, longitude, speed, status, current_tour, next_stop, next_lat, next_lng, next_stop_dist, tour_remaining_dist, depot_name, depot_lat, depot_lng, timestamp) VALUES (COALESCE($1, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)',
+        [d.uuid || null, d.driverName, d.driverPhoto, d.driverPhone, d.driverEmail, d.licensePlate, d.latitude, d.longitude, d.speed, d.status, d.currentTour, d.nextStop, d.nextLat, d.nextLng, d.nextStopDistance, d.tourRemainingDistance, d.depotName, d.depotLat, d.depotLng, d.timestamp]);
 
     if (d.currentTour) {
         const tourRes = await pool.query('SELECT * FROM tours WHERE (name = $1 OR uuid::text = $1) AND driver_name = $2 AND is_closed = FALSE', [d.currentTour, d.driverName]);
         if (tourRes.rows.length > 0) {
             const tour = tourRes.rows[0];
-            if (tour.depot_lat && tour.depot_lng) {
+            const depotLat = d.depotLat;
+            const depotLng = d.depotLng;
+            if (depotLat && depotLng) {
                 const stopsRes = await pool.query('SELECT * FROM stops WHERE tour_id = $1 AND is_completed = FALSE AND deleted_at IS NULL', [tour.id]);
                 if (stopsRes.rows.length === 0) {
-                    const distToDepot = getDistance(d.latitude, d.longitude, tour.depot_lat, tour.depot_lng);
+                    const distToDepot = getDistance(d.latitude, d.longitude, depotLat, depotLng);
                     if (distToDepot < 100) {
                         await pool.query('UPDATE tours SET is_closed = TRUE, is_current = FALSE, updated_at = $1 WHERE id = $2', [Date.now(), tour.id]);
                     }
@@ -514,7 +519,7 @@ app.get('/driver/:name', async (req, res) => {
     const hotelsRes = await pool.query(`
         SELECT name, address, timestamp FROM hotels WHERE driver_name = $1
         UNION ALL
-        SELECT recipient as name, address_full as address, arrival_time as timestamp FROM stops
+        SELECT COALESCE(recipient, address_full) as name, address_full as address, COALESCE(arrival_time, (SELECT date FROM tours WHERE id = tour_id)) as timestamp FROM stops
         WHERE tour_id IN (SELECT id FROM tours WHERE driver_name = $1) AND stop_type = 'HOTEL'
         ORDER BY timestamp DESC
     `, [name]);
@@ -526,8 +531,7 @@ app.get('/driver/:name', async (req, res) => {
     if (!currentTour && toursRes.rows.length > 0) {
         currentTour = toursRes.rows[0]; // Pick the latest one as fallback
     }
-    const stopsData = currentTour ? currentTour.stops : [];
-    const depotData = currentTour ? { name: currentTour.depot_name || 'Depó', lat: currentTour.depot_lat, lng: currentTour.depot_lng } : null;
+    const stopsData = currentTour ? (currentTour.stops || []).filter(s => !s.is_completed) : [];
     const d = update.rows[0] || { driver_name: name };
 
     res.send(`<html><head><title>ERP - ${name}</title>
@@ -753,10 +757,12 @@ app.get('/driver/:name', async (req, res) => {
                     driverMarker.setLatLng(currentDriverPos);
                     const currentTour = data.tours.find(t => t.is_current) || data.tours[0];
                     if (currentTour) {
-                        const newStops = currentTour.stops || [];
-                        if (JSON.stringify(newStops) !== JSON.stringify(currentStops) || JSON.stringify(currentTour.depot_lat) !== JSON.stringify(currentDepot?.lat)) {
+                        const newStops = (currentTour.stops || []).filter(s => !s.is_completed);
+                        const depotChanged = JSON.stringify(d.depot_lat) !== JSON.stringify(currentDepot?.lat);
+
+                        if (JSON.stringify(newStops) !== JSON.stringify(currentStops) || depotChanged) {
                             currentStops = newStops;
-                            currentDepot = currentTour ? { name: currentTour.depot_name, lat: currentTour.depot_lat, lng: currentTour.depot_lng } : null;
+                            currentDepot = d.depot_lat ? { name: d.depot_name, lat: d.depot_lat, lng: d.depot_lng } : null;
                             updateRoute();
                         }
                     }
