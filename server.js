@@ -137,26 +137,35 @@ app.post('/api/sync-tours/:driverName', async (req, res) => {
 
             let tourId;
             if (t.uuid) {
-                const resT = await pool.query(`
-                    INSERT INTO tours (uuid, driver_name, name, customer, date, day_of_week, notes, is_closed, is_current)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-                    ON CONFLICT (uuid) DO UPDATE SET
-                        name = EXCLUDED.name,
-                        customer = EXCLUDED.customer,
-                        date = EXCLUDED.date,
-                        day_of_week = EXCLUDED.day_of_week,
-                        notes = EXCLUDED.notes,
-                        is_closed = EXCLUDED.is_closed,
-                        is_current = EXCLUDED.is_current
-                    RETURNING id
-                `, [t.uuid, driverName, t.name || 'Túra', t.customer || '', t.date || Date.now(), t.dayOfWeek || '', t.notes || '', !!t.isClosed, !!t.isCurrent]);
-                tourId = resT.rows[0].id;
+                const existing = await pool.query('SELECT id, updated_at FROM tours WHERE uuid = $1', [t.uuid]);
+                if (existing.rows.length > 0) {
+                    const dbTour = existing.rows[0];
+                    tourId = dbTour.id;
+                    const incomingUpdatedAt = Number(t.updatedAt || t.updated_at || 0);
+                    const dbUpdatedAt = Number(dbTour.updated_at || 0);
+
+                    if (incomingUpdatedAt > dbUpdatedAt) {
+                        await pool.query(`
+                            UPDATE tours SET
+                                name = $1, customer = $2, date = $3, day_of_week = $4,
+                                notes = $5, is_closed = $6, is_current = $7, updated_at = $8
+                            WHERE id = $9
+                        `, [t.name || 'Túra', t.customer || '', t.date || Date.now(), t.dayOfWeek || '', t.notes || '', !!t.isClosed, !!t.isCurrent, incomingUpdatedAt, tourId]);
+                    }
+                } else {
+                    const resT = await pool.query(`
+                        INSERT INTO tours (uuid, driver_name, name, customer, date, day_of_week, notes, is_closed, is_current, updated_at)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                        RETURNING id
+                    `, [t.uuid, driverName, t.name || 'Túra', t.customer || '', t.date || Date.now(), t.dayOfWeek || '', t.notes || '', !!t.isClosed, !!t.isCurrent, Number(t.updatedAt || t.updated_at || Date.now())]);
+                    tourId = resT.rows[0].id;
+                }
             } else {
                 const resT = await pool.query(`
-                    INSERT INTO tours (driver_name, name, customer, date, day_of_week, notes, is_closed, is_current)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                    INSERT INTO tours (driver_name, name, customer, date, day_of_week, notes, is_closed, is_current, updated_at)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
                     RETURNING id
-                `, [driverName, t.name || 'Túra', t.customer || '', t.date || Date.now(), t.dayOfWeek || '', t.notes || '', !!t.isClosed, !!t.isCurrent]);
+                `, [driverName, t.name || 'Túra', t.customer || '', t.date || Date.now(), t.dayOfWeek || '', t.notes || '', !!t.isClosed, !!t.isCurrent, Date.now()]);
                 tourId = resT.rows[0].id;
             }
 
@@ -169,60 +178,70 @@ app.post('/api/sync-tours/:driverName', async (req, res) => {
                         }
                         continue;
                     }
-                    const stopFields = [
-                        s.uuid || null,
-                        tourId,
-                        s.address || '',
-                        s.recipient || '',
-                        s.street || '',
-                        s.houseNumber || s.house_number || '',
-                        s.postalCode || s.postal_code || '',
-                        s.city || '',
-                        s.addressFull || s.address_full || '',
-                        s.contactName || s.contact_name || '',
-                        s.phoneNumber || s.phone_number || '',
-                        s.email || '',
-                        s.timeWindow || s.time_window || '',
-                        s.notes || '',
-                        s.alternativeNames || s.alternative_names || null,
-                        s.orderIndex !== undefined ? s.orderIndex : (s.order_index || 0),
-                        s.latitude !== undefined ? s.latitude : (s.latitude_gps || null),
-                        s.longitude !== undefined ? s.longitude : (s.longitude_gps || null),
-                        s.isCompleted !== undefined ? !!s.isCompleted : (!!s.is_completed),
-                        s.arrivalTime || s.arrival_time || null
-                    ];
+
+                    const incomingUpdatedAt = Number(s.updatedAt || s.updated_at || Date.now());
+
                     if (s.uuid) {
-                        await pool.query(`
-                            INSERT INTO stops (uuid, tour_id, address, recipient, street, house_number, postal_code, city, address_full, contact_name, phone_number, email, time_window, notes, alternative_names, order_index, latitude, longitude, is_completed, arrival_time, updated_at)
-                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, ${Date.now()})
-                            ON CONFLICT (uuid) DO UPDATE SET
-                                tour_id = EXCLUDED.tour_id,
-                                address = COALESCE(EXCLUDED.address, stops.address),
-                                recipient = COALESCE(EXCLUDED.recipient, stops.recipient),
-                                street = COALESCE(EXCLUDED.street, stops.street),
-                                house_number = COALESCE(EXCLUDED.house_number, stops.house_number),
-                                postal_code = COALESCE(EXCLUDED.postal_code, stops.postal_code),
-                                city = COALESCE(EXCLUDED.city, stops.city),
-                                address_full = COALESCE(EXCLUDED.address_full, stops.address_full),
-                                contact_name = COALESCE(EXCLUDED.contact_name, stops.contact_name),
-                                phone_number = COALESCE(EXCLUDED.phone_number, stops.phone_number),
-                                email = COALESCE(EXCLUDED.email, stops.email),
-                                time_window = COALESCE(EXCLUDED.time_window, stops.time_window),
-                                notes = COALESCE(EXCLUDED.notes, stops.notes),
-                                alternative_names = COALESCE(EXCLUDED.alternative_names, stops.alternative_names),
-                                order_index = EXCLUDED.order_index,
-                                latitude = COALESCE(EXCLUDED.latitude, stops.latitude),
-                                longitude = COALESCE(EXCLUDED.longitude, stops.longitude),
-                                is_completed = COALESCE(EXCLUDED.is_completed, stops.is_completed),
-                                arrival_time = COALESCE(EXCLUDED.arrival_time, stops.arrival_time),
-                                updated_at = EXCLUDED.updated_at
-                        `, stopFields);
+                        const existingStop = await pool.query('SELECT id, updated_at FROM stops WHERE uuid = $1', [s.uuid]);
+                        if (existingStop.rows.length > 0) {
+                            const dbStop = existingStop.rows[0];
+                            const dbUpdatedAt = Number(dbStop.updated_at || 0);
+
+                            if (incomingUpdatedAt > dbUpdatedAt) {
+                                await pool.query(`
+                                    UPDATE stops SET
+                                        tour_id = $1, address = $2, recipient = $3, street = $4, house_number = $5,
+                                        postal_code = $6, city = $7, address_full = $8, contact_name = $9,
+                                        phone_number = $10, email = $11, time_window = $12, notes = $13,
+                                        alternative_names = $14, order_index = $15, latitude = $16,
+                                        longitude = $17, is_completed = $18, arrival_time = $19, updated_at = $20
+                                    WHERE uuid = $21
+                                `, [
+                                    tourId, s.address || '', s.recipient || '', s.street || '', s.houseNumber || s.house_number || '',
+                                    s.postalCode || s.postal_code || '', s.city || '', s.addressFull || s.address_full || '',
+                                    s.contactName || s.contact_name || '', s.phoneNumber || s.phone_number || '', s.email || '',
+                                    s.timeWindow || s.time_window || '', s.notes || '', s.alternativeNames || s.alternative_names || null,
+                                    s.orderIndex !== undefined ? s.orderIndex : (s.order_index || 0),
+                                    s.latitude !== undefined ? s.latitude : (s.latitude_gps || null),
+                                    s.longitude !== undefined ? s.longitude : (s.longitude_gps || null),
+                                    s.isCompleted !== undefined ? !!s.isCompleted : (!!s.is_completed),
+                                    s.arrivalTime || s.arrival_time || null, incomingUpdatedAt, s.uuid
+                                ]);
+                            }
+                        } else {
+                            await pool.query(`
+                                INSERT INTO stops (uuid, tour_id, address, recipient, street, house_number, postal_code, city, address_full, contact_name, phone_number, email, time_window, notes, alternative_names, order_index, latitude, longitude, is_completed, arrival_time, updated_at)
+                                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
+                            `, [
+                                s.uuid, tourId, s.address || '', s.recipient || '', s.street || '', s.houseNumber || s.house_number || '',
+                                s.postalCode || s.postal_code || '', s.city || '', s.addressFull || s.address_full || '',
+                                s.contactName || s.contact_name || '', s.phoneNumber || s.phone_number || '', s.email || '',
+                                s.timeWindow || s.time_window || '', s.notes || '', s.alternativeNames || s.alternative_names || null,
+                                s.orderIndex !== undefined ? s.orderIndex : (s.order_index || 0),
+                                s.latitude !== undefined ? s.latitude : (s.latitude_gps || null),
+                                s.longitude !== undefined ? s.longitude : (s.longitude_gps || null),
+                                s.isCompleted !== undefined ? !!s.isCompleted : (!!s.is_completed),
+                                s.arrivalTime || s.arrival_time || null, incomingUpdatedAt
+                            ]);
+                        }
                     } else {
                         await pool.query(`
                             INSERT INTO stops (tour_id, address, recipient, street, house_number, postal_code, city, address_full, contact_name, phone_number, email, time_window, notes, alternative_names, order_index, latitude, longitude, is_completed, arrival_time, updated_at)
-                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, ${Date.now()})
-                        `, stopFields.slice(1));
+                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+                        `, [
+                            tourId, s.address || '', s.recipient || '', s.street || '', s.houseNumber || s.house_number || '',
+                            s.postalCode || s.postal_code || '', s.city || '', s.addressFull || s.address_full || '',
+                            s.contactName || s.contact_name || '', s.phoneNumber || s.phone_number || '', s.email || '',
+                            s.timeWindow || s.time_window || '', s.notes || '', s.alternativeNames || s.alternative_names || null,
+                            s.orderIndex !== undefined ? s.orderIndex : (s.order_index || 0),
+                            s.latitude !== undefined ? s.latitude : (s.latitude_gps || null),
+                            s.longitude !== undefined ? s.longitude : (s.longitude_gps || null),
+                            s.isCompleted !== undefined ? !!s.isCompleted : (!!s.is_completed),
+                            s.arrivalTime || s.arrival_time || null, incomingUpdatedAt
+                        ]);
                     }
+                }
+            }
                 }
             }
         }
