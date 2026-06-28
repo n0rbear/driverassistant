@@ -242,8 +242,6 @@ app.post('/api/sync-tours/:driverName', async (req, res) => {
                     }
                 }
             }
-                }
-            }
         }
 
         await pool.query('COMMIT');
