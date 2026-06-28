@@ -464,7 +464,10 @@ app.get('/driver/:name', async (req, res) => {
         const stopsRes = await pool.query('SELECT * FROM stops WHERE tour_id = $1 AND deleted_at IS NULL ORDER BY order_index ASC', [tour.id]);
         tour.stops = stopsRes.rows;
     }
-    const currentTour = toursRes.rows.find(t => t.is_current);
+    let currentTour = toursRes.rows.find(t => t.is_current);
+    if (!currentTour && toursRes.rows.length > 0) {
+        currentTour = toursRes.rows[0]; // Pick the latest one as fallback
+    }
     const stopsData = currentTour ? currentTour.stops : [];
     const depotData = currentTour ? { name: currentTour.depot_name || 'Depó', lat: currentTour.depot_lat, lng: currentTour.depot_lng } : null;
     const d = update.rows[0] || { driver_name: name };
@@ -621,9 +624,7 @@ app.get('/driver/:name', async (req, res) => {
             const tourStops = ${JSON.stringify(stopsData)};
             const tourDepot = ${JSON.stringify(depotData)};
             async function updateRoute() {
-                console.log('updateRoute called with', tourStops.length, 'stops');
                 const incomplete = tourStops.filter(s => !s.is_completed && s.latitude && s.longitude);
-                console.log('Incomplete stops:', incomplete.length);
                 if (incomplete.length === 0) return;
 
                 // 1. Distance to NEXT STOP
@@ -631,11 +632,9 @@ app.get('/driver/:name', async (req, res) => {
                 const nextCoords = [[${d.longitude || 19.0}, ${d.latitude || 47.5}], [nextStop.longitude, nextStop.latitude]];
                 const nextUrl = \`https://router.project-osrm.org/route/v1/driving/\` + nextCoords.map(c => c.join(',')).join(';') + \`?overview=false\`;
 
-                console.log('Fetching next stop from:', nextUrl);
                 try {
                     const resNext = await fetch(nextUrl);
                     const dataNext = await resNext.json();
-                    console.log('Next stop OSRM response:', dataNext.code);
                     if (dataNext.routes && dataNext.routes[0]) {
                         document.getElementById('nextDistBox').innerText = '📍 Következő megálló: ' + (dataNext.routes[0].distance / 1000).toFixed(1) + ' km';
                     }
@@ -649,11 +648,9 @@ app.get('/driver/:name', async (req, res) => {
 
                 const totalUrl = \`https://router.project-osrm.org/route/v1/driving/\` + totalCoords.map(c => c.join(',')).join(';') + \`?overview=full&geometries=geojson\`;
 
-                console.log('Fetching total route from:', totalUrl);
                 try {
                     const resTotal = await fetch(totalUrl);
                     const dataTotal = await resTotal.json();
-                    console.log('Total route OSRM response:', dataTotal.code);
                     if (dataTotal.routes && dataTotal.routes[0]) {
                         const route = dataTotal.routes[0];
                         L.geoJSON(route.geometry, { style: { color: '#3498db', weight: 5, opacity: 0.7 } }).addTo(map);
