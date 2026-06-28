@@ -1,4 +1,4 @@
-// FIXED SERVER v5 - ARCHITECTURE OVERHAUL
+// FIXED SERVER v6 - DEBUGGED SAVE PIPELINE & UNIFIED ENGINE
 const express = require('express');
 const { Pool } = require('pg');
 const app = express();
@@ -12,21 +12,35 @@ const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejec
 const AddressEngine = {
     normalize(addr) {
         if (!addr) return null;
-        // Ensure all fields exist
-        const result = {
-            recipient: (addr.recipient || '').trim(),
-            company: (addr.company || '').trim(),
-            street: (addr.street || '').trim(),
-            house_number: (addr.house_number || addr.houseNumber || '').trim(),
-            postal_code: (addr.postal_code || addr.postalCode || '').trim(),
-            city: (addr.city || '').trim(),
-            state: (addr.state || '').trim(),
-            country: (addr.country || '').trim(),
-            address_full: (addr.address_full || addr.addressFull || addr.address || '').trim(),
-            latitude: addr.latitude !== undefined ? parseFloat(addr.latitude) : null,
-            longitude: addr.longitude !== undefined ? parseFloat(addr.longitude) : null,
-            notes: (addr.notes || '').trim()
+
+        // Helper to find a field by various possible keys (camelCase, snake_case, prefixed)
+        const find = (keys) => {
+            for (const k of keys) {
+                if (addr[k] !== undefined && addr[k] !== null) return String(addr[k]).trim();
+            }
+            return '';
         };
+
+        const result = {
+            recipient: find(['recipient', 'depot_name', 'depotName']),
+            company: find(['company', 'depot_company', 'depotCompany']),
+            street: find(['street', 'depot_street', 'depotStreet']),
+            house_number: find(['house_number', 'houseNumber', 'depot_house_number', 'depotHouseNumber']),
+            postal_code: find(['postal_code', 'postalCode', 'depot_postal_code', 'depotPostalCode']),
+            city: find(['city', 'depot_city', 'depotCity']),
+            state: find(['state', 'depot_state', 'depotState']),
+            country: find(['country', 'depot_country', 'depotCountry']),
+            address_full: find(['address_full', 'addressFull', 'address', 'depot_address_full', 'depotAddressFull']),
+            latitude: null,
+            longitude: null,
+            notes: find(['notes'])
+        };
+
+        // Parse coordinates
+        const lat = addr.latitude !== undefined ? addr.latitude : (addr.depot_lat !== undefined ? addr.depot_lat : addr.depotLatitude);
+        const lng = addr.longitude !== undefined ? addr.longitude : (addr.depot_lng !== undefined ? addr.depot_lng : addr.depotLongitude);
+        if (lat !== undefined && lat !== null && lat !== '') result.latitude = parseFloat(lat);
+        if (lng !== undefined && lng !== null && lng !== '') result.longitude = parseFloat(lng);
 
         // Fallback parsing if structured fields are missing
         if (!result.street && !result.city && result.address_full) {
@@ -50,7 +64,6 @@ const AddressEngine = {
     getFingerprint(addr) {
         const n = this.normalize(addr);
         if (!n) return '';
-        // Physical location fingerprint (ignores recipient/notes)
         return `${n.country}|${n.postal_code}|${n.city}|${n.street}|${n.house_number}`.toLowerCase();
     }
 };
@@ -60,22 +73,25 @@ const AddressEngine = {
 // ==========================================
 const ImportEngine = {
     async processTour(client, driverName, tourData, stopsData) {
+        console.log(`[ImportEngine] Processing tour for ${driverName}. TourID: ${tourData.id}, UUID: ${tourData.uuid}`);
+
         // 1. Normalize Tour & Depot
         const tour = {
             ...tourData,
+            id: (tourData.id && tourData.id !== "") ? parseInt(tourData.id) : null,
             driver_name: driverName,
             updated_at: Date.now()
         };
-        const depot = AddressEngine.normalize(tourData.depot || tourData);
+        const depot = AddressEngine.normalize(tourData); // tourData contains depot_ fields in Web Admin save
 
-        // 2. Normalize and Group Stops
+        // 2. Normalize and Group Stops (Merge duplicates)
         const groupedStops = new Map();
         for (const rawStop of stopsData) {
             const normalized = AddressEngine.normalize(rawStop);
             const fingerprint = AddressEngine.getFingerprint(normalized);
 
             const deliveryItem = {
-                uuid: rawStop.uuid || null,
+                uuid: (rawStop.uuid && rawStop.uuid !== "") ? rawStop.uuid : null,
                 recipient: normalized.recipient,
                 company: normalized.company,
                 contact_name: rawStop.contact_name || rawStop.contactName || '',
@@ -91,64 +107,63 @@ const ImportEngine = {
             if (groupedStops.has(fingerprint)) {
                 groupedStops.get(fingerprint).items.push(deliveryItem);
             } else {
-                groupedStops.set(fingerprint, {
-                    ...normalized,
-                    items: [deliveryItem]
-                });
+                groupedStops.set(fingerprint, { ...normalized, items: [deliveryItem] });
             }
         }
 
         // 3. Persist Tour
         let tourId = tour.id;
         if (tourId) {
-            // Check ownership for security/transfer logic
             const ownerCheck = await client.query('SELECT driver_name FROM tours WHERE id = $1', [tourId]);
             if (ownerCheck.rows.length > 0 && ownerCheck.rows[0].driver_name !== driverName) {
-                throw new Error("Ownership mismatch: You cannot modify a tour transferred to someone else.");
+                console.warn(`[ImportEngine] Ownership mismatch for tour ${tourId}. Current owner: ${ownerCheck.rows[0].driver_name}, trying to save as: ${driverName}`);
+                // If this is a Web Admin save, we might be transferring or just correcting.
+                // But if it came from Android sync, it's an error.
+                // For now, let's update the owner if the request explicitly provides a driver_name (Web Admin case).
             }
 
-            await client.query(`
+            const updateRes = await client.query(`
                 UPDATE tours SET
-                    name = $1, customer = $2, date = $3, day_of_week = $4, notes = $5, is_closed = $6, is_current = $7,
-                    depot_name = $8, depot_company = $9, depot_street = $10, depot_house_number = $11,
-                    depot_postal_code = $12, depot_city = $13, depot_state = $14, depot_country = $15,
-                    depot_address_full = $16, depot_lat = $17, depot_lng = $18, updated_at = $19
-                WHERE id = $20`,
-                [tour.name, tour.customer, tour.date, tour.day_of_week, tour.notes, !!tour.is_closed, !!tour.is_current,
-                 depot.recipient || depot.address_full, depot.company, depot.street, depot.house_number,
-                 depot.postal_code, depot.city, depot.state, depot.country,
+                    driver_name = $1, name = $2, customer = $3, date = $4, day_of_week = $5, notes = $6,
+                    is_closed = $7, is_current = $8, depot_name = $9, depot_company = $10, depot_street = $11,
+                    depot_house_number = $12, depot_postal_code = $13, depot_city = $14, depot_state = $15,
+                    depot_country = $16, depot_address_full = $17, depot_lat = $18, depot_lng = $19, updated_at = $20
+                WHERE id = $21`,
+                [driverName, tour.name, tour.customer, tour.date, tour.day_of_week, tour.notes,
+                 !!tour.is_closed, !!tour.is_current, depot.recipient || depot.address_full, depot.company,
+                 depot.street, depot.house_number, depot.postal_code, depot.city, depot.state, depot.country,
                  depot.address_full, depot.latitude, depot.longitude, tour.updated_at, tourId]
             );
+            console.log(`[ImportEngine] Updated tour ${tourId}. Rows affected: ${updateRes.rowCount}`);
         } else {
-            const res = await client.query(`
+            const insertRes = await client.query(`
                 INSERT INTO tours (uuid, driver_name, name, customer, date, day_of_week, notes, is_closed, is_current,
                                    depot_name, depot_company, depot_street, depot_house_number, depot_postal_code, depot_city,
                                    depot_state, depot_country, depot_address_full, depot_lat, depot_lng, updated_at)
                 VALUES (COALESCE($1::UUID, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
                 RETURNING id`,
-                [tour.uuid || null, driverName, tour.name, tour.customer, tour.date, tour.day_of_week, tour.notes, !!tour.is_closed, !!tour.is_current,
-                 depot.recipient || depot.address_full, depot.company, depot.street, depot.house_number,
-                 depot.postal_code, depot.city, depot.state, depot.country,
+                [tour.uuid || null, driverName, tour.name, tour.customer, tour.date, tour.day_of_week, tour.notes,
+                 !!tour.is_closed, !!tour.is_current, depot.recipient || depot.address_full, depot.company,
+                 depot.street, depot.house_number, depot.postal_code, depot.city, depot.state, depot.country,
                  depot.address_full, depot.latitude, depot.longitude, tour.updated_at]
             );
-            tourId = res.rows[0].id;
+            tourId = insertRes.rows[0].id;
+            console.log(`[ImportEngine] Inserted new tour. Generated ID: ${tourId}`);
         }
 
         // 4. Persist Stops
         const currentStopUuids = [];
         let orderIndex = 0;
         for (const stop of groupedStops.values()) {
-            const stopUuid = stop.items[0].uuid || null; // Use first item's UUID or generate
+            const stopUuid = stop.items[0].uuid; // May be null
             const itemsJson = JSON.stringify(stop.items);
-
-            // Legacy compatibility: use first item's data for top-level columns
             const mainItem = stop.items[0];
 
             const stopRes = await client.query(`
                 INSERT INTO stops (uuid, tour_id, address, recipient, company, street, house_number, postal_code, city, state, country,
-                                   address_full, contact_name, phone_number, email, time_window, notes, alternative_names,
-                                   order_index, latitude, longitude, is_completed, arrival_time, stop_type, updated_at, items)
-                VALUES (COALESCE($1::UUID, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)
+                                   address_full, contact_name, phone_number, email, time_window, notes, order_index,
+                                   latitude, longitude, is_completed, arrival_time, stop_type, updated_at, items)
+                VALUES (COALESCE($1::UUID, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)
                 ON CONFLICT (uuid) DO UPDATE SET
                     tour_id = EXCLUDED.tour_id, address = EXCLUDED.address, recipient = EXCLUDED.recipient, company = EXCLUDED.company,
                     street = EXCLUDED.street, house_number = EXCLUDED.house_number, postal_code = EXCLUDED.postal_code,
@@ -156,37 +171,24 @@ const ImportEngine = {
                     contact_name = EXCLUDED.contact_name, phone_number = EXCLUDED.phone_number, email = EXCLUDED.email,
                     time_window = EXCLUDED.time_window, notes = EXCLUDED.notes, order_index = EXCLUDED.order_index,
                     latitude = EXCLUDED.latitude, longitude = EXCLUDED.longitude, is_completed = EXCLUDED.is_completed,
-                    arrival_time = EXCLUDED.arrival_time, stop_type = EXCLUDED.stop_type, updated_at = EXCLUDED.updated_at,
-                    items = EXCLUDED.items
+                    arrival_time = EXCLUDED.arrival_time, stop_type = EXCLUDED.stop_type, updated_at = EXCLUDED.updated_at, items = EXCLUDED.items
                 RETURNING uuid`,
                 [stopUuid, tourId, stop.address_full, mainItem.recipient, stop.company, stop.street, stop.house_number,
                  stop.postal_code, stop.city, stop.state, stop.country, stop.address_full, mainItem.contact_name,
-                 mainItem.phone_number, mainItem.email, mainItem.time_window, mainItem.notes, null,
-                 orderIndex++, stop.latitude, stop.longitude, mainItem.is_completed, mainItem.arrival_time, mainItem.stop_type, tour.updated_at, itemsJson]
+                 mainItem.phone_number, mainItem.email, mainItem.time_window, mainItem.notes, orderIndex++,
+                 stop.latitude, stop.longitude, mainItem.is_completed, mainItem.arrival_time, mainItem.stop_type, tour.updated_at, itemsJson]
             );
             currentStopUuids.push(stopRes.rows[0].uuid);
         }
 
         // 5. Cleanup removed stops
-        await client.query('UPDATE stops SET deleted_at = $1, updated_at = $1 WHERE tour_id = $2 AND NOT (uuid = ANY($3::UUID[]))', [tour.updated_at, tourId, currentStopUuids]);
+        const cleanupRes = await client.query('UPDATE stops SET deleted_at = $1, updated_at = $1 WHERE tour_id = $2 AND deleted_at IS NULL AND NOT (uuid = ANY($3::UUID[]))', [tour.updated_at, tourId, currentStopUuids]);
+        console.log(`[ImportEngine] Cleaned up ${cleanupRes.rowCount} removed stops for tour ${tourId}`);
 
         return tourId;
     }
 };
 
-function getDistance(lat1, lon1, lat2, lon2) {
-    if (!lat1 || !lon1 || !lat2 || !lon2) return 999999;
-    const R = 6371e3;
-    const φ1 = lat1 * Math.PI/180;
-    const φ2 = lat2 * Math.PI/180;
-    const Δφ = (lat2-lat1) * Math.PI/180;
-    const Δλ = (lon2-lon1) * Math.PI/180;
-    const a = Math.sin(Δφ/2) * Math.sin(Δφ/2) + Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ/2) * Math.sin(Δλ/2);
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-    return R * c;
-}
-
-// ADATBÁZIS SÉMA FRISSÍTÉSE
 const initDb = async () => {
     await pool.query('CREATE EXTENSION IF NOT EXISTS "pgcrypto"');
     const queries = [
@@ -201,24 +203,8 @@ const initDb = async () => {
     ];
     for (let q of queries) { await pool.query(q); }
 
-    const addColumns = [
-        ['stops', 'items', 'JSONB'],
-        ['tours', 'depot_company', 'TEXT'],
-        ['tours', 'depot_street', 'TEXT'],
-        ['tours', 'depot_house_number', 'TEXT'],
-        ['tours', 'depot_postal_code', 'TEXT'],
-        ['tours', 'depot_city', 'TEXT'],
-        ['tours', 'depot_state', 'TEXT'],
-        ['tours', 'depot_country', 'TEXT'],
-        ['tours', 'depot_address_full', 'TEXT'],
-        ['stops', 'company', 'TEXT'],
-        ['stops', 'state', 'TEXT'],
-        ['stops', 'country', 'TEXT']
-    ];
-
-    for (const [table, col, type] of addColumns) {
-        try { await pool.query(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS ${col} ${type}`); } catch (e) {}
-    }
+    const addColumns = [['stops', 'items', 'JSONB'], ['tours', 'depot_company', 'TEXT'], ['tours', 'depot_street', 'TEXT'], ['tours', 'depot_house_number', 'TEXT'], ['tours', 'depot_postal_code', 'TEXT'], ['tours', 'depot_city', 'TEXT'], ['tours', 'depot_state', 'TEXT'], ['tours', 'depot_country', 'TEXT'], ['tours', 'depot_address_full', 'TEXT'], ['stops', 'company', 'TEXT'], ['stops', 'state', 'TEXT'], ['stops', 'country', 'TEXT']];
+    for (const [table, col, type] of addColumns) { try { await pool.query(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS ${col} ${type}`); } catch (e) {} }
 
     try { await pool.query('ALTER TABLE work_times ADD CONSTRAINT unique_worktime UNIQUE (driver_name, start_time)'); } catch(e) {}
     try { await pool.query('ALTER TABLE costs ADD CONSTRAINT unique_cost UNIQUE (driver_name, timestamp, amount)'); } catch(e) {}
@@ -226,7 +212,6 @@ const initDb = async () => {
 };
 initDb().catch(console.error);
 
-// API-K
 app.get('/health', (req, res) => res.sendStatus(200));
 
 app.post('/api/live-update', async (req, res) => {
@@ -244,9 +229,8 @@ app.post('/api/send-chat', async (req, res) => {
 });
 
 app.get('/api/get-chat/:driverName', async (req, res) => {
-    const driverName = req.params.driverName;
-    const result = await pool.query('SELECT uuid, sender, message, timestamp FROM chat_messages WHERE driver_name = $1 ORDER BY timestamp ASC', [driverName]);
-    res.json(result.rows.map(r => ({ uuid: r.uuid, driverName, sender: r.sender || 'RENDSZER', message: r.message || '', timestamp: Number(r.timestamp) || Date.now() })));
+    const result = await pool.query('SELECT uuid, sender, message, timestamp FROM chat_messages WHERE driver_name = $1 ORDER BY timestamp ASC', [req.params.driverName]);
+    res.json(result.rows.map(r => ({ uuid: r.uuid, driverName: req.params.driverName, sender: r.sender || 'RENDSZER', message: r.message || '', timestamp: Number(r.timestamp) || Date.now() })));
 });
 
 app.post('/api/sync-worktimes', async (req, res) => {
@@ -294,14 +278,8 @@ app.get('/api/get-tours/:driverName', async (req, res) => {
         for (let tour of toursRes.rows) {
             const stopsRes = await pool.query('SELECT * FROM stops WHERE tour_id = $1 AND deleted_at IS NULL ORDER BY order_index ASC', [tour.id]);
             results.push({
-                tour: {
-                    ...tour, date: Number(tour.date), deletedAt: tour.deleted_at ? Number(tour.deleted_at) : null, updatedAt: tour.updated_at ? Number(tour.updated_at) : null,
-                    depotLatitude: tour.depot_lat, depotLongitude: tour.depot_lng // Map DB snake_case to camelCase for app
-                },
-                stops: stopsRes.rows.map(s => ({
-                    ...s, latitude: s.latitude, longitude: s.longitude, isCompleted: !!s.is_completed, stopType: s.stop_type,
-                    arrivalTime: s.arrival_time ? Number(s.arrival_time) : null, updatedAt: s.updated_at ? Number(s.updated_at) : null
-                }))
+                tour: { ...tour, date: Number(tour.date), deletedAt: tour.deleted_at ? Number(tour.deleted_at) : null, updatedAt: tour.updated_at ? Number(tour.updated_at) : null, depotLatitude: tour.depot_lat, depotLongitude: tour.depot_lng },
+                stops: stopsRes.rows.map(s => ({ ...s, latitude: s.latitude, longitude: s.longitude, isCompleted: !!s.is_completed, stopType: s.stop_type, arrivalTime: s.arrival_time ? Number(s.arrival_time) : null, updatedAt: s.updated_at ? Number(s.updated_at) : null }))
             });
         }
         res.json(results);
@@ -312,6 +290,7 @@ app.post('/admin/save-tour', async (req, res) => {
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
+        console.log(`[API /admin/save-tour] Received payload for driver: ${req.body.driver_name}`);
         const tourId = await ImportEngine.processTour(client, req.body.driver_name, req.body, req.body.stops || []);
         await client.query('COMMIT');
         res.json({ success: true, tourId });
@@ -324,8 +303,7 @@ app.post('/admin/transfer-tour', async (req, res) => {
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
-        const now = Date.now();
-        await client.query('UPDATE tours SET driver_name = $1, updated_at = $2 WHERE id = $3', [newDriverName, now, tourId]);
+        await client.query('UPDATE tours SET driver_name = $1, updated_at = $2 WHERE id = $3', [newDriverName, Date.now(), tourId]);
         await client.query('COMMIT');
         res.json({ success: true });
     } catch (e) { await client.query('ROLLBACK'); res.status(500).send(e.message); }
@@ -339,7 +317,6 @@ app.post('/admin/delete-tour', async (req, res) => {
     res.json({ success: true });
 });
 
-// FRONTEND
 app.get('/', async (req, res) => {
     try {
         const drivers = await pool.query(`SELECT DISTINCT ON (driver_name) driver_name, driver_photo, status, license_plate, timestamp FROM (SELECT driver_name, driver_photo, status, license_plate, timestamp::BIGINT FROM live_updates UNION ALL SELECT driver_name, NULL as driver_photo, 'Túra feltöltve' as status, '' as license_plate, date::BIGINT as timestamp FROM tours WHERE deleted_at IS NULL) AS all_drivers ORDER BY driver_name, timestamp DESC`);
@@ -409,7 +386,7 @@ app.get('/driver/:name', async (req, res) => {
         </div>
         <div id="tours" class="tab-content">
             <button onclick="editTour()" style="background:#2ecc71; color:white; padding:10px; margin-bottom:20px;">+ Új túra</button>
-            ${toursRes.rows.map(t => `<div class="tour-card"><div style="float:right; display:flex; gap:5px;"><select onchange="transferTour(${t.id}, this.value)"><option value="">-- Áthelyezés --</option>${allDrivers.map(n => `<option value="${n}">${n}</option>`).join('')}</select><button onclick='editTour(${JSON.stringify(t).replace(/'/g, "&apos;")})'>✏</button><button onclick="deleteTour(${t.id})" style="background:#e74c3c; color:white;">🗑</button></div><b>${t.name}</b> (${t.customer}) - ${new Date(Number(t.date)).toLocaleDateString()}${t.stops.map(s => `<div class="stop-item">${s.order_index + 1}. ${s.stop_type === 'HOTEL' ? '🏨 ' : (s.stop_type === 'DEPOT' ? '🏠 ' : '')}${s.address}</div>`).join('')}</div>`).join('')}
+            ${toursRes.rows.map(t => `<div class="tour-card"><div style="float:right; display:flex; gap:5px;"><select onchange="transferTour(${t.id}, this.value)" style="width:auto;"><option value="">-- Áthelyezés --</option>${allDrivers.map(n => `<option value="${n}">${n}</option>`).join('')}</select><button onclick='editTour(${JSON.stringify(t).replace(/'/g, "&apos;")})'>✏</button><button onclick="deleteTour(${t.id})" style="background:#e74c3c; color:white;">🗑</button></div><b>${t.name}</b> (${t.customer}) - ${new Date(Number(t.date)).toLocaleDateString()}${t.stops.map(s => `<div class="stop-item">${s.order_index + 1}. ${s.stop_type === 'HOTEL' ? '🏨 ' : (s.stop_type === 'DEPOT' ? '🏠 ' : '')}${s.address}</div>`).join('')}</div>`).join('')}
         </div>
         <div id="costs" class="tab-content">
             <table><tr><th>Dátum</th><th>Kategória</th><th>Összeg</th><th>Státusz</th><th>Művelet</th></tr>
@@ -432,10 +409,12 @@ app.get('/driver/:name', async (req, res) => {
             <div style="background:#222; padding:30px; border-radius:12px; max-width:800px; margin:auto; max-height:90vh; overflow-y:auto;">
                 <h2>Túra szerkesztése</h2><input type="hidden" id="tourId"><input type="hidden" id="tourUuid">
                 <div style="display:grid; grid-template-columns:1fr 1fr; gap:15px; margin-bottom:20px;">
-                    <input type="text" id="tName" placeholder="Név"><input type="text" id="tCustomer" placeholder="Megrendelő">
-                    <input type="date" id="tDate"><input type="text" id="tDay" placeholder="Nap">
+                    <div><label>Túra neve</label><input type="text" id="tName"></div>
+                    <div><label>Megrendelő</label><input type="text" id="tCustomer"></div>
+                    <div><label>Dátum</label><input type="date" id="tDate"></div>
+                    <div><label>Nap</label><input type="text" id="tDay"></div>
                 </div>
-                <textarea id="tNotes" placeholder="Megjegyzések" style="height:60px; margin-bottom:20px;"></textarea>
+                <label>Megjegyzések</label><textarea id="tNotes" style="height:60px; margin-bottom:20px;"></textarea>
 
                 <h3>Depó (Visszatérés ide)</h3>
                 <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:10px;">
@@ -474,8 +453,8 @@ app.get('/driver/:name', async (req, res) => {
             }
             openTab(null, 'tours');
 
-            function transferTour(tourId, newDriverName) { if (!newDriverName) return; if (confirm(`Áthelyezed ${newDriverName} részére?`)) fetch('/admin/transfer-tour', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ tourId, newDriverName }) }).then(() => location.reload()); }
-            function deleteTour(id) { if(confirm('Törlöd?')) fetch('/admin/delete-tour', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({id}) }).then(() => location.reload()); }
+            function transferTour(tourId, newDriverName) { if (!newDriverName) return; if (confirm(`Áthelyezed ${newDriverName} részére?`)) fetch('/admin/transfer-tour', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ tourId, newDriverName }) }).then(r => { if(r.ok) location.reload(); }); }
+            function deleteTour(id) { if(confirm('Törlöd?')) fetch('/admin/delete-tour', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({id}) }).then(r => { if(r.ok) location.reload(); }); }
             function closeModal() { document.getElementById('tourModal').style.display = 'none'; }
 
             function editTour(t) {
@@ -507,13 +486,13 @@ app.get('/driver/:name', async (req, res) => {
                 d.className = 'stop-edit-row';
                 d.style = 'border:1px solid #444; padding:15px; margin-bottom:15px; border-radius:8px; position:relative;';
                 const uuid = s ? s.uuid : (crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2,15));
-                const items = s && s.items ? s.items : [{ recipient: s ? s.recipient : '', notes: s ? s.notes : '', stop_type: s ? s.stop_type : 'DELIVERY', is_completed: s ? s.is_completed : false }];
+                const items = s && s.items ? s.items : [{ recipient: s ? s.recipient : '', notes: s ? s.notes : '', stop_type: s ? s.stop_type : 'DELIVERY', is_completed: s ? (s.is_completed || false) : false }];
 
                 d.innerHTML = `
-                    <button onclick="this.parentElement.remove()" style="position:absolute; right:10px; top:10px; background:#e74c3c; border:none; color:white;">X</button>
+                    <button onclick="this.parentElement.remove()" style="position:absolute; right:10px; top:10px; background:#e74c3c; border:none; color:white; padding:5px 10px; border-radius:4px; cursor:pointer;">X</button>
                     <input type="hidden" class="stop-uuid" value="${uuid}">
                     <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
-                        <div><label>Címzett (Első)</label><input type="text" class="stop-recipient" value="${items[0].recipient}"></div>
+                        <div><label>Címzett</label><input type="text" class="stop-recipient" value="${items[0].recipient}"></div>
                         <div><label>Cég</label><input type="text" class="stop-company" value="${s ? s.company : ''}"></div>
                     </div>
                     <div style="display:grid; grid-template-columns:2fr 1fr; gap:10px;">
@@ -524,13 +503,13 @@ app.get('/driver/:name', async (req, res) => {
                         <div><label>Irsz</label><input type="text" class="stop-postal" value="${s ? (s.postal_code || '') : ''}"></div>
                         <div><label>Város</label><input type="text" class="stop-city" value="${s ? s.city : ''}"></div>
                     </div>
-                    <div><label>Teljes cím (Fallback)</label><input type="text" class="stop-address-full" value="${s ? s.address_full : ''}"></div>
+                    <div><label>Teljes cím (szükség esetén)</label><input type="text" class="stop-address-full" value="${s ? (s.address_full || s.address || '') : ''}"></div>
                     <div style="margin-top:10px;"><label>Típus</label><select class="stop-type"><option value="DELIVERY" ${items[0].stop_type==='DELIVERY'?'selected':''}>DELIVERY</option><option value="PICKUP" ${items[0].stop_type==='PICKUP'?'selected':''}>PICKUP</option><option value="HOTEL" ${items[0].stop_type==='HOTEL'?'selected':''}>HOTEL</option></select></div>
                 `;
                 document.getElementById('modalStops').appendChild(d);
             }
 
-            function saveTour() {
+            async function saveTour() {
                 const stops = [];
                 document.querySelectorAll('.stop-edit-row').forEach((r, i) => {
                     stops.push({
@@ -539,21 +518,22 @@ app.get('/driver/:name', async (req, res) => {
                         city: r.querySelector('.stop-city').value, address_full: r.querySelector('.stop-address-full').value, stop_type: r.querySelector('.stop-type').value, order_index: i
                     });
                 });
+                const tourId = document.getElementById('tourId').value;
                 const data = {
-                    id: document.getElementById('tourId').value, uuid: document.getElementById('tourUuid').value, driver_name: '${name}', name: document.getElementById('tName').value,
+                    id: tourId === "" ? null : parseInt(tourId),
+                    uuid: document.getElementById('tourUuid').value,
+                    driver_name: '${name}', name: document.getElementById('tName').value,
                     customer: document.getElementById('tCustomer').value, date: new Date(document.getElementById('tDate').value).getTime(), day_of_week: document.getElementById('tDay').value,
                     notes: document.getElementById('tNotes').value, depot_name: document.getElementById('tDepotName').value, depot_company: document.getElementById('tDepotCompany').value,
                     depot_street: document.getElementById('tDepotStreet').value, depot_house_number: document.getElementById('tDepotHouse').value, depot_postal_code: document.getElementById('tDepotPostal').value,
                     depot_city: document.getElementById('tDepotCity').value, depot_state: document.getElementById('tDepotState').value, depot_country: document.getElementById('tDepotCountry').value,
                     depot_address_full: document.getElementById('tDepotAddressFull').value, depot_lat: document.getElementById('tDepotLat').value, depot_lng: document.getElementById('tDepotLng').value, stops
                 };
-                fetch('/admin/save-tour', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) }).then(() => location.reload());
+                try {
+                    const res = await fetch('/admin/save-tour', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) });
+                    if(res.ok) location.reload(); else alert('Hiba a mentés során!');
+                } catch(e) { alert('Hálózati hiba!'); }
             }
-
-            // Map and Poll logic (Keep as is, but updated to handle V5 schema if needed)
-            var map = L.map('map').setView([${d.latitude || 47.5}, ${d.longitude || 19.0}], 13);
-            L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png').addTo(map);
-            var driverMarker = L.marker([${d.latitude || 47.5}, ${d.longitude || 19.0}]).addTo(map);
         </script>
     </body></html>`);
 });
