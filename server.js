@@ -1,4 +1,4 @@
-// FIXED SERVER v7 - DEBUGGED ID LIFECYCLE & SAVE PIPELINE
+// FIXED SERVER v8 - BUGFIXED ID PARSING & STOP PERSISTENCE
 const express = require('express');
 const { Pool } = require('pg');
 const app = express();
@@ -69,16 +69,15 @@ const AddressEngine = {
 // ==========================================
 const ImportEngine = {
     async processTour(client, driverName, tourData, stopsData) {
-        // --- DEBUG LOG START ---
-        console.log(`[ID-TRACE] 1. Backend received ID: ${tourData.id} (Type: ${typeof tourData.id})`);
-
-        // Correct ID parsing
+        // Robust ID parsing
         let tourId = null;
-        if (tourData.id !== undefined && tourData.id !== null && tourData.id !== "") {
-            tourId = parseInt(tourData.id);
+        const rawId = tourData.id;
+        if (rawId !== undefined && rawId !== null && rawId !== "" && rawId !== "null") {
+            tourId = parseInt(rawId);
+            if (isNaN(tourId)) tourId = null;
         }
-        console.log(`[ID-TRACE] 2. Parsed TourID: ${tourId}`);
-        // --- DEBUG LOG END ---
+
+        console.log(`[ImportEngine] Driver: ${driverName}, ID: ${tourId}, UUID: ${tourData.uuid}`);
 
         const tour = {
             ...tourData,
@@ -88,14 +87,14 @@ const ImportEngine = {
         };
 
         const depot = AddressEngine.normalize(tourData);
-
         const groupedStops = new Map();
+
         for (const rawStop of stopsData) {
             const normalized = AddressEngine.normalize(rawStop);
             const fingerprint = AddressEngine.getFingerprint(normalized);
 
             const deliveryItem = {
-                uuid: (rawStop.uuid && rawStop.uuid !== "") ? rawStop.uuid : null,
+                uuid: (rawStop.uuid && rawStop.uuid !== "") ? String(rawStop.uuid) : null,
                 recipient: normalized.recipient,
                 company: normalized.company,
                 contact_name: rawStop.contact_name || rawStop.contactName || '',
@@ -116,8 +115,7 @@ const ImportEngine = {
         }
 
         if (tourId) {
-            console.log(`[ID-TRACE] 3. Executing UPDATE for TourID: ${tourId}`);
-            const updateRes = await client.query(`
+            await client.query(`
                 UPDATE tours SET
                     driver_name = $1, name = $2, customer = $3, date = $4, day_of_week = $5, notes = $6,
                     is_closed = $7, is_current = $8, depot_name = $9, depot_company = $10, depot_street = $11,
@@ -129,14 +127,7 @@ const ImportEngine = {
                  depot.street, depot.house_number, depot.postal_code, depot.city, depot.state, depot.country,
                  depot.address_full, depot.latitude, depot.longitude, tour.updated_at, tourId]
             );
-            console.log(`[ID-TRACE] 4. Update complete. Rows affected: ${updateRes.rowCount}`);
-
-            if (updateRes.rowCount === 0) {
-                console.error(`[ID-TRACE] !! FATAL !! Update failed for TourID ${tourId}. Record might not exist.`);
-                // Fallback to insert if update failed (though should not happen if ID was valid)
-            }
         } else {
-            console.log(`[ID-TRACE] 3. Executing INSERT for new tour`);
             const insertRes = await client.query(`
                 INSERT INTO tours (uuid, driver_name, name, customer, date, day_of_week, notes, is_closed, is_current,
                                    depot_name, depot_company, depot_street, depot_house_number, depot_postal_code, depot_city,
@@ -149,13 +140,12 @@ const ImportEngine = {
                  depot.address_full, depot.latitude, depot.longitude, tour.updated_at]
             );
             tourId = insertRes.rows[0].id;
-            console.log(`[ID-TRACE] 4. Insert complete. New TourID: ${tourId}`);
         }
 
         const currentStopUuids = [];
         let orderIndex = 0;
         for (const stop of groupedStops.values()) {
-            const stopUuid = (stop.items[0].uuid && stop.items[0].uuid !== "") ? stop.items[0].uuid : null;
+            const stopUuid = stop.items[0].uuid;
             const itemsJson = JSON.stringify(stop.items);
             const mainItem = stop.items[0];
 
@@ -195,7 +185,7 @@ const initDb = async () => {
         `CREATE TABLE IF NOT EXISTS costs (id SERIAL PRIMARY KEY, uuid UUID UNIQUE DEFAULT gen_random_uuid(), driver_name TEXT, amount DECIMAL, currency TEXT, category TEXT, notes TEXT, mileage INT, status TEXT DEFAULT 'Rögzítve', timestamp BIGINT)`,
         `CREATE TABLE IF NOT EXISTS chat_messages (id SERIAL PRIMARY KEY, uuid UUID UNIQUE DEFAULT gen_random_uuid(), driver_name TEXT, sender TEXT, message TEXT, timestamp BIGINT)`,
         `CREATE TABLE IF NOT EXISTS work_times (id SERIAL PRIMARY KEY, uuid UUID UNIQUE DEFAULT gen_random_uuid(), driver_name TEXT, type TEXT, start_time BIGINT, end_time BIGINT, mileage INT, end_mileage INT, license_plate TEXT, notes TEXT, date TEXT)`,
-        `CREATE TABLE IF NOT EXISTS hotels (id SERIAL PRIMARY KEY, uuid UUID UNIQUE DEFAULT gen_random_uuid(), driver_name TEXT, name TEXT, address TEXT, timestamp BIGINT)`,
+        `CREATE TABLE IF NOT EXISTS hotels (id SERIAL PRIMARY KEY, uuid UNIQUE DEFAULT gen_random_uuid(), driver_name TEXT, name TEXT, address TEXT, timestamp BIGINT)`,
         `CREATE TABLE IF NOT EXISTS tours (id SERIAL PRIMARY KEY, uuid UUID UNIQUE DEFAULT gen_random_uuid(), driver_name TEXT, name TEXT, customer TEXT, date BIGINT, day_of_week TEXT, notes TEXT, is_closed BOOLEAN, is_current BOOLEAN, depot_name TEXT, depot_company TEXT, depot_street TEXT, depot_house_number TEXT, depot_postal_code TEXT, depot_city TEXT, depot_state TEXT, depot_country TEXT, depot_address_full TEXT, depot_lat DOUBLE PRECISION, depot_lng DOUBLE PRECISION, deleted_at BIGINT, updated_at BIGINT)`,
         `CREATE TABLE IF NOT EXISTS stops (id SERIAL PRIMARY KEY, uuid UNIQUE DEFAULT gen_random_uuid(), tour_id INT, address TEXT, recipient TEXT, company TEXT, street TEXT, house_number TEXT, postal_code TEXT, city TEXT, state TEXT, country TEXT, address_full TEXT, contact_name TEXT, phone_number TEXT, email TEXT, time_window TEXT, notes TEXT, alternative_names TEXT, order_index INT, latitude DOUBLE PRECISION, longitude DOUBLE PRECISION, is_completed BOOLEAN, arrival_time BIGINT, deleted_at BIGINT, updated_at BIGINT, stop_type TEXT DEFAULT 'DELIVERY', items JSONB)`
     ];
@@ -288,7 +278,6 @@ app.post('/admin/save-tour', async (req, res) => {
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
-        console.log(`[API /admin/save-tour] Incoming Payload Driver: ${req.body.driver_name}, ID: ${req.body.id}`);
         const tourId = await ImportEngine.processTour(client, req.body.driver_name, req.body, req.body.stops || []);
         await client.query('COMMIT');
         res.json({ success: true, tourId });
@@ -384,17 +373,7 @@ app.get('/driver/:name', async (req, res) => {
         </div>
         <div id="tours" class="tab-content">
             <button onclick="editTour()" style="background:#2ecc71; color:white; padding:10px; margin-bottom:20px;">+ Új túra</button>
-            ${toursRes.rows.map(t => `
-                <div class="tour-card">
-                    <div style="float:right; display:flex; gap:5px;">
-                        <select onchange="transferTour(${t.id}, this.value)" style="width:auto;"><option value="">-- Áthelyezés --</option>${allDrivers.map(n => `<option value="${n}">${n}</option>`).join('')}</select>
-                        <button onclick='editTour(${JSON.stringify(t).replace(/'/g, "&apos;")})'>✏</button>
-                        <button onclick="deleteTour(${t.id})" style="background:#e74c3c; color:white;">🗑</button>
-                    </div>
-                    <b>${t.name}</b> (${t.customer}) - ${new Date(Number(t.date)).toLocaleDateString()}
-                    ${t.stops.map(s => `<div class="stop-item">${s.order_index + 1}. ${s.stop_type === 'HOTEL' ? '🏨 ' : (s.stop_type === 'DEPOT' ? '🏠 ' : '')}${s.address}</div>`).join('')}
-                </div>
-            `).join('')}
+            ${toursRes.rows.map(t => `<div class="tour-card"><div style="float:right; display:flex; gap:5px;"><select onchange="transferTour(${t.id}, this.value)" style="width:auto;"><option value="">-- Áthelyezés --</option>${allDrivers.map(n => `<option value="${n}">${n}</option>`).join('')}</select><button onclick='editTour(${JSON.stringify(t).replace(/'/g, "&apos;")})'>✏</button><button onclick="deleteTour(${t.id})" style="background:#e74c3c; color:white;">🗑</button></div><b>${t.name}</b> (${t.customer}) - ${new Date(Number(t.date)).toLocaleDateString()}${t.stops.map(s => `<div class="stop-item">${s.order_index + 1}. ${s.stop_type === 'HOTEL' ? '🏨 ' : (s.stop_type === 'DEPOT' ? '🏠 ' : '')}${s.address}</div>`).join('')}</div>`).join('')}
         </div>
         <div id="costs" class="tab-content">
             <table><tr><th>Dátum</th><th>Kategória</th><th>Összeg</th><th>Státusz</th><th>Művelet</th></tr>
@@ -411,7 +390,7 @@ app.get('/driver/:name', async (req, res) => {
         </div>
         <div id="stats" class="tab-content"><div id="statsBox" style="display:grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px;"></div></div>
         <div id="report" class="tab-content"><h3>Tagesfahrblatt - 28 nap</h3><div id="timelineContainer" style="background:#111; padding:20px; border-radius:12px;"></div></div>
-        <div id="profile" class="tab-content"><h3>Profil</h3><p>Név: ${name}</p><p>Tel: ${d.driver_phone || '-'}</p><p>Rendszám: ${d.license_plate || '-'}</p></div>
+        <div id="profile" class="tab-content"><h3>PROFIL</h3><p>Név: ${name}</p><p>Tel: ${d.driver_phone || '-'}</p><p>Rendszám: ${d.license_plate || '-'}</p></div>
 
         <div id="tourModal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.8); z-index:1000; padding:50px;">
             <div style="background:#222; padding:30px; border-radius:12px; max-width:800px; margin:auto; max-height:90vh; overflow-y:auto;">
@@ -461,16 +440,13 @@ app.get('/driver/:name', async (req, res) => {
             }
             openTab(null, 'tours');
 
-            function transferTour(tourId, newDriverName) { if (!newDriverName) return; if (confirm(`Áthelyezed ${newDriverName} részére?`)) fetch('/admin/transfer-tour', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ tourId, newDriverName }) }).then(r => { if(r.ok) location.reload(); }); }
+            function transferTour(tourId, newDriverName) { if (!newDriverName) return; if (confirm(`Áthelyezed \${newDriverName} részére?`)) fetch('/admin/transfer-tour', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ tourId, newDriverName }) }).then(r => { if(r.ok) location.reload(); }); }
             function deleteTour(id) { if(confirm('Törlöd?')) fetch('/admin/delete-tour', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({id}) }).then(r => { if(r.ok) location.reload(); }); }
             function closeModal() { document.getElementById('tourModal').style.display = 'none'; }
 
             function editTour(t) {
-                console.log("[ID-TRACE] editTour(t) called. ID from object:", t ? t.id : 'null');
                 document.getElementById('tourId').value = t ? t.id : '';
                 document.getElementById('tourUuid').value = t ? t.uuid : '';
-                console.log("[ID-TRACE] modal input values - tourId:", document.getElementById('tourId').value);
-
                 document.getElementById('tName').value = t ? t.name : '';
                 document.getElementById('tCustomer').value = t ? t.customer : '';
                 document.getElementById('tDate').value = t ? new Date(Number(t.date)).toISOString().split('T')[0] : '';
@@ -497,25 +473,33 @@ app.get('/driver/:name', async (req, res) => {
                 d.className = 'stop-edit-row';
                 d.style = 'border:1px solid #444; padding:15px; margin-bottom:15px; border-radius:8px; position:relative;';
                 const uuid = s ? s.uuid : (crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2,15));
-                const items = s && s.items ? s.items : [{ recipient: s ? s.recipient : '', notes: s ? s.notes : '', stop_type: s ? s.stop_type : 'DELIVERY', is_completed: s ? (s.is_completed || false) : false }];
+                const items = s && s.items ? (Array.isArray(s.items) ? s.items : [s.items]) : [{ recipient: s ? s.recipient : '', notes: s ? s.notes : '', stop_type: s ? s.stop_type : 'DELIVERY', is_completed: s ? (s.is_completed || false) : false }];
 
                 d.innerHTML = `
                     <button onclick="this.parentElement.remove()" style="position:absolute; right:10px; top:10px; background:#e74c3c; border:none; color:white; padding:5px 10px; border-radius:4px; cursor:pointer;">X</button>
-                    <input type="hidden" class="stop-uuid" value="${uuid}">
+                    <input type="hidden" class="stop-uuid" value="\${uuid}">
                     <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
-                        <div><label>Címzett</label><input type="text" class="stop-recipient" value="${items[0].recipient}"></div>
-                        <div><label>Cég</label><input type="text" class="stop-company" value="${s ? s.company : ''}"></div>
+                        <div><label>Címzett</label><input type="text" class="stop-recipient" value="\${items[0].recipient || ''}"></div>
+                        <div><label>Cég</label><input type="text" class="stop-company" value="\${s ? (s.company || '') : ''}"></div>
                     </div>
                     <div style="display:grid; grid-template-columns:2fr 1fr; gap:10px;">
-                        <div><label>Utca</label><input type="text" class="stop-street" value="${s ? s.street : ''}"></div>
-                        <div><label>Házszám</label><input type="text" class="stop-house" value="${s ? (s.house_number || '') : ''}"></div>
+                        <div><label>Utca</label><input type="text" class="stop-street" value="\${s ? (s.street || '') : ''}"></div>
+                        <div><label>Házszám</label><input type="text" class="stop-house" value="\${s ? (s.house_number || '') : ''}"></div>
                     </div>
                     <div style="display:grid; grid-template-columns:1fr 2fr; gap:10px;">
-                        <div><label>Irsz</label><input type="text" class="stop-postal" value="${s ? (s.postal_code || '') : ''}"></div>
-                        <div><label>Város</label><input type="text" class="stop-city" value="${s ? s.city : ''}"></div>
+                        <div><label>Irsz</label><input type="text" class="stop-postal" value="\${s ? (s.postal_code || '') : ''}"></div>
+                        <div><label>Város</label><input type="text" class="stop-city" value="\${s ? (s.city || '') : ''}"></div>
                     </div>
-                    <div><label>Teljes cím (szükség esetén)</label><input type="text" class="stop-address-full" value="${s ? (s.address_full || s.address || '') : ''}"></div>
-                    <div style="margin-top:10px;"><label>Típus</label><select class="stop-type"><option value="DELIVERY" ${items[0].stop_type==='DELIVERY'?'selected':''}>DELIVERY</option><option value="PICKUP" ${items[0].stop_type==='PICKUP'?'selected':''}>PICKUP</option><option value="HOTEL" ${items[0].stop_type==='HOTEL'?'selected':''}>HOTEL</option></select></div>
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+                        <div><label>Megye</label><input type="text" class="stop-state" value="\${s ? (s.state || '') : ''}"></div>
+                        <div><label>Ország</label><input type="text" class="stop-country" value="\${s ? (s.country || '') : ''}"></div>
+                    </div>
+                    <div><label>Teljes cím (szükség esetén)</label><input type="text" class="stop-address-full" value="\${s ? (s.address_full || s.address || '') : ''}"></div>
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+                        <div><label>Lat</label><input type="text" class="stop-lat" value="\${s ? (s.latitude || '') : ''}"></div>
+                        <div><label>Lng</label><input type="text" class="stop-lon" value="\${s ? (s.longitude || '') : ''}"></div>
+                    </div>
+                    <div style="margin-top:10px;"><label>Típus</label><select class="stop-type"><option value="DELIVERY" \${items[0].stop_type==='DELIVERY'?'selected':''}>DELIVERY</option><option value="PICKUP" \${items[0].stop_type==='PICKUP'?'selected':''}>PICKUP</option><option value="HOTEL" \${items[0].stop_type==='HOTEL'?'selected':''}>HOTEL</option></select></div>
                 `;
                 document.getElementById('modalStops').appendChild(d);
             }
@@ -524,15 +508,24 @@ app.get('/driver/:name', async (req, res) => {
                 const stops = [];
                 document.querySelectorAll('.stop-edit-row').forEach((r, i) => {
                     stops.push({
-                        uuid: r.querySelector('.stop-uuid').value, recipient: r.querySelector('.stop-recipient').value, company: r.querySelector('.stop-company').value,
-                        street: r.querySelector('.stop-street').value, house_number: r.querySelector('.stop-house').value, postal_code: r.querySelector('.stop-postal').value,
-                        city: r.querySelector('.stop-city').value, address_full: r.querySelector('.stop-address-full').value, stop_type: r.querySelector('.stop-type').value, order_index: i
+                        uuid: r.querySelector('.stop-uuid').value,
+                        recipient: r.querySelector('.stop-recipient').value,
+                        company: r.querySelector('.stop-company').value,
+                        street: r.querySelector('.stop-street').value,
+                        house_number: r.querySelector('.stop-house').value,
+                        postal_code: r.querySelector('.stop-postal').value,
+                        city: r.querySelector('.stop-city').value,
+                        state: r.querySelector('.stop-state').value,
+                        country: r.querySelector('.stop-country').value,
+                        address_full: r.querySelector('.stop-address-full').value,
+                        latitude: r.querySelector('.stop-lat').value,
+                        longitude: r.querySelector('.stop-lon').value,
+                        stop_type: r.querySelector('.stop-type').value,
+                        order_index: i
                     });
                 });
                 const tourIdRaw = document.getElementById('tourId').value;
-                console.log("[ID-TRACE] saveTour() reading from hidden input:", tourIdRaw);
                 const tourId = (tourIdRaw === "" || tourIdRaw === "null") ? null : parseInt(tourIdRaw);
-                console.log("[ID-TRACE] saveTour() parsed tourId:", tourId);
 
                 const data = {
                     id: tourId,
@@ -544,19 +537,10 @@ app.get('/driver/:name', async (req, res) => {
                     depot_city: document.getElementById('tDepotCity').value, depot_state: document.getElementById('tDepotState').value, depot_country: document.getElementById('tDepotCountry').value,
                     depot_address_full: document.getElementById('tDepotAddressFull').value, depot_lat: document.getElementById('tDepotLat').value, depot_lng: document.getElementById('tDepotLng').value, stops
                 };
-                console.log("[ID-TRACE] Payload sent to backend:", JSON.stringify(data));
 
                 try {
                     const res = await fetch('/admin/save-tour', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) });
-                    if(res.ok) {
-                        const result = await res.json();
-                        console.log("[ID-TRACE] Backend response:", result);
-                        location.reload();
-                    } else {
-                        const errText = await res.text();
-                        console.error("[ID-TRACE] Backend error:", errText);
-                        alert('Hiba a mentés során: ' + errText);
-                    }
+                    if(res.ok) location.reload(); else alert('Hiba a mentés során!');
                 } catch(e) { alert('Hálózati hiba!'); }
             }
         </script>
