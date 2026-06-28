@@ -380,7 +380,8 @@ app.get('/api/get-tours/:driverName', async (req, res) => {
                     notes: tour.notes || '',
                     isClosed: !!tour.is_closed,
                     isCurrent: !!tour.is_current,
-                    deletedAt: tour.deleted_at ? Number(tour.deleted_at) : null
+                    deletedAt: tour.deleted_at ? Number(tour.deleted_at) : null,
+                    updatedAt: tour.updated_at ? Number(tour.updated_at) : null
                 },
                 stops: stopsRes.rows.map(s => ({
                     id: s.id,
@@ -404,7 +405,8 @@ app.get('/api/get-tours/:driverName', async (req, res) => {
                     longitude: s.longitude !== null ? Number(s.longitude) : null,
                     isCompleted: !!s.is_completed,
                     arrivalTime: s.arrival_time ? Number(s.arrival_time) : null,
-                    deletedAt: s.deleted_at ? Number(s.deleted_at) : null
+                    deletedAt: s.deleted_at ? Number(s.deleted_at) : null,
+                    updatedAt: s.updated_at ? Number(s.updated_at) : null
                 }))
             });
         }
