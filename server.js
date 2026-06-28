@@ -35,6 +35,8 @@ const initDb = async () => {
         ['stops', 'arrival_time', 'BIGINT'],
         ['tours', 'deleted_at', 'BIGINT'],
         ['stops', 'deleted_at', 'BIGINT'],
+        ['tours', 'updated_at', 'BIGINT'],
+        ['stops', 'updated_at', 'BIGINT'],
         ['live_updates', 'uuid', 'UUID UNIQUE DEFAULT gen_random_uuid()'],
         ['costs', 'uuid', 'UUID UNIQUE DEFAULT gen_random_uuid()'],
         ['chat_messages', 'uuid', 'UUID UNIQUE DEFAULT gen_random_uuid()'],
@@ -120,8 +122,9 @@ app.post('/api/sync-tours/:driverName', async (req, res) => {
 
             if (t.deletedAt) {
                 if (t.uuid) {
-                    await pool.query('DELETE FROM stops WHERE tour_id IN (SELECT id FROM tours WHERE uuid = $1)', [t.uuid]);
-                    await pool.query('DELETE FROM tours WHERE uuid = $1', [t.uuid]);
+                    const now = Date.now();
+                    await pool.query('UPDATE stops SET deleted_at = $1, updated_at = $1 WHERE tour_id IN (SELECT id FROM tours WHERE uuid = $2)', [now, t.uuid]);
+                    await pool.query('UPDATE tours SET deleted_at = $1, updated_at = $1 WHERE uuid = $2', [now, t.uuid]);
                 }
                 continue;
             }
@@ -154,7 +157,10 @@ app.post('/api/sync-tours/:driverName', async (req, res) => {
             if (item.stops && Array.isArray(item.stops)) {
                 for (const s of item.stops) {
                     if (s.deletedAt) {
-                        if (s.uuid) await pool.query('DELETE FROM stops WHERE uuid = $1', [s.uuid]);
+                        if (s.uuid) {
+                            const now = Date.now();
+                            await pool.query('UPDATE stops SET deleted_at = $1, updated_at = $1 WHERE uuid = $2', [now, s.uuid]);
+                        }
                         continue;
                     }
                     if (s.uuid) {
@@ -257,7 +263,8 @@ app.post('/admin/save-tour', async (req, res) => {
                 }
             }
             if (incomingStopUuids.length > 0) {
-                await pool.query('DELETE FROM stops WHERE tour_id = $1 AND uuid IS NOT NULL AND NOT (uuid = ANY($2))', [tourId, incomingStopUuids]);
+                const now = Date.now();
+                await pool.query('UPDATE stops SET deleted_at = $1, updated_at = $1 WHERE tour_id = $2 AND uuid IS NOT NULL AND NOT (uuid = ANY($3))', [now, tourId, incomingStopUuids]);
             }
         }
         res.json({ success: true });
@@ -265,8 +272,9 @@ app.post('/admin/save-tour', async (req, res) => {
 });
 
 app.post('/admin/delete-tour', async (req, res) => {
-    await pool.query('DELETE FROM stops WHERE tour_id = $1', [req.body.id]);
-    await pool.query('DELETE FROM tours WHERE id = $1', [req.body.id]);
+    const now = Date.now();
+    await pool.query('UPDATE stops SET deleted_at = $1, updated_at = $1 WHERE tour_id = $2', [now, req.body.id]);
+    await pool.query('UPDATE tours SET deleted_at = $1, updated_at = $1 WHERE id = $2', [now, req.body.id]);
     res.json({ success: true });
 });
 
@@ -317,7 +325,7 @@ app.get('/api/get-tours/:driverName', async (req, res) => {
 // FRONTEND
 app.get('/', async (req, res) => {
     try {
-        const drivers = await pool.query(`SELECT DISTINCT ON (driver_name) driver_name, driver_photo, status, license_plate, timestamp FROM (SELECT driver_name, driver_photo, status, license_plate, timestamp::BIGINT FROM live_updates UNION ALL SELECT driver_name, NULL as driver_photo, 'Túra feltöltve' as status, '' as license_plate, date::BIGINT as timestamp FROM tours UNION ALL SELECT driver_name, NULL as driver_photo, 'Munkaidő feltöltve' as status, license_plate, start_time::BIGINT as timestamp FROM work_times) AS all_drivers ORDER BY driver_name, timestamp DESC`);
+        const drivers = await pool.query(`SELECT DISTINCT ON (driver_name) driver_name, driver_photo, status, license_plate, timestamp FROM (SELECT driver_name, driver_photo, status, license_plate, timestamp::BIGINT FROM live_updates UNION ALL SELECT driver_name, NULL as driver_photo, 'Túra feltöltve' as status, '' as license_plate, date::BIGINT as timestamp FROM tours WHERE deleted_at IS NULL UNION ALL SELECT driver_name, NULL as driver_photo, 'Munkaidő feltöltve' as status, license_plate, start_time::BIGINT as timestamp FROM work_times) AS all_drivers ORDER BY driver_name, timestamp DESC`);
         let list = drivers.rows.map(d => `<div class="card" onclick="location.href='/driver/${encodeURIComponent(d.driver_name)}'"><img src="${d.driver_photo || ''}" style="width:50px;height:50px;border-radius:50%;float:right;background:#444"><h3>${d.driver_name}</h3><p>${d.status} ${d.license_plate ? '| ' + d.license_plate : ''}</p></div>`).join('');
         res.send(`<html><head><title>Driver ERP</title><style>body { font-family: sans-serif; background: #1a1a1a; color: white; padding: 40px; } .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 20px; } .card { background: #333; padding: 20px; border-radius: 12px; cursor: pointer; border-left: 8px solid #3498db; transition: 0.2s; } .card:hover { transform: scale(1.02); background: #444; }</style></head><body><h1>🚛 Flotta kiválasztása</h1><div class="grid">${list}</div></body></html>`);
     } catch (e) { res.status(500).send(e.message); }
@@ -329,10 +337,10 @@ app.get('/driver/:name', async (req, res) => {
     const costs = await pool.query('SELECT * FROM costs WHERE driver_name = $1 ORDER BY timestamp DESC', [name]);
     const chat = await pool.query('SELECT * FROM chat_messages WHERE driver_name = $1 ORDER BY timestamp ASC', [name]);
     const work = await pool.query('SELECT DISTINCT ON (start_time) * FROM work_times WHERE driver_name = $1 ORDER BY start_time DESC, id DESC', [name]);
-    const toursRes = await pool.query('SELECT * FROM tours WHERE driver_name = $1 ORDER BY date DESC', [name]);
+    const toursRes = await pool.query('SELECT * FROM tours WHERE driver_name = $1 AND deleted_at IS NULL ORDER BY date DESC', [name]);
     const hotelsRes = await pool.query('SELECT * FROM hotels WHERE driver_name = $1 ORDER BY timestamp DESC', [name]);
     for (let tour of toursRes.rows) {
-        const stopsRes = await pool.query('SELECT * FROM stops WHERE tour_id = $1 ORDER BY order_index ASC', [tour.id]);
+        const stopsRes = await pool.query('SELECT * FROM stops WHERE tour_id = $1 AND deleted_at IS NULL ORDER BY order_index ASC', [tour.id]);
         tour.stops = stopsRes.rows;
     }
     const d = update.rows[0] || { driver_name: name };
@@ -455,11 +463,20 @@ app.get('/driver/:name', async (req, res) => {
             function openTab(e, t) {
                 document.querySelectorAll('.tab-content').forEach(x => x.style.display = 'none');
                 document.querySelectorAll('nav button').forEach(x => x.classList.remove('active'));
-                document.getElementById(t).style.display = 'block';
-                e.currentTarget.classList.add('active');
+                const target = document.getElementById(t);
+                if (target) {
+                    target.style.display = 'block';
+                    if (e) e.currentTarget.classList.add('active');
+                    else {
+                        const btn = Array.from(document.querySelectorAll('nav button')).find(b => b.innerText.toLowerCase() === t.toLowerCase() || (t==='report' && b.innerText==='MENETLEVÉL'));
+                        if (btn) btn.classList.add('active');
+                    }
+                    localStorage.setItem('activeTab_' + '${name}', t);
+                }
                 if(t === 'dashboard') setTimeout(() => map.invalidateSize(), 200);
             }
-            document.querySelector('nav button').click();
+            const savedTab = localStorage.getItem('activeTab_' + '${name}') || 'dashboard';
+            openTab(null, savedTab);
 
             var map = L.map('map').setView([${d.latitude || 47.5}, ${d.longitude || 19.0}], 13);
             L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png').addTo(map);
