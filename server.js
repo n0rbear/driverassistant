@@ -1,4 +1,4 @@
-// FIXED SERVER v15 - STARTUP SEQUENCE AND SCHEMA VERIFICATION
+// FIXED SERVER v17 - SCHEMA MIGRATION SYNTAX FIX (DETAILED LOGGING)
 const express = require('express');
 const { Pool } = require('pg');
 const app = express();
@@ -94,24 +94,35 @@ const ImportEngine = {
 const initDb = async () => {
     console.log('[STARTUP] initDb started');
     await pool.query('CREATE EXTENSION IF NOT EXISTS "pgcrypto"');
-    const queries = [
-        `CREATE TABLE IF NOT EXISTS drivers (uuid UUID UNIQUE DEFAULT gen_random_uuid(), name TEXT UNIQUE, email TEXT, phone TEXT, license_plate TEXT, photo_url TEXT, is_active BOOLEAN DEFAULT TRUE)`,
-        `CREATE TABLE IF NOT EXISTS live_updates (id SERIAL PRIMARY KEY, uuid UUID UNIQUE DEFAULT gen_random_uuid(), driver_name TEXT, driver_photo TEXT, driver_phone TEXT, driver_email TEXT, license_plate TEXT, latitude DOUBLE PRECISION, longitude DOUBLE PRECISION, speed FLOAT, status TEXT, current_tour TEXT, next_stop TEXT, next_lat DOUBLE PRECISION, next_lng DOUBLE PRECISION, next_stop_dist FLOAT, tour_remaining_dist FLOAT, timestamp BIGINT)`,
-        `CREATE TABLE IF NOT EXISTS costs (id SERIAL PRIMARY KEY, uuid UUID UNIQUE DEFAULT gen_random_uuid(), driver_name TEXT, amount DECIMAL, currency TEXT, category TEXT, notes TEXT, mileage INT, status TEXT DEFAULT 'Rögzítve', timestamp BIGINT)`,
-        `CREATE TABLE IF NOT EXISTS chat_messages (id SERIAL PRIMARY KEY, uuid UNIQUE DEFAULT gen_random_uuid(), driver_name TEXT, sender TEXT, message TEXT, timestamp BIGINT)`,
-        `CREATE TABLE IF NOT EXISTS work_times (id SERIAL PRIMARY KEY, uuid UNIQUE DEFAULT gen_random_uuid(), driver_name TEXT, type TEXT, start_time BIGINT, end_time BIGINT, mileage INT, end_mileage INT, license_plate TEXT, notes TEXT, date TEXT)`,
-        `CREATE TABLE IF NOT EXISTS hotels (id SERIAL PRIMARY KEY, uuid UNIQUE DEFAULT gen_random_uuid(), driver_name TEXT, name TEXT, address TEXT, timestamp BIGINT)`,
-        `CREATE TABLE IF NOT EXISTS tours (id SERIAL PRIMARY KEY, uuid UNIQUE DEFAULT gen_random_uuid(), driver_name TEXT, name TEXT, customer TEXT, date BIGINT, day_of_week TEXT, notes TEXT, is_closed BOOLEAN, is_current BOOLEAN, depot_name TEXT, depot_company TEXT, depot_street TEXT, depot_house_number TEXT, depot_postal_code TEXT, depot_city TEXT, depot_state TEXT, depot_country TEXT, depot_address_full TEXT, depot_lat DOUBLE PRECISION, depot_lng DOUBLE PRECISION, deleted_at BIGINT, updated_at BIGINT)`,
-        `CREATE TABLE IF NOT EXISTS stops (id SERIAL PRIMARY KEY, uuid UNIQUE DEFAULT gen_random_uuid(), tour_id INT, address TEXT, recipient TEXT, company TEXT, street TEXT, house_number TEXT, postal_code TEXT, city TEXT, state TEXT, country TEXT, address_full TEXT, contact_name TEXT, phone_number TEXT, email TEXT, time_window TEXT, notes TEXT, alternative_names TEXT, order_index INT, latitude DOUBLE PRECISION, longitude DOUBLE PRECISION, is_completed BOOLEAN, arrival_time BIGINT, deleted_at BIGINT, updated_at BIGINT, stop_type TEXT DEFAULT 'DELIVERY', items JSONB)`
+
+    // Explicit syntax for CREATE TABLE to avoid confusion with UNIQUE and DEFAULT positions
+    const tables = [
+        { name: 'drivers', query: 'CREATE TABLE IF NOT EXISTS drivers (uuid UUID DEFAULT gen_random_uuid(), name TEXT UNIQUE, email TEXT, phone TEXT, license_plate TEXT, photo_url TEXT, is_active BOOLEAN DEFAULT TRUE, PRIMARY KEY (uuid))' },
+        { name: 'live_updates', query: 'CREATE TABLE IF NOT EXISTS live_updates (id SERIAL PRIMARY KEY, uuid UUID DEFAULT gen_random_uuid(), driver_name TEXT, driver_photo TEXT, driver_phone TEXT, driver_email TEXT, license_plate TEXT, latitude DOUBLE PRECISION, longitude DOUBLE PRECISION, speed FLOAT, status TEXT, current_tour TEXT, next_stop TEXT, next_lat DOUBLE PRECISION, next_lng DOUBLE PRECISION, next_stop_dist FLOAT, tour_remaining_dist FLOAT, timestamp BIGINT, UNIQUE(uuid))' },
+        { name: 'costs', query: 'CREATE TABLE IF NOT EXISTS costs (id SERIAL PRIMARY KEY, uuid UUID DEFAULT gen_random_uuid(), driver_name TEXT, amount DECIMAL, currency TEXT, category TEXT, notes TEXT, mileage INT, status TEXT DEFAULT \'Rögzítve\', timestamp BIGINT, UNIQUE(uuid))' },
+        { name: 'chat_messages', query: 'CREATE TABLE IF NOT EXISTS chat_messages (id SERIAL PRIMARY KEY, uuid UUID DEFAULT gen_random_uuid(), driver_name TEXT, sender TEXT, message TEXT, timestamp BIGINT, UNIQUE(uuid))' },
+        { name: 'work_times', query: 'CREATE TABLE IF NOT EXISTS work_times (id SERIAL PRIMARY KEY, uuid UUID DEFAULT gen_random_uuid(), driver_name TEXT, type TEXT, start_time BIGINT, end_time BIGINT, mileage INT, end_mileage INT, license_plate TEXT, notes TEXT, date TEXT, UNIQUE(uuid))' },
+        { name: 'hotels', query: 'CREATE TABLE IF NOT EXISTS hotels (id SERIAL PRIMARY KEY, uuid UUID DEFAULT gen_random_uuid(), driver_name TEXT, name TEXT, address TEXT, timestamp BIGINT, UNIQUE(uuid))' },
+        { name: 'tours', query: 'CREATE TABLE IF NOT EXISTS tours (id SERIAL PRIMARY KEY, uuid UUID DEFAULT gen_random_uuid(), driver_name TEXT, name TEXT, customer TEXT, date BIGINT, day_of_week TEXT, notes TEXT, is_closed BOOLEAN, is_current BOOLEAN, depot_name TEXT, depot_company TEXT, depot_street TEXT, depot_house_number TEXT, depot_postal_code TEXT, depot_city TEXT, depot_state TEXT, depot_country TEXT, depot_address_full TEXT, depot_lat DOUBLE PRECISION, depot_lng DOUBLE PRECISION, deleted_at BIGINT, updated_at BIGINT, UNIQUE(uuid))' },
+        { name: 'stops', query: 'CREATE TABLE IF NOT EXISTS stops (id SERIAL PRIMARY KEY, uuid UUID DEFAULT gen_random_uuid(), tour_id INT, address TEXT, recipient TEXT, company TEXT, street TEXT, house_number TEXT, postal_code TEXT, city TEXT, state TEXT, country TEXT, address_full TEXT, contact_name TEXT, phone_number TEXT, email TEXT, time_window TEXT, notes TEXT, alternative_names TEXT, order_index INT, latitude DOUBLE PRECISION, longitude DOUBLE PRECISION, is_completed BOOLEAN, arrival_time BIGINT, deleted_at BIGINT, updated_at BIGINT, stop_type TEXT DEFAULT \'DELIVERY\', items JSONB, UNIQUE(uuid))' }
     ];
-    for (let q of queries) await pool.query(q);
+
+    for (const t of tables) {
+        console.log(`[SCHEMA] Ensuring table ${t.name} exists...`);
+        console.log(`[SCHEMA] executing: ${t.query}`);
+        try {
+            await pool.query(t.query);
+        } catch (e) {
+            console.error(`[SCHEMA] ERROR creating table ${t.name}:`, e.message);
+            throw e;
+        }
+    }
 
     const cols = [['stops', 'items', 'JSONB'], ['stops', 'stop_type', 'TEXT DEFAULT \'DELIVERY\''], ['tours', 'depot_company', 'TEXT'], ['tours', 'depot_street', 'TEXT'], ['tours', 'depot_house_number', 'TEXT'], ['tours', 'depot_postal_code', 'TEXT'], ['tours', 'depot_city', 'TEXT'], ['tours', 'depot_state', 'TEXT'], ['tours', 'depot_country', 'TEXT'], ['tours', 'depot_address_full', 'TEXT'], ['stops', 'company', 'TEXT'], ['stops', 'state', 'TEXT'], ['stops', 'country', 'TEXT']];
     for (const [t, c, type] of cols) {
-        if (t === 'stops' && c === 'items') console.log('[SCHEMA] checking stops.items');
         const check = await pool.query("SELECT column_name FROM information_schema.columns WHERE table_name = $1 AND column_name = $2", [t, c]);
         if (check.rows.length === 0) {
-            if (t === 'stops' && c === 'items') console.log('[SCHEMA] adding items column');
+            console.log(`[SCHEMA] adding column ${c} to ${t}`);
             await pool.query(`ALTER TABLE ${t} ADD COLUMN ${c} ${type}`);
         }
     }
@@ -120,9 +131,21 @@ const initDb = async () => {
     if (verifyItems.rows.length === 0) throw new Error("FATAL: Schema migration failed - column 'items' still does not exist in table 'stops'.");
     console.log('[SCHEMA] items column exists');
 
-    try { await pool.query('ALTER TABLE work_times ADD CONSTRAINT unique_worktime UNIQUE (driver_name, start_time)'); } catch(e) {}
-    try { await pool.query('ALTER TABLE costs ADD CONSTRAINT unique_cost UNIQUE (driver_name, timestamp, amount)'); } catch(e) {}
-    try { await pool.query('ALTER TABLE hotels ADD CONSTRAINT unique_hotel UNIQUE (driver_name, timestamp, name)'); } catch(e) {}
+    const constraints = [
+        ['work_times', 'unique_worktime', 'UNIQUE (driver_name, start_time)'],
+        ['costs', 'unique_cost', 'UNIQUE (driver_name, timestamp, amount)'],
+        ['hotels', 'unique_hotel', 'UNIQUE (driver_name, timestamp, name)']
+    ];
+
+    for (const [t, name, def] of constraints) {
+        try {
+            const check = await pool.query("SELECT conname FROM pg_constraint WHERE conname = $1", [name]);
+            if (check.rows.length === 0) {
+                console.log(`[SCHEMA] adding constraint ${name} to ${t}`);
+                await pool.query(`ALTER TABLE ${t} ADD CONSTRAINT ${name} ${def}`);
+            }
+        } catch (e) { console.error(`[SCHEMA] Skip constraint ${name}:`, e.message); }
+    }
     console.log('[STARTUP] initDb finished');
 };
 
