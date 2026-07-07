@@ -461,7 +461,7 @@ app.get('/driver/:name', async (req, res) => {
             openTab(null, 'dashboard');
             document.querySelector('nav button').classList.add('active');
 
-            function transferTour(tourId, newDriverName) { if (!newDriverName) return; if (confirm(`Áthelyezed \${newDriverName} részére?`)) fetch('/admin/transfer-tour', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ tourId, newDriverName }) }).then(r => { if(r.ok) location.reload(); }); }
+            function transferTour(tourId, newDriverName) { if (!newDriverName) return; if (confirm('Áthelyezed ' + newDriverName + ' részére?')) fetch('/admin/transfer-tour', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ tourId, newDriverName }) }).then(r => { if(r.ok) location.reload(); }); }
             function deleteTour(id) { if(confirm('Törlöd?')) fetch('/admin/delete-tour', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({id}) }).then(r => { if(r.ok) location.reload(); }); }
             function closeModal() { document.getElementById('tourModal').style.display = 'none'; }
             function editTour(t) {
