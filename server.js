@@ -421,8 +421,47 @@ app.get('/driver/:name', async (req, res) => {
         </div>
 
         <script>
-            function openTab(e, t) { document.querySelectorAll('.tab-content').forEach(x => x.style.display = 'none'); document.querySelectorAll('nav button').forEach(x => x.classList.remove('active')); const target = document.getElementById(t); if (target) { target.style.display = 'block'; if (e) e.currentTarget.classList.add('active'); } }
-            function transferTour(tourId, newDriverName) { if (!newDriverName) return; if (confirm(\`Áthelyezed \${newDriverName} részére?\`)) fetch('/admin/transfer-tour', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ tourId, newDriverName }) }).then(r => { if(r.ok) location.reload(); }); }
+            function openTab(e, t) {
+                document.querySelectorAll('.tab-content').forEach(x => x.style.display = 'none');
+                document.querySelectorAll('nav button').forEach(x => x.classList.remove('active'));
+                const target = document.getElementById(t);
+                if (target) {
+                    target.style.display = 'block';
+                    if (e) e.currentTarget.classList.add('active');
+                }
+            }
+
+            // Térkép inicializálása
+            const lat = ${update.latitude || 47.4979};
+            const lng = ${update.longitude || 19.0402};
+            const map = L.map('map').setView([lat, lng], 13);
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '&copy; OpenStreetMap'
+            }).addTo(map);
+
+            // Sofőr marker
+            L.marker([lat, lng]).addTo(map)
+                .bindPopup('<b>${name}</b><br>Sebesség: ${Math.round(update.speed || 0)} km/h')
+                .openPopup();
+
+            // Következő megálló marker
+            ${update.next_lat && update.next_lng ? `
+                L.marker([${update.next_lat}, ${update.next_lng}]).addTo(map)
+                    .bindPopup('📍 Következő: ${update.next_stop}');
+            ` : ''}
+
+            // Depó marker
+            ${update.depot_lat && update.depot_lng ? `
+                L.circleMarker([${update.depot_lat}, ${update.depot_lng}], {
+                    color: '#2ecc71', radius: 10, fillOpacity: 0.8
+                }).addTo(map).bindPopup('🏠 Depó: ${update.depot_name}');
+            ` : ''}
+
+            // Alapértelmezett tab
+            openTab(null, 'dashboard');
+            document.querySelector('nav button').classList.add('active');
+
+            function transferTour(tourId, newDriverName) { if (!newDriverName) return; if (confirm(`Áthelyezed \${newDriverName} részére?`)) fetch('/admin/transfer-tour', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ tourId, newDriverName }) }).then(r => { if(r.ok) location.reload(); }); }
             function deleteTour(id) { if(confirm('Törlöd?')) fetch('/admin/delete-tour', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({id}) }).then(r => { if(r.ok) location.reload(); }); }
             function closeModal() { document.getElementById('tourModal').style.display = 'none'; }
             function editTour(t) {
