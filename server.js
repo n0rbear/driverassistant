@@ -87,6 +87,13 @@ const ImportEngine = {
             currentUuids.push(res.rows[0].uuid);
         }
         await client.query('UPDATE stops SET deleted_at = $1, updated_at = $1 WHERE tour_id = $2 AND deleted_at IS NULL AND NOT (uuid = ANY($3::UUID[]))', [tour.updated_at, tourId, currentUuids]);
+
+        if (tour.is_current) {
+            const uuidRes = await client.query('SELECT uuid FROM tours WHERE id = $1', [tourId]);
+            const tourUuid = uuidRes.rows[0].uuid;
+            await client.query('SELECT set_current_tour($1, $2)', [driverName, tourUuid]);
+        }
+
         return tourId;
     }
 };
@@ -102,7 +109,15 @@ const initDb = async () => {
         `CREATE TABLE IF NOT EXISTS work_times (id SERIAL PRIMARY KEY, uuid UUID DEFAULT gen_random_uuid() UNIQUE, driver_name TEXT, type TEXT, start_time BIGINT, end_time BIGINT, mileage INT, end_mileage INT, license_plate TEXT, notes TEXT, date TEXT, UNIQUE(uuid))`,
         `CREATE TABLE IF NOT EXISTS hotels (id SERIAL PRIMARY KEY, uuid UUID DEFAULT gen_random_uuid() UNIQUE, driver_name TEXT, name TEXT, address TEXT, timestamp BIGINT, UNIQUE(uuid))`,
         `CREATE TABLE IF NOT EXISTS tours (id SERIAL PRIMARY KEY, uuid UUID DEFAULT gen_random_uuid() UNIQUE, driver_name TEXT, name TEXT, customer TEXT, date BIGINT, day_of_week TEXT, notes TEXT, is_closed BOOLEAN, is_current BOOLEAN, depot_name TEXT, depot_company TEXT, depot_street TEXT, depot_house_number TEXT, depot_postal_code TEXT, depot_city TEXT, depot_state TEXT, depot_country TEXT, depot_address_full TEXT, depot_lat DOUBLE PRECISION, depot_lng DOUBLE PRECISION, deleted_at BIGINT, updated_at BIGINT, UNIQUE(uuid))`,
-        `CREATE TABLE IF NOT EXISTS stops (id SERIAL PRIMARY KEY, uuid UUID DEFAULT gen_random_uuid() UNIQUE, tour_id INT, address TEXT, recipient TEXT, company TEXT, street TEXT, house_number TEXT, postal_code TEXT, city TEXT, state TEXT, country TEXT, address_full TEXT, contact_name TEXT, phone_number TEXT, email TEXT, time_window TEXT, notes TEXT, alternative_names TEXT, order_index INT, latitude DOUBLE PRECISION, longitude DOUBLE PRECISION, is_completed BOOLEAN, arrival_time BIGINT, deleted_at BIGINT, updated_at BIGINT, stop_type TEXT DEFAULT 'DELIVERY', items JSONB, UNIQUE(uuid))`
+        `CREATE TABLE IF NOT EXISTS stops (id SERIAL PRIMARY KEY, uuid UUID DEFAULT gen_random_uuid() UNIQUE, tour_id INT, address TEXT, recipient TEXT, company TEXT, street TEXT, house_number TEXT, postal_code TEXT, city TEXT, state TEXT, country TEXT, address_full TEXT, contact_name TEXT, phone_number TEXT, email TEXT, time_window TEXT, notes TEXT, alternative_names TEXT, order_index INT, latitude DOUBLE PRECISION, longitude DOUBLE PRECISION, is_completed BOOLEAN, arrival_time BIGINT, deleted_at BIGINT, updated_at BIGINT, stop_type TEXT DEFAULT 'DELIVERY', items JSONB, UNIQUE(uuid))`,
+        `CREATE OR REPLACE FUNCTION set_current_tour(p_driver_name TEXT, p_tour_uuid UUID) RETURNS VOID AS $$
+        BEGIN
+            UPDATE tours SET is_current = false, updated_at = EXTRACT(EPOCH FROM NOW()) * 1000
+            WHERE driver_name = p_driver_name AND uuid != p_tour_uuid;
+            UPDATE tours SET is_current = true, updated_at = EXTRACT(EPOCH FROM NOW()) * 1000
+            WHERE uuid = p_tour_uuid AND driver_name = p_driver_name;
+        END;
+        $$ LANGUAGE plpgsql;`
     ];
     for (let q of queries) await pool.query(q);
     const cols = [['stops', 'items', 'JSONB'], ['stops', 'stop_type', 'TEXT DEFAULT \'DELIVERY\''], ['tours', 'depot_company', 'TEXT'], ['tours', 'depot_street', 'TEXT'], ['tours', 'depot_house_number', 'TEXT'], ['tours', 'depot_postal_code', 'TEXT'], ['tours', 'depot_city', 'TEXT'], ['tours', 'depot_state', 'TEXT'], ['tours', 'depot_country', 'TEXT'], ['tours', 'depot_address_full', 'TEXT'], ['stops', 'company', 'TEXT'], ['stops', 'state', 'TEXT'], ['stops', 'country', 'TEXT']];
@@ -177,6 +192,16 @@ app.post('/api/sync-costs', async (req, res) => {
     res.sendStatus(200);
 });
 
+app.post('/api/set-current-tour', async (req, res) => {
+    const { driverName, tourUuid } = req.body;
+    try {
+        await pool.query('SELECT set_current_tour($1, $2)', [driverName, tourUuid]);
+        res.sendStatus(200);
+    } catch (e) {
+        res.status(500).send(e.message);
+    }
+});
+
 app.post('/api/sync-tours/:driverName', async (req, res) => {
     const driverName = req.params.driverName;
     const client = await pool.connect();
@@ -229,11 +254,24 @@ app.post('/admin/transfer-tour', async (req, res) => {
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
+        const tourRes = await client.query('SELECT uuid, is_current FROM tours WHERE id = $1', [tourId]);
+        if (tourRes.rows.length === 0) throw new Error('Tour not found');
+        const { uuid, is_current } = tourRes.rows[0];
+
         await client.query('UPDATE tours SET driver_name = $1, updated_at = $2 WHERE id = $3', [newDriverName, Date.now(), tourId]);
+
+        if (is_current) {
+            await client.query('SELECT set_current_tour($1, $2)', [newDriverName, uuid]);
+        }
+
         await client.query('COMMIT');
         res.json({ success: true });
-    } catch (e) { await client.query('ROLLBACK'); res.status(500).send(e.message); }
-    finally { client.release(); }
+    } catch (e) {
+        await client.query('ROLLBACK');
+        res.status(500).send(e.message);
+    } finally {
+        client.release();
+    }
 });
 
 app.post('/admin/delete-tour', async (req, res) => {
@@ -391,7 +429,7 @@ app.get('/driver/:name', async (req, res) => {
                 if(res.ok) location.reload(); else alert('Hiba!');
             }
         </script>
-    </body></html>`;
+    </body></html>\`;
     res.send(html);
 });
 
