@@ -352,7 +352,36 @@ app.get('/driver/:name', async (req, res) => {
     <body>
         <header><button onclick="location.href='/'">⬅</button><img src="${update.driver_photo || ''}" style="width:40px;height:40px;border-radius:50%;margin-left:15px;margin-right:15px;"><h2><span>${name}</span> - ERP</h2></header>
         <nav><button onclick="openTab(event, 'dashboard')">DASHBOARD</button><button onclick="openTab(event, 'tours')">TÚRÁK</button><button onclick="openTab(event, 'costs')">KÖLTSÉGEK</button><button onclick="openTab(event, 'hotels')">HOTELEK</button><button onclick="openTab(event, 'chat')">CHAT</button><button onclick="openTab(event, 'stats')">STATISZTIKA</button><button onclick="openTab(event, 'report')">MENETLEVÉL</button><button onclick="openTab(event, 'profile')">PROFIL</button></nav>
-        <div id="dashboard" class="tab-content"><div style="display:grid; grid-template-columns: 1fr 300px; gap: 20px;"><div id="map"></div><div style="background:#222; padding:20px; border-radius:8px;"><h3>Státusz: <span style="color:#3498db">${update.status}</span></h3><p>Sebesség: ${Math.round(update.speed || 0)} km/h</p></div></div></div>
+        <div id="dashboard" class="tab-content">
+            <div style="display:grid; grid-template-columns: 1fr 300px; gap: 20px;">
+                <div id="map"></div>
+                <div style="background:#222; padding:20px; border-radius:8px;">
+                    <h3>Státusz: <span style="color:#3498db">${update.status}</span></h3>
+                    <p>🚗 Sebesség: ${Math.round(update.speed || 0)} km/h</p>
+                    <p>🚚 Rendszám: ${update.license_plate || 'N/A'}</p>
+                    <hr style="border-color:#444">
+
+                    ${update.current_tour ? `
+                        <div style="background:#333; padding:15px; border-radius:8px; margin-top:10px;">
+                            <h4 style="margin:0; color:#2ecc71;">📦 Aktuális túra: ${update.current_tour}</h4>
+                            <p style="margin:5px 0 0 0; font-size:13px; color:#aaa;">Hátralévő: <b>${update.tour_remaining_dist ? update.tour_remaining_dist.toFixed(1) + ' km' : 'N/A'}</b></p>
+                        </div>
+                    ` : '<p style="color:#777">Nincs aktív túra</p>'}
+
+                    ${update.next_stop ? `
+                        <div style="background:#34495e; padding:15px; border-radius:8px; margin-top:10px;">
+                            <h4 style="margin:0; color:#3498db;">📍 Következő cím:</h4>
+                            <p style="margin:5px 0; font-size:14px;">${update.next_stop}</p>
+                            <p style="margin:0; font-size:13px; color:#bdc3c7;">Távolság: <b>${update.next_stop_dist ? update.next_stop_dist.toFixed(1) + ' km' : 'N/A'}</b></p>
+                        </div>
+                    ` : ''}
+
+                    ${update.depot_name ? `
+                        <p style="margin-top:20px; font-size:12px; color:#999;">🏠 Depó: ${update.depot_name}</p>
+                    ` : ''}
+                </div>
+            </div>
+        </div>
         <div id="tours" class="tab-content">
             <button onclick="editTour()" style="background:#2ecc71; color:white; padding:10px; margin-bottom:20px;">+ Új túra</button>
             ${toursRes.map(t => `
