@@ -89,9 +89,17 @@ const ImportEngine = {
         await client.query('UPDATE stops SET deleted_at = $1, updated_at = $1 WHERE tour_id = $2 AND deleted_at IS NULL AND NOT (uuid = ANY($3::UUID[]))', [tour.updated_at, tourId, currentUuids]);
 
         if (tour.is_current) {
-            const uuidRes = await client.query('SELECT uuid FROM tours WHERE id = $1', [tourId]);
-            const tourUuid = uuidRes.rows[0].uuid;
-            await client.query('SELECT set_current_tour($1, $2)', [driverName, tourUuid]);
+            try {
+                const tourUuid = tour.uuid || tourData.uuid;
+                if (tourUuid) {
+                    console.log(`[TRACE-TOUR] Calling set_current_tour for driver: ${driverName}, tourUuid: ${tourUuid}`);
+                    await client.query('SELECT set_current_tour($1, $2)', [driverName, tourUuid]);
+                } else {
+                    console.warn(`[TRACE-TOUR] Cannot call set_current_tour, UUID is missing for tourId: ${tourId}`);
+                }
+            } catch (err) {
+                console.error(`[TRACE-TOUR] Failed to set current tour in processTour: ${err.message}`);
+            }
         }
 
         return tourId;
@@ -103,7 +111,7 @@ const initDb = async () => {
     await pool.query('CREATE EXTENSION IF NOT EXISTS "pgcrypto"');
     const queries = [
         `CREATE TABLE IF NOT EXISTS drivers (uuid UUID DEFAULT gen_random_uuid() PRIMARY KEY, name TEXT UNIQUE, email TEXT, phone TEXT, license_plate TEXT, photo_url TEXT, is_active BOOLEAN DEFAULT TRUE)`,
-        `CREATE TABLE IF NOT EXISTS live_updates (id SERIAL PRIMARY KEY, uuid UUID DEFAULT gen_random_uuid() UNIQUE, driver_name TEXT, driver_photo TEXT, driver_phone TEXT, driver_email TEXT, license_plate TEXT, latitude DOUBLE PRECISION, longitude DOUBLE PRECISION, speed FLOAT, status TEXT, current_tour TEXT, next_stop TEXT, next_lat DOUBLE PRECISION, next_lng DOUBLE PRECISION, next_stop_dist FLOAT, tour_remaining_dist FLOAT, timestamp BIGINT, UNIQUE(uuid))`,
+        `CREATE TABLE IF NOT EXISTS live_updates (id SERIAL PRIMARY KEY, uuid UUID DEFAULT gen_random_uuid() UNIQUE, driver_name TEXT, driver_photo TEXT, driver_phone TEXT, driver_email TEXT, license_plate TEXT, latitude DOUBLE PRECISION, longitude DOUBLE PRECISION, speed FLOAT, status TEXT, current_tour TEXT, next_stop TEXT, next_lat DOUBLE PRECISION, next_lng DOUBLE PRECISION, next_stop_dist FLOAT, tour_remaining_dist FLOAT, depot_name TEXT, depot_lat DOUBLE PRECISION, depot_lng DOUBLE PRECISION, timestamp BIGINT, UNIQUE(uuid))`,
         `CREATE TABLE IF NOT EXISTS costs (id SERIAL PRIMARY KEY, uuid UUID DEFAULT gen_random_uuid() UNIQUE, driver_name TEXT, amount DECIMAL, currency TEXT, category TEXT, notes TEXT, mileage INT, status TEXT DEFAULT 'Rögzítve', timestamp BIGINT, UNIQUE(uuid))`,
         `CREATE TABLE IF NOT EXISTS chat_messages (id SERIAL PRIMARY KEY, uuid UUID DEFAULT gen_random_uuid() UNIQUE, driver_name TEXT, sender TEXT, message TEXT, timestamp BIGINT, UNIQUE(uuid))`,
         `CREATE TABLE IF NOT EXISTS work_times (id SERIAL PRIMARY KEY, uuid UUID DEFAULT gen_random_uuid() UNIQUE, driver_name TEXT, type TEXT, start_time BIGINT, end_time BIGINT, mileage INT, end_mileage INT, license_plate TEXT, notes TEXT, date TEXT, UNIQUE(uuid))`,
@@ -120,7 +128,24 @@ const initDb = async () => {
         $$ LANGUAGE plpgsql;`
     ];
     for (let q of queries) await pool.query(q);
-    const cols = [['stops', 'items', 'JSONB'], ['stops', 'stop_type', 'TEXT DEFAULT \'DELIVERY\''], ['tours', 'depot_company', 'TEXT'], ['tours', 'depot_street', 'TEXT'], ['tours', 'depot_house_number', 'TEXT'], ['tours', 'depot_postal_code', 'TEXT'], ['tours', 'depot_city', 'TEXT'], ['tours', 'depot_state', 'TEXT'], ['tours', 'depot_country', 'TEXT'], ['tours', 'depot_address_full', 'TEXT'], ['stops', 'company', 'TEXT'], ['stops', 'state', 'TEXT'], ['stops', 'country', 'TEXT']];
+    const cols = [
+        ['stops', 'items', 'JSONB'],
+        ['stops', 'stop_type', 'TEXT DEFAULT \'DELIVERY\''],
+        ['tours', 'depot_company', 'TEXT'],
+        ['tours', 'depot_street', 'TEXT'],
+        ['tours', 'depot_house_number', 'TEXT'],
+        ['tours', 'depot_postal_code', 'TEXT'],
+        ['tours', 'depot_city', 'TEXT'],
+        ['tours', 'depot_state', 'TEXT'],
+        ['tours', 'depot_country', 'TEXT'],
+        ['tours', 'depot_address_full', 'TEXT'],
+        ['stops', 'company', 'TEXT'],
+        ['stops', 'state', 'TEXT'],
+        ['stops', 'country', 'TEXT'],
+        ['live_updates', 'depot_name', 'TEXT'],
+        ['live_updates', 'depot_lat', 'DOUBLE PRECISION'],
+        ['live_updates', 'depot_lng', 'DOUBLE PRECISION']
+    ];
     for (const [t, c, type] of cols) {
         if (t === 'stops' && c === 'items') console.log('[SCHEMA] checking stops.items');
         const check = await pool.query("SELECT column_name FROM information_schema.columns WHERE table_name = $1 AND column_name = $2", [t, c]);
@@ -194,10 +219,12 @@ app.post('/api/sync-costs', async (req, res) => {
 
 app.post('/api/set-current-tour', async (req, res) => {
     const { driverName, tourUuid } = req.body;
+    console.log(`[TRACE-TOUR] Endpoint: /api/set-current-tour | Driver: ${driverName} | TourUUID: ${tourUuid}`);
     try {
         await pool.query('SELECT set_current_tour($1, $2)', [driverName, tourUuid]);
         res.sendStatus(200);
     } catch (e) {
+        console.error(`[TRACE-TOUR] Error in set-current-tour: ${e.message}`);
         res.status(500).send(e.message);
     }
 });
