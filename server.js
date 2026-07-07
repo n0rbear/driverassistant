@@ -429,7 +429,7 @@ app.get('/driver/:name', async (req, res) => {
                 if(res.ok) location.reload(); else alert('Hiba!');
             }
         </script>
-    </body></html>\`;
+    </body></html>`;
     res.send(html);
 });
 
