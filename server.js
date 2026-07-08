@@ -1605,7 +1605,7 @@ app.get('/driver/:name', async (req, res) => {
                 if(res.ok) { showToast('Túra mentve!'); closeModal(); refreshTours(); } else { alert('Hiba!'); btn.innerText = oldText; btn.disabled = false; }
             }
         </script>
-    </body></html>\`;
+    </body></html>`;
     res.send(html);
 });
 
