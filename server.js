@@ -1410,7 +1410,7 @@ app.get('/driver/:name', async (req, res) => {
                 }
             }
 
-            // Periodikus térkép frissítés a szétesés ellen
+            function showToast(msg) {
                 const c = document.getElementById('toast-container');
                 const t = document.createElement('div');
                 t.className = 'toast';
@@ -1421,13 +1421,13 @@ app.get('/driver/:name', async (req, res) => {
 
             async function refreshTours() {
                 try {
-                    const r = await fetch('/api/get-tours/' + encodeURIComponent('${name}'));
+                    const r = await fetch('/api/get-tours/' + encodeURIComponent('\${name}'));
                     if (!r.ok) return;
                     const data = await r.json();
                     const container = document.getElementById('tours-list');
                     if (!container) return;
 
-                    const allDNames = ${JSON.stringify(allD)};
+                    const allDNames = \${JSON.stringify(allD)};
 
                     container.innerHTML = data.map(item => {
                         const t = item.tour;
@@ -1455,7 +1455,7 @@ app.get('/driver/:name', async (req, res) => {
                         method: 'POST',
                         headers: {'Content-Type': 'application/json'},
                         body: JSON.stringify({
-                            driverName: '${name}',
+                            driverName: '\${name}',
                             sender: 'DISZPÉCSER',
                             message: msg,
                             timestamp: Date.now()
@@ -1470,7 +1470,7 @@ app.get('/driver/:name', async (req, res) => {
 
             async function refreshChat() {
                 try {
-                    const r = await fetch('/api/get-chat/' + encodeURIComponent('${name}'));
+                    const r = await fetch('/api/get-chat/' + encodeURIComponent('\${name}'));
                     if (!r.ok) return;
                     const data = await r.json();
                     const container = document.getElementById('chat-messages');
@@ -1520,21 +1520,21 @@ app.get('/driver/:name', async (req, res) => {
                 d.dataset.lat = s ? (s.latitude || '') : '';
                 d.dataset.lng = s ? (s.longitude || '') : '';
 
-                d.innerHTML = \`<button onclick="this.parentElement.remove()" style="position:absolute; right:10px; top:10px; background:#e74c3c; border:none; color:white; padding:5px 10px; border-radius:4px; cursor:pointer;">X</button>
-                    <input type="hidden" class="stop-uuid" value="\${uuid || ''}">
+                d.innerHTML = \\\`<button onclick="this.parentElement.remove()" style="position:absolute; right:10px; top:10px; background:#e74c3c; border:none; color:white; padding:5px 10px; border-radius:4px; cursor:pointer;">X</button>
+                    <input type="hidden" class="stop-uuid" value="\\\${uuid || ''}">
                     <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
-                        <div><label>Címzett</label><input type="text" class="stop-recipient" value="\${items[0].recipient || ''}"></div>
-                        <div><label>Cég</label><input type="text" class="stop-company" value="\${s ? (s.company || '') : ''}"></div>
+                        <div><label>Címzett</label><input type="text" class="stop-recipient" value="\\\${items[0].recipient || ''}"></div>
+                        <div><label>Cég</label><input type="text" class="stop-company" value="\\\${s ? (s.company || '') : ''}"></div>
                     </div>
                     <div style="display:grid; grid-template-columns:2fr 1fr; gap:10px; margin-top:5px;">
-                        <div><label>Utca</label><input type="text" class="stop-street" value="\${s ? (s.street || '') : ''}"></div>
-                        <div><label>Házszám</label><input type="text" class="stop-house" value="\${s ? (s.house_number || '') : ''}"></div>
+                        <div><label>Utca</label><input type="text" class="stop-street" value="\\\${s ? (s.street || '') : ''}"></div>
+                        <div><label>Házszám</label><input type="text" class="stop-house" value="\\\${s ? (s.house_number || '') : ''}"></div>
                     </div>
                     <div style="display:grid; grid-template-columns:1fr 2fr; gap:10px; margin-top:5px;">
-                        <div><label>Irsz</label><input type="text" class="stop-postal" value="\${s ? (s.postal_code || '') : ''}"></div>
-                        <div><label>Város</label><input type="text" class="stop-city" value="\${s ? (s.city || '') : ''}"></div>
+                        <div><label>Irsz</label><input type="text" class="stop-postal" value="\\\${s ? (s.postal_code || '') : ''}"></div>
+                        <div><label>Város</label><input type="text" class="stop-city" value="\\\${s ? (s.city || '') : ''}"></div>
                     </div>
-                    <div style="margin-top:10px;"><label>Típus</label><select class="stop-type"><option value="DELIVERY" \${items[0].stop_type==='DELIVERY'?'selected':''}>DELIVERY</option><option value="PICKUP" \${items[0].stop_type==='PICKUP'?'selected':''}>PICKUP</option><option value="HOTEL" \${items[0].stop_type==='HOTEL'?'selected':''}>HOTEL</option></select></div>\`;
+                    <div style="margin-top:10px;"><label>Típus</label><select class="stop-type"><option value="DELIVERY" \\\${items[0].stop_type==='DELIVERY'?'selected':''}>DELIVERY</option><option value="PICKUP" \\\${items[0].stop_type==='PICKUP'?'selected':''}>PICKUP</option><option value="HOTEL" \\\${items[0].stop_type==='HOTEL'?'selected':''}>HOTEL</option></select></div>\\\`;
                 document.getElementById('modalStops').appendChild(d);
             }
             async function geocode(street, house, postal, city) {
@@ -1592,7 +1592,7 @@ app.get('/driver/:name', async (req, res) => {
                 const data = {
                     id: tourId === "" ? null : parseInt(tourId),
                     uuid: uId === "" ? null : uId,
-                    driver_name: '${name}', name: document.getElementById('tName').value, customer: document.getElementById('tCustomer').value,
+                    driver_name: '\${name}', name: document.getElementById('tName').value, customer: document.getElementById('tCustomer').value,
                     date: tourDate, is_current: document.getElementById('tIsCurrent').checked, notes: document.getElementById('tNotes').value,
                     depot_name: document.getElementById('tDepotName').value, depot_company: document.getElementById('tDepotCompany').value,
                     depot_street: document.getElementById('tDepotStreet').value, depot_house_number: document.getElementById('tDepotHouse').value,
@@ -1605,7 +1605,7 @@ app.get('/driver/:name', async (req, res) => {
                 if(res.ok) { showToast('Túra mentve!'); closeModal(); refreshTours(); } else { alert('Hiba!'); btn.innerText = oldText; btn.disabled = false; }
             }
         </script>
-    </body></html>`;
+    </body></html>\`;
     res.send(html);
 });
 
