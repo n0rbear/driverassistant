@@ -1365,7 +1365,7 @@ app.get('/driver/:name', async (req, res) => {
             async function refreshDrivers() {
                 const r = await fetch('/api/all-drivers');
                 const drivers = await r.json();
-                document.getElementById('drivers-list').innerHTML = drivers.map(d => `
+                document.getElementById('drivers-list').innerHTML = drivers.map(d => \`
                     <tr>
                         <td><b>\${d.name}</b></td>
                         <td>\${d.email || ''}<br><small>\${d.phone || ''}</small></td>
@@ -1373,7 +1373,7 @@ app.get('/driver/:name', async (req, res) => {
                         <td><code style="background:#444; padding:2px 5px;">\${d.activation_code || '---'}</code></td>
                         <td><span style="color:\${d.is_active ? '#2ecc71' : '#e74c3c'}">\${d.is_active ? 'AKTÍV' : 'INAKTÍV'}</span></td>
                         <td><button onclick='editDriver(\${JSON.stringify(d).replace(/'/g, "&apos;")})'>SZERKESZTÉS</button></td>
-                    </tr>`).join('');
+                    </tr>\`).join('');
             }
             refreshDrivers();
 
