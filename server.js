@@ -80,9 +80,10 @@ const ImportEngine = {
             await client.query(`UPDATE tours SET driver_name=$1, name=$2, customer=$3, date=$4, day_of_week=$5, notes=$6, is_closed=$7, is_current=$8, depot_name=$9, depot_company=$10, depot_street=$11, depot_house_number=$12, depot_postal_code=$13, depot_city=$14, depot_state=$15, depot_country=$16, depot_address_full=$17, depot_lat=$18, depot_lng=$19, updated_at=$20, deleted_at=$22 WHERE id=$21`,
                 [driverName, tour.name, tour.customer, tour.date, tour.day_of_week, tour.notes, !!tour.is_closed, !!tour.is_current, depot.recipient || depot.address_full, depot.company, depot.street, depot.house_number, depot.postal_code, depot.city, depot.state, depot.country, depot.address_full, depot.latitude, depot.longitude, tour.updated_at, tourId, tour.deleted_at || tour.deletedAt || null]);
         } else {
-            const res = await client.query(`INSERT INTO tours (uuid, driver_name, name, customer, date, day_of_week, notes, is_closed, is_current, depot_name, depot_company, depot_street, depot_house_number, depot_postal_code, depot_city, depot_state, depot_country, depot_address_full, depot_lat, depot_lng, updated_at, deleted_at) VALUES (COALESCE($1::UUID, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22) RETURNING id`,
+            const res = await client.query(`INSERT INTO tours (uuid, driver_name, name, customer, date, day_of_week, notes, is_closed, is_current, depot_name, depot_company, depot_street, depot_house_number, depot_postal_code, depot_city, depot_state, depot_country, depot_address_full, depot_lat, depot_lng, updated_at, deleted_at) VALUES (COALESCE($1::UUID, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22) RETURNING id, uuid`,
                 [tour.uuid || null, driverName, tour.name, tour.customer, tour.date, tour.day_of_week, tour.notes, !!tour.is_closed, !!tour.is_current, depot.recipient || depot.address_full, depot.company, depot.street, depot.house_number, depot.postal_code, depot.city, depot.state, depot.country, depot.address_full, depot.latitude, depot.longitude, tour.updated_at, tour.deleted_at || tour.deletedAt || null]);
             tourId = res.rows[0].id;
+            if (!tour.uuid) tour.uuid = res.rows[0].uuid;
         }
 
         const currentUuids = [];
@@ -127,9 +128,9 @@ const initDb = async () => {
         `CREATE TABLE IF NOT EXISTS stops (id SERIAL PRIMARY KEY, uuid UUID DEFAULT gen_random_uuid() UNIQUE, tour_id INT, address TEXT, recipient TEXT, company TEXT, street TEXT, house_number TEXT, postal_code TEXT, city TEXT, state TEXT, country TEXT, address_full TEXT, contact_name TEXT, phone_number TEXT, email TEXT, time_window TEXT, notes TEXT, alternative_names TEXT, order_index INT, latitude DOUBLE PRECISION, longitude DOUBLE PRECISION, is_completed BOOLEAN, arrival_time BIGINT, deleted_at BIGINT, updated_at BIGINT, stop_type TEXT DEFAULT 'DELIVERY', items JSONB, UNIQUE(uuid))`,
         `CREATE OR REPLACE FUNCTION set_current_tour(p_driver_name TEXT, p_tour_uuid UUID) RETURNS VOID AS $$
         BEGIN
-            UPDATE tours SET is_current = false, updated_at = EXTRACT(EPOCH FROM NOW()) * 1000
+            UPDATE tours SET is_current = false, updated_at = (EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT
             WHERE driver_name = p_driver_name AND uuid != p_tour_uuid;
-            UPDATE tours SET is_current = true, updated_at = EXTRACT(EPOCH FROM NOW()) * 1000
+            UPDATE tours SET is_current = true, updated_at = (EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT
             WHERE uuid = p_tour_uuid AND driver_name = p_driver_name;
         END;
         $$ LANGUAGE plpgsql;`
@@ -444,7 +445,11 @@ app.get('/driver/:name', async (req, res) => {
                 <h2>Túra szerkesztése</h2><input type="hidden" id="tourId"><input type="hidden" id="tourUuid">
                 <div style="display:grid; grid-template-columns:1fr 1fr; gap:15px; margin-bottom:20px;">
                     <div><label>Túra neve</label><input type="text" id="tName"></div><div><label>Megrendelő</label><input type="text" id="tCustomer"></div>
-                    <div><label>Dátum</label><input type="date" id="tDate"></div><div><label>Nap</label><input type="text" id="tDay"></div>
+                    <div><label>Dátum</label><input type="date" id="tDate"></div>
+                    <div style="display:flex; align-items:center; gap:10px; margin-top:20px;">
+                        <input type="checkbox" id="tIsCurrent" style="width:20px; height:20px;">
+                        <label for="tIsCurrent" style="font-size:14px; color:white;">Aktuális túra (Appban ez jelenik meg)</label>
+                    </div>
                 </div>
                 <label>Megjegyzések</label><textarea id="tNotes" style="height:60px; margin-bottom:20px;"></textarea>
                 <h3>Depó</h3>
@@ -627,8 +632,8 @@ app.get('/driver/:name', async (req, res) => {
                 document.getElementById('tourUuid').value = t ? t.uuid : '';
                 document.getElementById('tName').value = t ? t.name : '';
                 document.getElementById('tCustomer').value = t ? t.customer : '';
-                document.getElementById('tDate').value = t ? new Date(Number(t.date)).toISOString().split('T')[0] : '';
-                document.getElementById('tDay').value = t ? (t.day_of_week || '') : '';
+                document.getElementById('tDate').value = t ? new Date(Number(t.date)).toISOString().split('T')[0] : new Date().toISOString().split('T')[0];
+                document.getElementById('tIsCurrent').checked = t ? !!t.is_current : true;
                 document.getElementById('tNotes').value = t ? t.notes : '';
                 document.getElementById('tDepotName').value = t ? (t.depot_name || '') : '';
                 document.getElementById('tDepotCompany').value = t ? (t.depot_company || '') : '';
@@ -636,47 +641,73 @@ app.get('/driver/:name', async (req, res) => {
                 document.getElementById('tDepotHouse').value = t ? (t.depot_house_number || '') : '';
                 document.getElementById('tDepotPostal').value = t ? (t.depot_postal_code || '') : '';
                 document.getElementById('tDepotCity').value = t ? (t.depot_city || '') : '';
+
+                // Koordináták megőrzése
+                const modal = document.getElementById('tourModal');
+                modal.dataset.lat = t ? (t.depot_lat || '') : '';
+                modal.dataset.lng = t ? (t.depot_lng || '') : '';
+
                 document.getElementById('modalStops').innerHTML = '';
                 if(t && t.stops) t.stops.forEach(s => addStopRow(s)); else addStopRow(null);
                 document.getElementById('tourModal').style.display = 'block';
             }
             function addStopRow(s) {
                 const d = document.createElement('div'); d.className = 'stop-edit-row'; d.style = 'border:1px solid #444; padding:15px; margin-bottom:15px; border-radius:8px; position:relative;';
-                const uuid = s ? s.uuid : (crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2,15));
+                const uuid = s ? s.uuid : (window.crypto && crypto.randomUUID ? crypto.randomUUID() : null);
                 const items = s && s.items ? (Array.isArray(s.items) ? s.items : [s.items]) : [{ recipient: s ? s.recipient : '', notes: s ? s.notes : '', stop_type: s ? s.stop_type : 'DELIVERY' }];
-                d.innerHTML = \`<button onclick="this.parentElement.remove()" style="position:absolute; right:10px; top:10px; background:#e74c3c; border:none; color:white; padding:5px 10px; border-radius:4px; cursor:pointer;">X</button>
-                    <input type="hidden" class="stop-uuid" value="\${uuid}">
+
+                d.dataset.lat = s ? (s.latitude || '') : '';
+                d.dataset.lng = s ? (s.longitude || '') : '';
+
+                d.innerHTML = `<button onclick="this.parentElement.remove()" style="position:absolute; right:10px; top:10px; background:#e74c3c; border:none; color:white; padding:5px 10px; border-radius:4px; cursor:pointer;">X</button>
+                    <input type="hidden" class="stop-uuid" value="${uuid || ''}">
                     <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
-                        <div><label>Címzett</label><input type="text" class="stop-recipient" value="\${items[0].recipient || ''}"></div>
-                        <div><label>Cég</label><input type="text" class="stop-company" value="\${s ? (s.company || '') : ''}"></div>
+                        <div><label>Címzett</label><input type="text" class="stop-recipient" value="${items[0].recipient || ''}"></div>
+                        <div><label>Cég</label><input type="text" class="stop-company" value="${s ? (s.company || '') : ''}"></div>
                     </div>
                     <div style="display:grid; grid-template-columns:2fr 1fr; gap:10px; margin-top:5px;">
-                        <div><label>Utca</label><input type="text" class="stop-street" value="\${s ? (s.street || '') : ''}"></div>
-                        <div><label>Házszám</label><input type="text" class="stop-house" value="\${s ? (s.house_number || '') : ''}"></div>
+                        <div><label>Utca</label><input type="text" class="stop-street" value="${s ? (s.street || '') : ''}"></div>
+                        <div><label>Házszám</label><input type="text" class="stop-house" value="${s ? (s.house_number || '') : ''}"></div>
                     </div>
                     <div style="display:grid; grid-template-columns:1fr 2fr; gap:10px; margin-top:5px;">
-                        <div><label>Irsz</label><input type="text" class="stop-postal" value="\${s ? (s.postal_code || '') : ''}"></div>
-                        <div><label>Város</label><input type="text" class="stop-city" value="\${s ? (s.city || '') : ''}"></div>
+                        <div><label>Irsz</label><input type="text" class="stop-postal" value="${s ? (s.postal_code || '') : ''}"></div>
+                        <div><label>Város</label><input type="text" class="stop-city" value="${s ? (s.city || '') : ''}"></div>
                     </div>
-                    <div style="margin-top:10px;"><label>Típus</label><select class="stop-type"><option value="DELIVERY" \${items[0].stop_type==='DELIVERY'?'selected':''}>DELIVERY</option><option value="PICKUP" \${items[0].stop_type==='PICKUP'?'selected':''}>PICKUP</option><option value="HOTEL" \${items[0].stop_type==='HOTEL'?'selected':''}>HOTEL</option></select></div>\`;
+                    <div style="margin-top:10px;"><label>Típus</label><select class="stop-type"><option value="DELIVERY" ${items[0].stop_type==='DELIVERY'?'selected':''}>DELIVERY</option><option value="PICKUP" ${items[0].stop_type==='PICKUP'?'selected':''}>PICKUP</option><option value="HOTEL" ${items[0].stop_type==='HOTEL'?'selected':''}>HOTEL</option></select></div>`;
                 document.getElementById('modalStops').appendChild(d);
             }
             async function saveTour() {
                 const stops = []; document.querySelectorAll('.stop-edit-row').forEach((r, i) => {
+                    const u = r.querySelector('.stop-uuid').value;
                     stops.push({
-                        uuid: r.querySelector('.stop-uuid').value, recipient: r.querySelector('.stop-recipient').value, company: r.querySelector('.stop-company').value,
-                        street: r.querySelector('.stop-street').value, house_number: r.querySelector('.stop-house').value, postal_code: r.querySelector('.stop-postal').value,
-                        city: r.querySelector('.stop-city').value, stop_type: r.querySelector('.stop-type').value, order_index: i
+                        uuid: u === "" ? null : u,
+                        recipient: r.querySelector('.stop-recipient').value,
+                        company: r.querySelector('.stop-company').value,
+                        street: r.querySelector('.stop-street').value,
+                        house_number: r.querySelector('.stop-house').value,
+                        postal_code: r.querySelector('.stop-postal').value,
+                        city: r.querySelector('.stop-city').value,
+                        stop_type: r.querySelector('.stop-type').value,
+                        order_index: i,
+                        latitude: r.dataset.lat ? parseFloat(r.dataset.lat) : null,
+                        longitude: r.dataset.lng ? parseFloat(r.dataset.lng) : null
                     });
                 });
                 const tourId = document.getElementById('tourId').value;
+                const modal = document.getElementById('tourModal');
+                const uId = document.getElementById('tourUuid').value;
+                const tourDate = document.getElementById('tDate').value ? new Date(document.getElementById('tDate').value).getTime() : Date.now();
                 const data = {
-                    id: tourId === "" ? null : parseInt(tourId), uuid: document.getElementById('tourUuid').value,
+                    id: tourId === "" ? null : parseInt(tourId),
+                    uuid: uId === "" ? null : uId,
                     driver_name: '${name}', name: document.getElementById('tName').value, customer: document.getElementById('tCustomer').value,
-                    date: new Date(document.getElementById('tDate').value).getTime(), day_of_week: document.getElementById('tDay').value, notes: document.getElementById('tNotes').value,
+                    date: tourDate, is_current: document.getElementById('tIsCurrent').checked, notes: document.getElementById('tNotes').value,
                     depot_name: document.getElementById('tDepotName').value, depot_company: document.getElementById('tDepotCompany').value,
                     depot_street: document.getElementById('tDepotStreet').value, depot_house_number: document.getElementById('tDepotHouse').value,
-                    depot_postal_code: document.getElementById('tDepotPostal').value, depot_city: document.getElementById('tDepotCity').value, stops
+                    depot_postal_code: document.getElementById('tDepotPostal').value, depot_city: document.getElementById('tDepotCity').value,
+                    depot_lat: modal.dataset.lat ? parseFloat(modal.dataset.lat) : null,
+                    depot_lng: modal.dataset.lng ? parseFloat(modal.dataset.lng) : null,
+                    stops
                 };
                 const res = await fetch('/admin/save-tour', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) });
                 if(res.ok) location.reload(); else alert('Hiba!');
