@@ -153,7 +153,9 @@ const initDb = async () => {
         ['live_updates', 'depot_lat', 'DOUBLE PRECISION'],
         ['live_updates', 'depot_lng', 'DOUBLE PRECISION'],
         ['live_updates', 'next_stop_duration', 'BIGINT'],
-        ['live_updates', 'tour_remaining_duration', 'BIGINT']
+        ['live_updates', 'tour_remaining_duration', 'BIGINT'],
+        ['live_updates', 'include_rests', 'BOOLEAN DEFAULT TRUE'],
+        ['live_updates', 'next_break_in_seconds', 'BIGINT']
     ];
     for (const [t, c, type] of cols) {
         if (t === 'stops' && c === 'items') console.log('[SCHEMA] checking stops.items');
@@ -187,7 +189,7 @@ app.post('/api/live-update', async (req, res) => {
         const prevRes = await pool.query('SELECT status FROM live_updates WHERE driver_name = $1 ORDER BY timestamp DESC LIMIT 1', [d.driverName]);
         const prevStatus = prevRes.rows.length > 0 ? prevRes.rows[0].status : 'N/A';
 
-        const sql = 'INSERT INTO live_updates (uuid, driver_name, driver_photo, driver_phone, driver_email, license_plate, latitude, longitude, speed, status, current_tour, next_stop, next_lat, next_lng, next_stop_dist, next_stop_duration, tour_remaining_dist, tour_remaining_duration, depot_name, depot_lat, depot_lng, timestamp) VALUES (COALESCE($1::UUID, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)';
+        const sql = 'INSERT INTO live_updates (uuid, driver_name, driver_photo, driver_phone, driver_email, license_plate, latitude, longitude, speed, status, current_tour, next_stop, next_lat, next_lng, next_stop_dist, next_stop_duration, tour_remaining_dist, tour_remaining_duration, depot_name, depot_lat, depot_lng, timestamp, include_rests, next_break_in_seconds) VALUES (COALESCE($1::UUID, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)';
 
         console.log(`[TRACE-LIVE] Endpoint: /api/live-update`);
         console.log(`[TRACE-LIVE] Body: ${JSON.stringify(d)}`);
@@ -196,7 +198,7 @@ app.post('/api/live-update', async (req, res) => {
         console.log(`[TRACE-LIVE] New Status: ${d.status}`);
         console.log(`[TRACE-LIVE] SQL: ${sql}`);
 
-        await pool.query(sql, [d.uuid || null, d.driverName, d.driverPhoto, d.driverPhone, d.driverEmail, d.licensePlate, d.latitude, d.longitude, d.speed, d.status, d.currentTour, d.nextStop, d.nextLat, d.nextLng, d.nextStopDistance, d.nextStopDuration, d.tourRemainingDistance, d.tourRemainingDuration, d.depotName, d.depotLat, d.depotLng, d.timestamp]);
+        await pool.query(sql, [d.uuid || null, d.driverName, d.driverPhoto, d.driverPhone, d.driverEmail, d.licensePlate, d.latitude, d.longitude, d.speed, d.status, d.currentTour, d.nextStop, d.nextLat, d.nextLng, d.nextStopDistance, d.nextStopDuration, d.tourRemainingDistance, d.tourRemainingDuration, d.depotName, d.depotLat, d.depotLng, d.timestamp, d.includeRests ?? true, d.nextBreakInSeconds || null]);
         res.sendStatus(200);
     } catch (e) {
         console.error(`[TRACE-LIVE] Error: ${e.message}`);
@@ -392,6 +394,11 @@ app.get('/driver/:name', async (req, res) => {
                                     <div style="font-size:11px; color:#2ecc71;" id="tourDurationDisplay"></div>
                                 </div>
                             </div>
+                            ${update.next_break_in_seconds ? `
+                                <div style="margin-top:10px; font-size:11px; color:#e74c3c; text-align:center; border-top:1px solid #444; padding-top:5px;">
+                                    ⚠️ Következő pihenő kb. <span id="nextBreakDisplay"></span> múlva
+                                </div>
+                            ` : ''}
                         </div>
                     ` : '<p style="color:#777">Nincs aktív túra</p>'}
 
@@ -477,12 +484,18 @@ app.get('/driver/:name', async (req, res) => {
             function calculateAdjustedDuration(pureSec, doneSec) {
                 if (!pureSec) return 0;
                 let total = pureSec;
-                let progress = doneSec % 16200; // 4.5h block
-                let remaining = 16200 - progress;
+                let blockSize = 16200; // 4.5h
+                let restSize = 2700; // 45m
+                let progress = doneSec % blockSize;
+                let remaining = blockSize - progress;
                 if (pureSec > remaining) {
-                    total += 2700; // first 45m rest
+                    total += restSize;
                     let left = pureSec - remaining;
-                    total += Math.floor(left / 16200) * 2700;
+                    total += Math.floor(left / blockSize) * restSize;
+                }
+                // Daily limit 9h
+                if (doneSec + pureSec > 32400) {
+                    total += 39600; // 11h
                 }
                 return total;
             }
@@ -490,12 +503,19 @@ app.get('/driver/:name', async (req, res) => {
             // Update displays
             const nextDur = ${update.next_stop_duration || 0};
             const tourDur = ${update.tour_remaining_duration || 0};
+            const nextBreak = ${update.next_break_in_seconds || 0};
+            const isAdjusted = ${update.include_rests ?? true};
 
             if (nextDur > 0) {
-                document.getElementById('nextStopDurationDisplay').innerText = formatDuration(calculateAdjustedDuration(nextDur, DRIVING_DONE_TODAY));
+                const d = isAdjusted ? nextDur : calculateAdjustedDuration(nextDur, DRIVING_DONE_TODAY);
+                document.getElementById('nextStopDurationDisplay').innerText = formatDuration(d);
             }
             if (tourDur > 0) {
-                document.getElementById('tourDurationDisplay').innerText = formatDuration(calculateAdjustedDuration(tourDur, DRIVING_DONE_TODAY));
+                const d = isAdjusted ? tourDur : calculateAdjustedDuration(tourDur, DRIVING_DONE_TODAY);
+                document.getElementById('tourDurationDisplay').innerText = formatDuration(d);
+            }
+            if (nextBreak > 0 && document.getElementById('nextBreakDisplay')) {
+                document.getElementById('nextBreakDisplay').innerText = formatDuration(nextBreak);
             }
 
             const driverLat = ${update.latitude || 47.4979};
