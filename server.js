@@ -174,9 +174,12 @@ const StatusEngine = {
                     .filter(s => !s.is_completed && s.latitude && s.longitude)
                     .map(s => `${s.longitude},${s.latitude}`);
 
-                // Ha van depó, azt MINDIG adjuk hozzá a végéhez, ha a túra részeként tekintünk rá
-                if (currentTour.depot_lat && currentTour.depot_lng) {
-                    waypoints.push(`${currentTour.depot_lng},${currentTour.depot_lat}`);
+                // Ha van depó (túrához rendelt, app által küldött vagy sofőrhöz rendelt bázis), azt MINDIG adjuk hozzá a végéhez
+                const finalDepotLat = currentTour.depot_lat || d.depotLat || dInfo?.base_lat;
+                const finalDepotLng = currentTour.depot_lng || d.depotLng || dInfo?.base_lng;
+
+                if (finalDepotLat && finalDepotLng) {
+                    waypoints.push(`${finalDepotLng},${finalDepotLat}`);
                 }
 
                 if (waypoints.length > 0) {
@@ -198,8 +201,8 @@ const StatusEngine = {
 
                     if (nextStop) {
                         nextStopInfo = `${nextStop.contact_name || nextStop.recipient} | ${nextStop.address}`;
-                    } else if (currentTour.depot_lat) {
-                        nextStopInfo = `Vissza a depóba | ${currentTour.depot_name || 'Depó'}`;
+                    } else if (finalDepotLat) {
+                        nextStopInfo = `Vissza a depóba | ${currentTour.depot_name || d.depotName || 'Telephely'}`;
                     }
                 }
             } catch (e) {
@@ -215,11 +218,11 @@ const StatusEngine = {
             tourRemainingDur,
             nextStopInfo,
             currentTourName: currentTour?.name,
-            depotName: currentTour?.depot_name,
-            depotLat: currentTour?.depot_lat,
-            depotLng: currentTour?.depot_lng,
-            nextLat: nextStop ? nextStop.latitude : (currentTour?.depot_lat || d.nextLat),
-            nextLng: nextStop ? nextStop.longitude : (currentTour?.depot_lng || d.nextLng)
+            depotName: currentTour?.depot_name || d.depotName || (dInfo?.base_lat ? 'Alapértelmezett Depó' : null),
+            depotLat: currentTour?.depot_lat || d.depotLat || dInfo?.base_lat,
+            depotLng: currentTour?.depot_lng || d.depotLng || dInfo?.base_lng,
+            nextLat: nextStop ? nextStop.latitude : (currentTour?.depot_lat || d.depotLat || dInfo?.base_lat || d.nextLat),
+            nextLng: nextStop ? nextStop.longitude : (currentTour?.depot_lng || d.depotLng || dInfo?.base_lng || d.nextLng)
         };
     },
 
@@ -1082,15 +1085,15 @@ app.get('/driver/:name', async (req, res) => {
             }
 
             // Depó marker
-            if (${update.depot_lat ? 'true' : 'false'}) {
+            if (update.depot_lat != null && update.depot_lat !== 0) {
                 const depotIcon = L.divIcon({
                     className: 'custom-div-icon',
                     html: "<div style='background-color:#2ecc71; color:white; border-radius:50%; width:24px; height:24px; display:flex; align-items:center; justify-content:center; font-size:12px; border:2px solid white;'>🏠</div>",
                     iconSize: [24, 24],
                     iconAnchor: [12, 12]
                 });
-                L.marker([${update.depot_lat || 0}, ${update.depot_lng || 0}], { icon: depotIcon }).addTo(map).bindPopup('🏠 Depó: ${update.depot_name}');
-                bounds.extend([${update.depot_lat || 0}, ${update.depot_lng || 0}]);
+                L.marker([update.depot_lat, update.depot_lng], { icon: depotIcon }).addTo(map).bindPopup('🏠 Depó: ' + (update.depot_name || 'Bázis'));
+                bounds.extend([update.depot_lat, update.depot_lng]);
             }
 
             // Térkép igazítása
