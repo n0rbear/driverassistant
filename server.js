@@ -169,26 +169,33 @@ const StatusEngine = {
         // 4. OSRM Calculations (Moved from App)
         if (currentTour) {
             try {
-                const waypoints = incompleteStops
-                    .filter(s => s.latitude && s.longitude)
+                // Csak azokat a megállókat vegyük bele, amik még nincsenek kész
+                const waypoints = stops
+                    .filter(s => !s.is_completed && s.latitude && s.longitude)
                     .map(s => `${s.longitude},${s.latitude}`);
 
+                // Ha van depó, azt MINDIG adjuk hozzá a végéhez, ha a túra részeként tekintünk rá
                 if (currentTour.depot_lat && currentTour.depot_lng) {
                     waypoints.push(`${currentTour.depot_lng},${currentTour.depot_lat}`);
                 }
 
                 if (waypoints.length > 0) {
                     const url = `https://router.project-osrm.org/route/v1/driving/${d.longitude},${d.latitude};${waypoints.join(';')}?overview=false`;
-                    const r = await fetch(url).then(res => res.json());
+                    const response = await fetch(url);
+                    const r = await response.json();
+
                     if (r.routes && r.routes[0]) {
                          tourRemainingDist = r.routes[0].distance / 1000;
                          tourRemainingDur = Math.round(r.routes[0].duration);
+
+                         // A következő célpont távolsága (lehet megálló vagy depó)
                          if (r.routes[0].legs && r.routes[0].legs[0]) {
                              nextStopDist = r.routes[0].legs[0].distance / 1000;
                              nextStopDur = Math.round(r.routes[0].legs[0].duration);
                          }
-                         console.log(`[OSRM] ${driverName} -> Remaining: ${tourRemainingDist.toFixed(1)}km`);
+                         console.log(`[OSRM] ${driverName} -> Összesen: ${tourRemainingDist.toFixed(1)}km, Következőig: ${nextStopDist?.toFixed(1)}km`);
                     }
+
                     if (nextStop) {
                         nextStopInfo = `${nextStop.contact_name || nextStop.recipient} | ${nextStop.address}`;
                     } else if (currentTour.depot_lat) {
@@ -937,18 +944,19 @@ app.get('/driver/:name', async (req, res) => {
 
             async function drawRoute(currentLat, currentLng, stops, depotLat, depotLng) {
                 const incompleteStops = (stops || []).filter(s => !s.is_completed && s.latitude && s.longitude);
-                let waypointStr = currentLng + ',' + currentLat;
+                let waypoints = [[currentLat, currentLng]];
 
                 incompleteStops.forEach(s => {
-                    waypointStr += ';' + s.longitude + ',' + s.latitude;
+                    waypoints.push([s.latitude, s.longitude]);
                 });
 
-                if (depotLat != null && depotLat !== 0) {
-                    waypointStr += ';' + depotLng + ',' + depotLat;
+                if (depotLat != null && depotLat !== 0 && !isNaN(depotLat)) {
+                    waypoints.push([depotLat, depotLng]);
                 }
 
-                if (waypointStr.includes(';')) {
+                if (waypoints.length > 1) {
                     try {
+                        const waypointStr = waypoints.map(w => w[1] + ',' + w[0]).join(';');
                         const r = await fetch('https://router.project-osrm.org/route/v1/driving/' + waypointStr + '?overview=full&geometries=geojson');
                         const data = await r.json();
                         if (data.routes && data.routes[0]) {
@@ -956,6 +964,9 @@ app.get('/driver/:name', async (req, res) => {
                             routeLayer = L.geoJSON(data.routes[0].geometry, { style: { color: '#3498db', weight: 5, opacity: 0.7 } }).addTo(map);
                         }
                     } catch (e) { console.error('Route error:', e); }
+                } else if (routeLayer) {
+                    map.removeLayer(routeLayer);
+                    routeLayer = null;
                 }
             }
 
@@ -986,8 +997,12 @@ app.get('/driver/:name', async (req, res) => {
                         document.getElementById('live-tour-container').style.display = 'block';
                         document.getElementById('no-tour-msg').style.display = 'none';
                         document.getElementById('live-tour-name').innerText = d.current_tour;
-                        document.getElementById('live-next-dist').innerText = d.next_stop_dist !== null ? d.next_stop_dist.toFixed(1) + ' km' : 'N/A';
-                        document.getElementById('live-tour-dist').innerText = d.tour_remaining_dist !== null ? d.tour_remaining_dist.toFixed(1) + ' km' : 'N/A';
+
+                        const nDist = (d.next_stop_dist !== null && d.next_stop_dist !== undefined) ? d.next_stop_dist : 0;
+                        const tDist = (d.tour_remaining_dist !== null && d.tour_remaining_dist !== undefined) ? d.tour_remaining_dist : 0;
+
+                        document.getElementById('live-next-dist').innerText = nDist > 0 ? nDist.toFixed(1) + ' km' : '---';
+                        document.getElementById('live-tour-dist').innerText = tDist > 0 ? tDist.toFixed(1) + ' km' : '---';
                     } else {
                         document.getElementById('live-tour-container').style.display = 'none';
                         document.getElementById('no-tour-msg').style.display = 'block';
