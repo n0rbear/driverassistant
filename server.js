@@ -761,9 +761,6 @@ app.get('/driver/:name', async (req, res) => {
                 ];
                 map.fitBounds(fitBounds, { padding: [50, 50], maxZoom: 15 });
             }
-                ];
-                map.fitBounds(fitBounds, { padding: [50, 50], maxZoom: 15 });
-            }
 
             // Útvonal tervezése a teljes hátralévő túrára
             const incompleteStops = rawStops.filter(s => !s.is_completed && s.latitude && s.longitude);
