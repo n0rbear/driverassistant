@@ -675,6 +675,8 @@ app.get('/driver/:name', async (req, res) => {
                     } else {
                         document.getElementById('live-next-stop-container').style.display = 'none';
                     }
+                        document.getElementById('live-next-stop-container').style.display = 'none';
+                    }
 
                     nextDur = d.next_stop_duration || 0;
                     tourDur = d.tour_remaining_duration || 0;
@@ -758,6 +760,9 @@ app.get('/driver/:name', async (req, res) => {
                 const fitBounds = [
                     [driverLat - maxDLat * 1.1 - 0.002, driverLng - maxDLng * 1.1 - 0.002],
                     [driverLat + maxDLat * 1.1 + 0.002, driverLng + maxDLng * 1.1 + 0.002]
+                ];
+                map.fitBounds(fitBounds, { padding: [50, 50], maxZoom: 15 });
+            }
                 ];
                 map.fitBounds(fitBounds, { padding: [50, 50], maxZoom: 15 });
             }
