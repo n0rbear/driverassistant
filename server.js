@@ -76,7 +76,7 @@ const StatusEngine = {
         const workTimesToday = todayWorkRes.rows;
 
         // 3. Get current tour and stops
-        const tourRes = await client.query('SELECT id, name FROM tours WHERE driver_name = $1 AND is_current = true AND deleted_at IS NULL LIMIT 1', [driverName]);
+        const tourRes = await client.query('SELECT id, name, depot_name, depot_lat, depot_lng FROM tours WHERE driver_name = $1 AND is_current = true AND deleted_at IS NULL LIMIT 1', [driverName]);
         const currentTour = tourRes.rows[0];
         let stops = [];
         if (currentTour) {
@@ -167,27 +167,50 @@ const StatusEngine = {
         }
 
         // 4. OSRM Calculations (Moved from App)
-        if (nextStop) {
+        if (currentTour) {
             try {
                 const waypoints = incompleteStops
                     .filter(s => s.latitude && s.longitude)
                     .map(s => `${s.longitude},${s.latitude}`);
 
-                const url = `https://router.project-osrm.org/route/v1/driving/${d.longitude},${d.latitude};${waypoints.join(';')}?overview=false`;
-                const r = await fetch(url).then(res => res.json());
-                if (r.routes && r.routes[0]) {
-                     tourRemainingDist = r.routes[0].distance / 1000;
-                     tourRemainingDur = Math.round(r.routes[0].duration);
-                     if (r.routes[0].legs && r.routes[0].legs[0]) {
-                         nextStopDist = r.routes[0].legs[0].distance / 1000;
-                         nextStopDur = Math.round(r.routes[0].legs[0].duration);
-                     }
+                if (currentTour.depot_lat && currentTour.depot_lng) {
+                    waypoints.push(`${currentTour.depot_lng},${currentTour.depot_lat}`);
                 }
-                nextStopInfo = `${nextStop.contact_name || nextStop.recipient} | ${nextStop.address}`;
+
+                if (waypoints.length > 0) {
+                    const url = `https://router.project-osrm.org/route/v1/driving/${d.longitude},${d.latitude};${waypoints.join(';')}?overview=false`;
+                    const r = await fetch(url).then(res => res.json());
+                    if (r.routes && r.routes[0]) {
+                         tourRemainingDist = r.routes[0].distance / 1000;
+                         tourRemainingDur = Math.round(r.routes[0].duration);
+                         if (r.routes[0].legs && r.routes[0].legs[0]) {
+                             nextStopDist = r.routes[0].legs[0].distance / 1000;
+                             nextStopDur = Math.round(r.routes[0].legs[0].duration);
+                         }
+                    }
+                    if (nextStop) {
+                        nextStopInfo = `${nextStop.contact_name || nextStop.recipient} | ${nextStop.address}`;
+                    } else if (currentTour.depot_lat) {
+                        nextStopInfo = `Vissza a depóba | ${currentTour.depot_name || 'Depó'}`;
+                    }
+                }
             } catch (e) {}
         }
 
-        return { status: calculatedStatus, nextStopDist, nextStopDur, tourRemainingDist, tourRemainingDur, nextStopInfo, currentTourName: currentTour?.name };
+        return {
+            status: calculatedStatus,
+            nextStopDist,
+            nextStopDur,
+            tourRemainingDist,
+            tourRemainingDur,
+            nextStopInfo,
+            currentTourName: currentTour?.name,
+            depotName: currentTour?.depot_name,
+            depotLat: currentTour?.depot_lat,
+            depotLng: currentTour?.depot_lng,
+            nextLat: nextStop ? nextStop.latitude : (currentTour?.depot_lat || d.nextLat),
+            nextLng: nextStop ? nextStop.longitude : (currentTour?.depot_lng || d.nextLng)
+        };
     },
 
     async startWork(client, driverName, type, date, plate, mileage, now) {
@@ -375,15 +398,15 @@ app.post('/api/live-update', async (req, res) => {
             resObj.status,
             resObj.currentTourName || d.currentTour,
             resObj.nextStopInfo || d.nextStop,
-            d.nextLat,
-            d.nextLng,
+            resObj.nextLat || d.nextLat,
+            resObj.nextLng || d.nextLng,
             resObj.nextStopDist || d.nextStopDistance,
             Math.round(resObj.nextStopDur || d.nextStopDuration || 0),
             resObj.tourRemainingDist || d.tourRemainingDistance,
             Math.round(resObj.tourRemainingDur || d.tourRemainingDuration || 0),
-            d.depotName,
-            d.depotLat,
-            d.depotLng,
+            resObj.depotName || d.depotName,
+            resObj.depotLat || d.depotLat,
+            resObj.depotLng || d.depotLng,
             d.timestamp,
             d.includeRests ?? true,
             d.nextBreakInSeconds ? Math.round(d.nextBreakInSeconds) : null
@@ -916,7 +939,7 @@ app.get('/driver/:name', async (req, res) => {
                     waypointStr += ';' + s.longitude + ',' + s.latitude;
                 });
 
-                if (depotLat) {
+                if (depotLat != null && depotLat !== 0) {
                     waypointStr += ';' + depotLng + ',' + depotLat;
                 }
 
@@ -1081,7 +1104,7 @@ app.get('/driver/:name', async (req, res) => {
                 waypointStr += ';' + s.longitude + ',' + s.latitude;
             });
 
-            if (${update.depot_lat ? 'true' : 'false'}) {
+            if (${update.depot_lat != null ? 'true' : 'false'}) {
                 waypointStr += ';' + ${update.depot_lng || 0} + ',' + ${update.depot_lat || 0};
             }
 
