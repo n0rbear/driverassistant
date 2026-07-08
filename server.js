@@ -531,7 +531,6 @@ app.get('/driver/:name', async (req, res) => {
 
             // Kezdő tab betöltése
             const savedTab = localStorage.getItem('activeTab_${name}') || 'dashboard';
-            openTab(null, savedTab);
 
             // Térkép inicializálása
             let DRIVING_DONE_TODAY = ${drivingTodaySec};
@@ -573,22 +572,24 @@ app.get('/driver/:name', async (req, res) => {
             let isAdjusted = ${update.include_rests ?? true};
 
             function updateTimeDisplays() {
-                if (nextDur > 0) {
-                    const d = isAdjusted ? nextDur : calculateAdjustedDuration(nextDur, DRIVING_DONE_TODAY);
-                    document.getElementById('nextStopDurationDisplay').innerText = formatDuration(d);
-                } else { document.getElementById('nextStopDurationDisplay').innerText = ''; }
+                try {
+                    if (nextDur > 0) {
+                        const d = isAdjusted ? nextDur : calculateAdjustedDuration(nextDur, DRIVING_DONE_TODAY);
+                        document.getElementById('nextStopDurationDisplay').innerText = formatDuration(d);
+                    } else { document.getElementById('nextStopDurationDisplay').innerText = ''; }
 
-                if (tourDur > 0) {
-                    const d = isAdjusted ? tourDur : calculateAdjustedDuration(tourDur, DRIVING_DONE_TODAY);
-                    document.getElementById('tourDurationDisplay').innerText = formatDuration(d);
-                } else { document.getElementById('tourDurationDisplay').innerText = ''; }
+                    if (tourDur > 0) {
+                        const d = isAdjusted ? tourDur : calculateAdjustedDuration(tourDur, DRIVING_DONE_TODAY);
+                        document.getElementById('tourDurationDisplay').innerText = formatDuration(d);
+                    } else { document.getElementById('tourDurationDisplay').innerText = ''; }
 
-                if (nextBreak > 0 && document.getElementById('nextBreakDisplay')) {
-                    document.getElementById('nextBreakDisplay').innerText = formatDuration(nextBreak);
-                    document.getElementById('live-break-container').style.display = 'block';
-                } else if (document.getElementById('live-break-container')) {
-                    document.getElementById('live-break-container').style.display = 'none';
-                }
+                    if (nextBreak > 0 && document.getElementById('nextBreakDisplay')) {
+                        document.getElementById('nextBreakDisplay').innerText = formatDuration(nextBreak);
+                        document.getElementById('live-break-container').style.display = 'block';
+                    } else if (document.getElementById('live-break-container')) {
+                        document.getElementById('live-break-container').style.display = 'none';
+                    }
+                } catch(e) { console.error('Time update error:', e); }
             }
             updateTimeDisplays();
 
@@ -609,7 +610,7 @@ app.get('/driver/:name', async (req, res) => {
             let lastNextLng = ${update.next_lng || 0};
 
             async function drawRoute(currentLat, currentLng, stops, depotLat, depotLng) {
-                const incompleteStops = stops.filter(s => !s.is_completed && s.latitude && s.longitude);
+                const incompleteStops = (stops || []).filter(s => !s.is_completed && s.latitude && s.longitude);
                 let waypointStr = currentLng + ',' + currentLat;
 
                 incompleteStops.forEach(s => {
@@ -633,6 +634,7 @@ app.get('/driver/:name', async (req, res) => {
             }
 
             // Kezdeti útvonal
+            const rawStops = ${currentStopsJson};
             if (rawStops && rawStops.length > 0) {
                 drawRoute(driverLat, driverLng, rawStops, ${update.depot_lat || 0}, ${update.depot_lng || 0});
             }
@@ -707,23 +709,31 @@ app.get('/driver/:name', async (req, res) => {
 
             setInterval(refreshLiveStatus, 5000);
 
+            // Ha a dashboardon vagyunk, 5 másodpercenként oldalfrissítés (felhasználói kérésre)
+            setInterval(() => {
+                if (localStorage.getItem('activeTab_${name}') === 'dashboard') {
+                    // location.reload(); // Ezt egyelőre kommentben hagyom, mert a refreshLiveStatus-nak kéne működnie
+                }
+            }, 5000);
+
             // Túra állomások
-            const rawStops = ${currentStopsJson};
             const bounds = L.latLngBounds([driverLat, driverLng]);
 
-            rawStops.forEach(s => {
-                if (s.latitude && s.longitude) {
-                    const icon = L.divIcon({
-                        className: 'custom-div-icon',
-                        html: "<div style='background-color:#e74c3c; color:white; border-radius:50%; width:20px; height:20px; display:flex; align-items:center; justify-content:center; font-size:10px; font-weight:bold; border:2px solid white;'>" + (s.order_index + 1) + "</div>",
-                        iconSize: [20, 20],
-                        iconAnchor: [10, 10]
-                    });
-                    L.marker([s.latitude, s.longitude], { icon: icon }).addTo(map)
-                        .bindPopup((s.order_index + 1) + '. ' + (s.recipient || s.address_full || s.address));
-                    bounds.extend([s.latitude, s.longitude]);
-                }
-            });
+            if (rawStops) {
+                rawStops.forEach(s => {
+                    if (s.latitude && s.longitude) {
+                        const icon = L.divIcon({
+                            className: 'custom-div-icon',
+                            html: "<div style='background-color:#e74c3c; color:white; border-radius:50%; width:20px; height:20px; display:flex; align-items:center; justify-content:center; font-size:10px; font-weight:bold; border:2px solid white;'>" + (s.order_index + 1) + "</div>",
+                            iconSize: [20, 20],
+                            iconAnchor: [10, 10]
+                        });
+                        L.marker([s.latitude, s.longitude], { icon: icon }).addTo(map)
+                            .bindPopup((s.order_index + 1) + '. ' + (s.recipient || s.address_full || s.address));
+                        bounds.extend([s.latitude, s.longitude]);
+                    }
+                });
+            }
 
             // Depó marker
             if (${update.depot_lat ? 'true' : 'false'}) {
@@ -738,17 +748,19 @@ app.get('/driver/:name', async (req, res) => {
             }
 
             // Térkép igazítása
-            if (rawStops.length > 0 || ${update.depot_lat ? 'true' : 'false'}) {
+            if ((rawStops && rawStops.length > 0) || ${update.depot_lat ? 'true' : 'false'}) {
                 const center = [driverLat, driverLng];
                 let maxDLat = 0;
                 let maxDLng = 0;
 
-                rawStops.forEach(s => {
-                    if (s.latitude && s.longitude) {
-                        maxDLat = Math.max(maxDLat, Math.abs(s.latitude - driverLat));
-                        maxDLng = Math.max(maxDLng, Math.abs(s.longitude - driverLng));
-                    }
-                });
+                if (rawStops) {
+                    rawStops.forEach(s => {
+                        if (s.latitude && s.longitude) {
+                            maxDLat = Math.max(maxDLat, Math.abs(s.latitude - driverLat));
+                            maxDLng = Math.max(maxDLng, Math.abs(s.longitude - driverLng));
+                        }
+                    });
+                }
 
                 if (${update.depot_lat ? 'true' : 'false'}) {
                     maxDLat = Math.max(maxDLat, Math.abs(${update.depot_lat || 0} - driverLat));
@@ -763,7 +775,7 @@ app.get('/driver/:name', async (req, res) => {
             }
 
             // Útvonal tervezése a teljes hátralévő túrára
-            const incompleteStops = rawStops.filter(s => !s.is_completed && s.latitude && s.longitude);
+            const incompleteStops = (rawStops || []).filter(s => !s.is_completed && s.latitude && s.longitude);
             let waypointStr = driverLng + ',' + driverLat;
 
             incompleteStops.forEach(s => {
@@ -798,6 +810,9 @@ app.get('/driver/:name', async (req, res) => {
                     map.invalidateSize();
                 }
             }, 10000);
+
+            // Végül nyissuk meg az elmentett fület
+            openTab(null, savedTab);
 
             // Alapértelmezett tab
             // Eltávolítva az openTab hívás, mert feljebb már megoldottuk a localStorage-al
