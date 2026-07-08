@@ -173,7 +173,7 @@ const StatusEngine = {
                 const r = await fetch(url).then(res => res.json());
                 if (r.routes && r.routes[0]) {
                      nextStopDist = r.routes[0].distance / 1000;
-                     nextStopDur = r.routes[0].duration;
+                     nextStopDur = Math.round(r.routes[0].duration);
                 }
                 nextStopInfo = `${nextStop.contact_name || nextStop.recipient} | ${nextStop.address}`;
             } catch (e) {}
@@ -200,7 +200,7 @@ const ImportEngine = {
         const existingRes = await client.query('SELECT id FROM tours WHERE uuid = $1', [tourData.uuid]);
         let tourId = existingRes.rows.length > 0 ? existingRes.rows[0].id : null;
 
-        const tour = { ...tourData, driver_name: driverName, updated_at: Date.now() };
+        const tour = { ...tourData, driver_name: driverName, updated_at: tourData.updated_at || tourData.updatedAt || Date.now() };
         const depot = AddressEngine.normalize(tourData);
         const groupedStops = new Map();
 
@@ -354,7 +354,32 @@ app.post('/api/live-update', async (req, res) => {
 
         const sql = 'INSERT INTO live_updates (uuid, driver_name, driver_photo, driver_phone, driver_email, license_plate, latitude, longitude, speed, status, current_tour, next_stop, next_lat, next_lng, next_stop_dist, next_stop_duration, tour_remaining_dist, tour_remaining_duration, depot_name, depot_lat, depot_lng, timestamp, include_rests, next_break_in_seconds) VALUES (COALESCE($1::UUID, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)';
 
-        await client.query(sql, [d.uuid || null, d.driverName, d.driverPhoto, d.driverPhone, d.driverEmail, currentPlate, d.latitude, d.longitude, d.speed, resObj.status, resObj.currentTourName || d.currentTour, resObj.nextStopInfo || d.nextStop, d.nextLat, d.nextLng, resObj.nextStopDist || d.nextStopDistance, resObj.nextStopDur || d.nextStopDuration, d.tourRemainingDistance, d.tourRemainingDuration, d.depotName, d.depotLat, d.depotLng, d.timestamp, d.includeRests ?? true, d.nextBreakInSeconds || null]);
+        await client.query(sql, [
+            d.uuid || null,
+            d.driverName,
+            d.driverPhoto,
+            d.driverPhone,
+            d.driverEmail,
+            currentPlate,
+            d.latitude,
+            d.longitude,
+            d.speed,
+            resObj.status,
+            resObj.currentTourName || d.currentTour,
+            resObj.nextStopInfo || d.nextStop,
+            d.nextLat,
+            d.nextLng,
+            resObj.nextStopDist || d.nextStopDistance,
+            Math.round(resObj.nextStopDur || d.nextStopDuration || 0),
+            d.tourRemainingDistance,
+            Math.round(d.tourRemainingDuration || 0),
+            d.depotName,
+            d.depotLat,
+            d.depotLng,
+            d.timestamp,
+            d.includeRests ?? true,
+            d.nextBreakInSeconds ? Math.round(d.nextBreakInSeconds) : null
+        ]);
 
         await client.query('COMMIT');
 
@@ -367,6 +392,19 @@ app.post('/api/live-update', async (req, res) => {
     } finally {
         client.release();
     }
+});
+
+app.get('/api/get-history/:driverName/:date', async (req, res) => {
+    try {
+        const { driverName, date } = req.params;
+        const startOfDay = new Date(date).getTime();
+        const endOfDay = startOfDay + 24 * 60 * 60 * 1000;
+        const result = await pool.query(
+            'SELECT latitude, longitude, speed, timestamp FROM live_updates WHERE driver_name = $1 AND timestamp >= $2 AND timestamp < $3 ORDER BY timestamp ASC',
+            [driverName, startOfDay, endOfDay]
+        );
+        res.json(result.rows);
+    } catch (e) { res.status(500).send(e.message); }
 });
 
 app.post('/api/send-chat', async (req, res) => {
@@ -549,6 +587,7 @@ app.get('/driver/:name', async (req, res) => {
     const html = `<html><head><title>ERP - ${name}</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         body { font-family: sans-serif; margin: 0; background: #1a1a1a; color: white; display: flex; flex-direction: column; height: 100vh; }
         header { background: #222; padding: 15px 30px; display: flex; align-items: center; border-bottom: 1px solid #444; }
@@ -575,7 +614,7 @@ app.get('/driver/:name', async (req, res) => {
     <body>
         <div id="toast-container"></div>
         <header><button onclick="location.href='/'">⬅</button><img src="${update.driver_photo || ''}" style="width:40px;height:40px;border-radius:50%;margin-left:15px;margin-right:15px;"><h2><span>${name}</span> - ERP</h2></header>
-        <nav><button data-tab="dashboard" onclick="openTab(event, 'dashboard')">DASHBOARD</button><button data-tab="tours" onclick="openTab(event, 'tours')">TÚRÁK</button><button data-tab="costs" onclick="openTab(event, 'costs')">KÖLTSÉGEK</button><button data-tab="hotels" onclick="openTab(event, 'hotels')">HOTELEK</button><button data-tab="chat" onclick="openTab(event, 'chat')">CHAT</button><button data-tab="stats" onclick="openTab(event, 'stats')">STATISZTIKA</button><button data-tab="report" onclick="openTab(event, 'report')">MENETLEVÉL</button><button data-tab="profile" onclick="openTab(event, 'profile')">PROFIL</button></nav>
+        <nav><button data-tab="dashboard" onclick="openTab(event, 'dashboard')">DASHBOARD</button><button data-tab="tours" onclick="openTab(event, 'tours')">TÚRÁK</button><button data-tab="history" onclick="openTab(event, 'history')">TÖRTÉNET</button><button data-tab="costs" onclick="openTab(event, 'costs')">KÖLTSÉGEK</button><button data-tab="hotels" onclick="openTab(event, 'hotels')">HOTELEK</button><button data-tab="chat" onclick="openTab(event, 'chat')">CHAT</button><button data-tab="stats" onclick="openTab(event, 'stats')">STATISZTIKA</button><button data-tab="report" onclick="openTab(event, 'report')">MENETLEVÉL</button><button data-tab="profile" onclick="openTab(event, 'profile')">PROFIL</button></nav>
         <div id="dashboard" class="tab-content">
             <div style="display:grid; grid-template-columns: 1fr 300px; gap: 20px;">
                 <div id="map"></div>
@@ -640,6 +679,20 @@ app.get('/driver/:name', async (req, res) => {
                 `).join('')}
             </div>
         </div>
+        <div id="history" class="tab-content">
+            <div style="display:flex; gap:10px; margin-bottom:20px; align-items:center;">
+                <label style="color:white; font-size:14px;">Dátum választása:</label>
+                <input type="date" id="history-date" style="width:200px;" onchange="loadHistory()">
+                <button onclick="loadHistory()" style="background:#3498db; color:white; padding:8px 20px;">BETÖLTÉS</button>
+            </div>
+            <div style="display:grid; grid-template-columns: 1fr; gap:20px;">
+                <div id="history-map" style="height:400px; border-radius:8px;"></div>
+                <div style="background:#222; padding:15px; border-radius:8px;">
+                    <h3>Sebesség grafikon (km/h)</h3>
+                    <canvas id="speedChart"></canvas>
+                </div>
+            </div>
+        </div>
         <div id="costs" class="tab-content"><table><tr><th>Dátum</th><th>Kategória</th><th>Összeg</th><th>Státusz</th></tr>${costs.map(c => `<tr><td>${new Date(Number(c.timestamp)).toLocaleDateString()}</td><td>${c.category}</td><td>${c.amount} ${c.currency}</td><td>${c.status}</td></tr>`).join('')}</table></div>
         <div id="hotels" class="tab-content"><table><tr><th>Dátum</th><th>Név</th><th>Cím</th></tr>${hotelsRes.map(h => `<tr><td>${new Date(Number(h.timestamp)).toLocaleDateString()}</td><td>${h.name}</td><td>${h.address}</td></tr>`).join('')}</table></div>
         <div id="chat" class="tab-content">
@@ -691,6 +744,87 @@ app.get('/driver/:name', async (req, res) => {
                     }
                 }
             }
+
+                    if (t === 'dashboard' && typeof map !== 'undefined') {
+                        setTimeout(() => map.invalidateSize(), 100);
+                    }
+                    if (t === 'history') {
+                        setTimeout(() => {
+                            if (historyMap) historyMap.invalidateSize();
+                            else initHistoryMap();
+                        }, 100);
+                    }
+                }
+            }
+
+            // History Logic
+            let historyMap = null;
+            let historyRouteLayer = null;
+            let speedChart = null;
+
+            function initHistoryMap() {
+                if (historyMap) return;
+                historyMap = L.map('history-map').setView([47.4979, 19.0402], 13);
+                L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                    attribution: '&copy; OpenStreetMap'
+                }).addTo(historyMap);
+            }
+
+            async function loadHistory() {
+                const date = document.getElementById('history-date').value;
+                if (!date) return;
+                initHistoryMap();
+                try {
+                    const r = await fetch(`/api/get-history/${encodeURIComponent('${name}')}/${date}`);
+                    const data = await r.json();
+                    if (!data || data.length === 0) {
+                        showToast('Nincs adat ehhez a naphoz.');
+                        if (historyRouteLayer) historyMap.removeLayer(historyRouteLayer);
+                        if (speedChart) speedChart.destroy();
+                        return;
+                    }
+
+                    // Map Route
+                    const points = data.filter(d => d.latitude && d.longitude).map(d => [d.latitude, d.longitude]);
+                    if (historyRouteLayer) historyMap.removeLayer(historyRouteLayer);
+                    if (points.length > 0) {
+                        historyRouteLayer = L.polyline(points, { color: '#e74c3c', weight: 4 }).addTo(historyMap);
+                        historyMap.fitBounds(historyRouteLayer.getBounds(), { padding: [30, 30] });
+                    }
+
+                    // Speed Chart
+                    const labels = data.map(d => new Date(Number(d.timestamp)).toLocaleTimeString());
+                    const speeds = data.map(d => Math.round(d.speed || 0));
+
+                    if (speedChart) speedChart.destroy();
+                    const ctx = document.getElementById('speedChart').getContext('2d');
+                    speedChart = new Chart(ctx, {
+                        type: 'line',
+                        data: {
+                            labels: labels,
+                            datasets: [{
+                                label: 'Sebesség',
+                                data: speeds,
+                                borderColor: '#3498db',
+                                backgroundColor: 'rgba(52, 152, 219, 0.2)',
+                                fill: true,
+                                tension: 0.4
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            scales: {
+                                y: { beginAtZero: true, grid: { color: '#444' }, ticks: { color: '#aaa' } },
+                                x: { grid: { display: false }, ticks: { color: '#aaa' } }
+                            },
+                            plugins: { legend: { display: false } }
+                        }
+                    });
+
+                } catch (e) { console.error('History error:', e); showToast('Hiba a betöltés során.'); }
+            }
+
+            document.getElementById('history-date').value = new Date().toISOString().split('T')[0];
 
             // Kezdő tab betöltése
             const savedTab = localStorage.getItem('activeTab_${name}') || 'dashboard';
