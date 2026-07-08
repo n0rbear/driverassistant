@@ -308,7 +308,23 @@ const initDb = async () => {
     console.log('[STARTUP] initDb started');
     await pool.query('CREATE EXTENSION IF NOT EXISTS "pgcrypto"');
     const queries = [
-        `CREATE TABLE IF NOT EXISTS drivers (uuid UUID DEFAULT gen_random_uuid() PRIMARY KEY, name TEXT UNIQUE, email TEXT, phone TEXT, license_plate TEXT, photo_url TEXT, is_active BOOLEAN DEFAULT TRUE, home_lat DOUBLE PRECISION, home_lng DOUBLE PRECISION, base_lat DOUBLE PRECISION, base_lng DOUBLE PRECISION)`,
+        `CREATE TABLE IF NOT EXISTS drivers (
+            uuid UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+            name TEXT UNIQUE,
+            email TEXT,
+            phone TEXT,
+            whatsapp TEXT,
+            telegram TEXT,
+            license_plate TEXT,
+            photo_url TEXT,
+            is_active BOOLEAN DEFAULT TRUE,
+            home_lat DOUBLE PRECISION,
+            home_lng DOUBLE PRECISION,
+            base_lat DOUBLE PRECISION,
+            base_lng DOUBLE PRECISION,
+            activation_code TEXT UNIQUE,
+            created_at BIGINT DEFAULT (EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT
+        )`,
         `CREATE TABLE IF NOT EXISTS live_updates (id SERIAL PRIMARY KEY, uuid UUID DEFAULT gen_random_uuid() UNIQUE, driver_name TEXT, driver_photo TEXT, driver_phone TEXT, driver_email TEXT, license_plate TEXT, latitude DOUBLE PRECISION, longitude DOUBLE PRECISION, speed FLOAT, status TEXT, current_tour TEXT, next_stop TEXT, next_lat DOUBLE PRECISION, next_lng DOUBLE PRECISION, next_stop_dist FLOAT, next_stop_duration BIGINT, tour_remaining_dist FLOAT, tour_remaining_duration BIGINT, depot_name TEXT, depot_lat DOUBLE PRECISION, depot_lng DOUBLE PRECISION, timestamp BIGINT, UNIQUE(uuid))`,
         `CREATE TABLE IF NOT EXISTS costs (id SERIAL PRIMARY KEY, uuid UUID DEFAULT gen_random_uuid() UNIQUE, driver_name TEXT, amount DECIMAL, currency TEXT, category TEXT, notes TEXT, mileage INT, status TEXT DEFAULT 'Rögzítve', timestamp BIGINT, UNIQUE(uuid))`,
         `CREATE TABLE IF NOT EXISTS chat_messages (id SERIAL PRIMARY KEY, uuid UUID DEFAULT gen_random_uuid() UNIQUE, driver_name TEXT, sender TEXT, message TEXT, timestamp BIGINT, UNIQUE(uuid))`,
@@ -360,6 +376,21 @@ const initDb = async () => {
             await pool.query(`ALTER TABLE ${t} ADD COLUMN ${c} ${type}`);
         }
     }
+
+    // Additional driver columns
+    const driverCols = [
+        ['drivers', 'whatsapp', 'TEXT'],
+        ['drivers', 'telegram', 'TEXT'],
+        ['drivers', 'activation_code', 'TEXT UNIQUE'],
+        ['drivers', 'created_at', 'BIGINT']
+    ];
+    for (const [t, c, type] of driverCols) {
+        const check = await pool.query("SELECT column_name FROM information_schema.columns WHERE table_name = $1 AND column_name = $2", [t, c]);
+        if (check.rows.length === 0) {
+            await pool.query(`ALTER TABLE ${t} ADD COLUMN ${c} ${type}`);
+        }
+    }
+
     const verifyItems = await pool.query("SELECT column_name FROM information_schema.columns WHERE table_name='stops' AND column_name='items'");
     if (verifyItems.rows.length === 0) throw new Error("FATAL: Schema migration failed - column 'items' still does not exist in table 'stops'.");
     console.log('[SCHEMA] items column exists');
@@ -484,6 +515,66 @@ app.post('/api/set-current-tour', async (req, res) => {
         console.error(`[TRACE-TOUR] Error in set-current-tour: ${e.message}`);
         res.status(500).send(e.message);
     }
+});
+
+// ==========================================
+// DRIVER PROFILE & AUTH
+// ==========================================
+
+app.post('/api/activate-driver', async (req, res) => {
+    const { code } = req.body;
+    try {
+        const result = await pool.query('SELECT * FROM drivers WHERE activation_code = $1 AND is_active = true', [code]);
+        if (result.rows.length === 0) return res.status(404).send('Érvénytelen vagy inaktív aktiváló kód.');
+        res.json(result.rows[0]);
+    } catch (e) { res.status(500).send(e.message); }
+});
+
+app.post('/api/sync-profile', async (req, res) => {
+    const d = req.body;
+    try {
+        await pool.query(
+            `INSERT INTO drivers (name, email, phone, whatsapp, telegram, license_plate, photo_url)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)
+             ON CONFLICT (name) DO UPDATE SET
+             email = EXCLUDED.email, phone = EXCLUDED.phone, whatsapp = EXCLUDED.whatsapp,
+             telegram = EXCLUDED.telegram, license_plate = EXCLUDED.license_plate, photo_url = EXCLUDED.photo_url`,
+            [d.name, d.email, d.phone, d.whatsapp, d.telegram, d.licensePlate, d.photoUrl]
+        );
+        res.sendStatus(200);
+    } catch (e) { res.status(500).send(e.message); }
+});
+
+app.get('/api/get-profile/:name', async (req, res) => {
+    try {
+        const result = await pool.query('SELECT * FROM drivers WHERE name = $1', [req.params.name]);
+        if (result.rows.length === 0) return res.status(404).send('Driver not found');
+        res.json(result.rows[0]);
+    } catch (e) { res.status(500).send(e.message); }
+});
+
+app.post('/admin/save-driver', async (req, res) => {
+    const d = req.body;
+    try {
+        if (d.uuid) {
+            await pool.query(
+                `UPDATE drivers SET name=$1, email=$2, phone=$3, whatsapp=$4, telegram=$5, license_plate=$6, photo_url=$7, is_active=$8, home_lat=$9, home_lng=$10, base_lat=$11, base_lng=$12 WHERE uuid=$13`,
+                [d.name, d.email, d.phone, d.whatsapp, d.telegram, d.license_plate, d.photo_url, d.is_active, d.home_lat, d.home_lng, d.base_lat, d.base_lng, d.uuid]
+            );
+        } else {
+            const code = Math.random().toString(36).substring(2, 8).toUpperCase();
+            await pool.query(
+                `INSERT INTO drivers (name, email, phone, whatsapp, telegram, license_plate, photo_url, activation_code) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+                [d.name, d.email, d.phone, d.whatsapp, d.telegram, d.license_plate, d.photo_url, code]
+            );
+        }
+        res.json({ success: true });
+    } catch (e) { res.status(500).send(e.message); }
+});
+
+app.get('/api/all-drivers', async (req, res) => {
+    const result = await pool.query('SELECT * FROM drivers ORDER BY name ASC');
+    res.json(result.rows);
 });
 
 app.post('/api/sync-tours/:driverName', async (req, res) => {
@@ -659,7 +750,18 @@ app.get('/driver/:name', async (req, res) => {
     <body>
         <div id="toast-container"></div>
         <header><button onclick="location.href='/'">⬅</button><img src="${update.driver_photo || ''}" style="width:40px;height:40px;border-radius:50%;margin-left:15px;margin-right:15px;"><h2><span>${name}</span> - ERP</h2></header>
-        <nav><button data-tab="dashboard" onclick="openTab(event, 'dashboard')">DASHBOARD</button><button data-tab="tours" onclick="openTab(event, 'tours')">TÚRÁK</button><button data-tab="history" onclick="openTab(event, 'history')">TÖRTÉNET</button><button data-tab="costs" onclick="openTab(event, 'costs')">KÖLTSÉGEK</button><button data-tab="hotels" onclick="openTab(event, 'hotels')">HOTELEK</button><button data-tab="chat" onclick="openTab(event, 'chat')">CHAT</button><button data-tab="stats" onclick="openTab(event, 'stats')">STATISZTIKA</button><button data-tab="report" onclick="openTab(event, 'report')">MENETLEVÉL</button><button data-tab="profile" onclick="openTab(event, 'profile')">PROFIL</button></nav>
+        <nav>
+            <button data-tab="dashboard" onclick="openTab(event, 'dashboard')">DASHBOARD</button>
+            <button data-tab="tours" onclick="openTab(event, 'tours')">TÚRÁK</button>
+            <button data-tab="history" onclick="openTab(event, 'history')">TÖRTÉNET</button>
+            <button data-tab="costs" onclick="openTab(event, 'costs')">KÖLTSÉGEK</button>
+            <button data-tab="hotels" onclick="openTab(event, 'hotels')">HOTELEK</button>
+            <button data-tab="chat" onclick="openTab(event, 'chat')">CHAT</button>
+            <button data-tab="stats" onclick="openTab(event, 'stats')">STATISZTIKA</button>
+            <button data-tab="report" onclick="openTab(event, 'report')">MENETLEVÉL</button>
+            <button data-tab="profile" onclick="openTab(event, 'profile')">PROFIL</button>
+            <button data-tab="admin-drivers" onclick="openTab(event, 'admin-drivers')" style="margin-left:auto; color:#f1c40f;">⚙ SOFŐRÖK</button>
+        </nav>
         <div id="dashboard" class="tab-content">
             <div style="display:grid; grid-template-columns: 1fr 300px; gap: 20px;">
                 <div id="map"></div>
@@ -751,9 +853,59 @@ app.get('/driver/:name', async (req, res) => {
         </div>
         <div id="stats" class="tab-content"><div id="statsBox"></div></div>
         <div id="report" class="tab-content"><h3>Tagesfahrblatt</h3><div id="timelineContainer"></div></div>
-        <div id="profile" class="tab-content"><h3>PROFIL</h3><p>Név: ${name}</p></div>
+        <div id="profile" class="tab-content">
+            <div style="max-width:600px; background:#222; padding:30px; border-radius:12px;">
+                <h3>SOFŐR PROFIL</h3>
+                <div id="profile-display">
+                    <img id="p-photo" src="${update.driver_photo || ''}" style="width:100px; height:100px; border-radius:50%; margin-bottom:20px; background:#333;">
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:20px;">
+                        <div><label>Név</label><input type="text" id="prof-name" value="${name}"></div>
+                        <div><label>Rendszám</label><input type="text" id="prof-plate" value="${update.license_plate || ''}"></div>
+                        <div><label>Email</label><input type="text" id="prof-email" value="${update.driver_email || ''}"></div>
+                        <div><label>Telefon</label><input type="text" id="prof-phone" value="${update.driver_phone || ''}"></div>
+                        <div><label>WhatsApp</label><input type="text" id="prof-whatsapp"></div>
+                        <div><label>Telegram</label><input type="text" id="prof-telegram"></div>
+                    </div>
+                    <div style="margin-top:20px;"><label>Profilkép URL</label><input type="text" id="prof-photo-url" value="${update.driver_photo || ''}"></div>
+                    <button onclick="saveProfile()" style="margin-top:30px; background:#3498db; color:white; padding:12px; width:100%;">PROFIL MENTÉSE</button>
+                </div>
+            </div>
+        </div>
 
-        <div id="tourModal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.8); z-index:1000; padding:50px;">
+        <div id="admin-drivers" class="tab-content">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
+                <h3>SOFŐRÖK KEZELÉSE</h3>
+                <button onclick="editDriver()" style="background:#2ecc71; color:white; padding:10px 20px;">+ Új sofőr</button>
+            </div>
+            <table id="drivers-table">
+                <thead><tr><th>Név</th><th>Email / Telefon</th><th>Rendszám</th><th>Aktiváló kód</th><th>Állapot</th><th>Művelet</th></tr></thead>
+                <tbody id="drivers-list"></tbody>
+            </table>
+        </div>
+
+        <div id="driverModal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.8); z-index:1001; padding:50px;">
+            <div style="background:#222; padding:30px; border-radius:12px; max-width:600px; margin:auto;">
+                <h2>Sofőr szerkesztése</h2>
+                <input type="hidden" id="dUuid">
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:15px; margin-bottom:20px;">
+                    <div><label>Név</label><input type="text" id="dName"></div>
+                    <div><label>Rendszám</label><input type="text" id="dPlate"></div>
+                    <div><label>Email</label><input type="text" id="dEmail"></div>
+                    <div><label>Telefon</label><input type="text" id="dPhone"></div>
+                    <div><label>WhatsApp</label><input type="text" id="dWhatsapp"></div>
+                    <div><label>Telegram</label><input type="text" id="dTelegram"></div>
+                </div>
+                <div><label>Profilkép URL</label><input type="text" id="dPhoto"></div>
+                <div style="margin-top:15px;">
+                    <input type="checkbox" id="dActive" checked style="width:20px; height:20px; display:inline-block; vertical-align:middle;">
+                    <label style="display:inline-block; margin-left:10px;">Aktív felhasználó</label>
+                </div>
+                <div style="margin-top:30px; display:flex; gap:10px; justify-content:flex-end;">
+                    <button onclick="document.getElementById('driverModal').style.display='none'">Mégse</button>
+                    <button onclick="saveDriver()" style="background:#3498db; color:white; padding:10px 30px;">Mentés</button>
+                </div>
+            </div>
+        </div>
             <div style="background:#222; padding:30px; border-radius:12px; max-width:800px; margin:auto; max-height:90vh; overflow-y:auto;">
                 <h2>Túra szerkesztése</h2><input type="hidden" id="tourId"><input type="hidden" id="tourUuid">
                 <div style="display:grid; grid-template-columns:1fr 1fr; gap:15px; margin-bottom:20px;">
@@ -1183,10 +1335,82 @@ app.get('/driver/:name', async (req, res) => {
             // Végül nyissuk meg az elmentett fület
             openTab(null, savedTab);
 
-            // Alapértelmezett tab
-            // Eltávolítva az openTab hívás, mert feljebb már megoldottuk a localStorage-al
+            // Profile & Driver Admin JS
+            async function loadProfile() {
+                try {
+                    const r = await fetch('/api/get-profile/' + encodeURIComponent('${name}'));
+                    if (r.ok) {
+                        const d = await r.json();
+                        document.getElementById('prof-whatsapp').value = d.whatsapp || '';
+                        document.getElementById('prof-telegram').value = d.telegram || '';
+                    }
+                } catch(e) {}
+            }
+            loadProfile();
 
-            function showToast(msg) {
+            async function saveProfile() {
+                const data = {
+                    name: document.getElementById('prof-name').value,
+                    licensePlate: document.getElementById('prof-plate').value,
+                    email: document.getElementById('prof-email').value,
+                    phone: document.getElementById('prof-phone').value,
+                    whatsapp: document.getElementById('prof-whatsapp').value,
+                    telegram: document.getElementById('prof-telegram').value,
+                    photoUrl: document.getElementById('prof-photo-url').value
+                };
+                const r = await fetch('/api/sync-profile', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) });
+                if(r.ok) { showToast('Profil mentve és szinkronizálva!'); }
+            }
+
+            async function refreshDrivers() {
+                const r = await fetch('/api/all-drivers');
+                const drivers = await r.json();
+                document.getElementById('drivers-list').innerHTML = drivers.map(d => `
+                    <tr>
+                        <td><b>\${d.name}</b></td>
+                        <td>\${d.email || ''}<br><small>\${d.phone || ''}</small></td>
+                        <td>\${d.license_plate || ''}</td>
+                        <td><code style="background:#444; padding:2px 5px;">\${d.activation_code || '---'}</code></td>
+                        <td><span style="color:\${d.is_active ? '#2ecc71' : '#e74c3c'}">\${d.is_active ? 'AKTÍV' : 'INAKTÍV'}</span></td>
+                        <td><button onclick='editDriver(\${JSON.stringify(d).replace(/'/g, "&apos;")})'>SZERKESZTÉS</button></td>
+                    </tr>`).join('');
+            }
+            refreshDrivers();
+
+            function editDriver(d) {
+                document.getElementById('dUuid').value = d ? d.uuid : '';
+                document.getElementById('dName').value = d ? d.name : '';
+                document.getElementById('dPlate').value = d ? d.license_plate : '';
+                document.getElementById('dEmail').value = d ? d.email : '';
+                document.getElementById('dPhone').value = d ? d.phone : '';
+                document.getElementById('dWhatsapp').value = d ? d.whatsapp : '';
+                document.getElementById('dTelegram').value = d ? d.telegram : '';
+                document.getElementById('dPhoto').value = d ? d.photo_url : '';
+                document.getElementById('dActive').checked = d ? d.is_active : true;
+                document.getElementById('driverModal').style.display = 'block';
+            }
+
+            async function saveDriver() {
+                const data = {
+                    uuid: document.getElementById('dUuid').value || null,
+                    name: document.getElementById('dName').value,
+                    license_plate: document.getElementById('dPlate').value,
+                    email: document.getElementById('dEmail').value,
+                    phone: document.getElementById('dPhone').value,
+                    whatsapp: document.getElementById('dWhatsapp').value,
+                    telegram: document.getElementById('dTelegram').value,
+                    photo_url: document.getElementById('dPhoto').value,
+                    is_active: document.getElementById('dActive').checked
+                };
+                const r = await fetch('/admin/save-driver', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) });
+                if(r.ok) {
+                    showToast('Sofőr adatai mentve!');
+                    document.getElementById('driverModal').style.display = 'none';
+                    refreshDrivers();
+                }
+            }
+
+            // Periodikus térkép frissítés a szétesés ellen
                 const c = document.getElementById('toast-container');
                 const t = document.createElement('div');
                 t.className = 'toast';
