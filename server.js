@@ -187,19 +187,18 @@ app.get('/health', (req, res) => res.sendStatus(200));
 app.post('/api/live-update', async (req, res) => {
     const d = req.body;
     try {
-        const prevRes = await pool.query('SELECT status FROM live_updates WHERE driver_name = $1 ORDER BY timestamp DESC LIMIT 1', [d.driverName]);
+        const prevRes = await pool.query('SELECT status, license_plate FROM live_updates WHERE driver_name = $1 ORDER BY timestamp DESC LIMIT 1', [d.driverName]);
         const prevStatus = prevRes.rows.length > 0 ? prevRes.rows[0].status : 'N/A';
+        const prevPlate = prevRes.rows.length > 0 ? prevRes.rows[0].license_plate : 'N/A';
+
+        let currentPlate = d.licensePlate;
+        if ((!currentPlate || currentPlate === 'N/A') && prevPlate && prevPlate !== 'N/A') {
+            currentPlate = prevPlate;
+        }
 
         const sql = 'INSERT INTO live_updates (uuid, driver_name, driver_photo, driver_phone, driver_email, license_plate, latitude, longitude, speed, status, current_tour, next_stop, next_lat, next_lng, next_stop_dist, next_stop_duration, tour_remaining_dist, tour_remaining_duration, depot_name, depot_lat, depot_lng, timestamp, include_rests, next_break_in_seconds) VALUES (COALESCE($1::UUID, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)';
 
-        console.log(`[TRACE-LIVE] Endpoint: /api/live-update`);
-        console.log(`[TRACE-LIVE] Body: ${JSON.stringify(d)}`);
-        console.log(`[TRACE-LIVE] Driver: ${d.driverName}`);
-        console.log(`[TRACE-LIVE] Prev Status: ${prevStatus}`);
-        console.log(`[TRACE-LIVE] New Status: ${d.status}`);
-        console.log(`[TRACE-LIVE] SQL: ${sql}`);
-
-        await pool.query(sql, [d.uuid || null, d.driverName, d.driverPhoto, d.driverPhone, d.driverEmail, d.licensePlate, d.latitude, d.longitude, d.speed, d.status, d.currentTour, d.nextStop, d.nextLat, d.nextLng, d.nextStopDistance, d.nextStopDuration, d.tourRemainingDistance, d.tourRemainingDuration, d.depotName, d.depotLat, d.depotLng, d.timestamp, d.includeRests ?? true, d.nextBreakInSeconds || null]);
+        await pool.query(sql, [d.uuid || null, d.driverName, d.driverPhoto, d.driverPhone, d.driverEmail, currentPlate, d.latitude, d.longitude, d.speed, d.status, d.currentTour, d.nextStop, d.nextLat, d.nextLng, d.nextStopDistance, d.nextStopDuration, d.tourRemainingDistance, d.tourRemainingDuration, d.depotName, d.depotLat, d.depotLng, d.timestamp, d.includeRests ?? true, d.nextBreakInSeconds || null]);
         res.sendStatus(200);
     } catch (e) {
         console.error(`[TRACE-LIVE] Error: ${e.message}`);
@@ -322,8 +321,16 @@ app.post('/admin/delete-tour', async (req, res) => {
 
 app.get('/api/live-status/:name', async (req, res) => {
     try {
-        const update = (await pool.query('SELECT * FROM live_updates WHERE driver_name = $1 ORDER BY timestamp DESC LIMIT 1', [req.params.name])).rows[0];
-        res.json(update || {});
+        const name = req.params.name;
+        const update = (await pool.query('SELECT * FROM live_updates WHERE driver_name = $1 ORDER BY timestamp DESC LIMIT 1', [name])).rows[0] || {};
+
+        const today = new Date().toISOString().split('T')[0];
+        const work = (await pool.query('SELECT * FROM work_times WHERE driver_name = $1 AND date = $2', [name, today])).rows;
+        const drivingTodaySec = work
+            .filter(w => w.type === 'Vezetés')
+            .reduce((sum, w) => sum + (Number(w.end_time || Date.now()) - Number(w.start_time)) / 1000, 0);
+
+        res.json({ ...update, drivingTodaySec });
     } catch (e) { res.status(500).send(e.message); }
 });
 
@@ -405,7 +412,7 @@ app.get('/driver/:name', async (req, res) => {
     <body>
         <div id="toast-container"></div>
         <header><button onclick="location.href='/'">⬅</button><img src="${update.driver_photo || ''}" style="width:40px;height:40px;border-radius:50%;margin-left:15px;margin-right:15px;"><h2><span>${name}</span> - ERP</h2></header>
-        <nav><button onclick="openTab(event, 'dashboard')">DASHBOARD</button><button onclick="openTab(event, 'tours')">TÚRÁK</button><button onclick="openTab(event, 'costs')">KÖLTSÉGEK</button><button onclick="openTab(event, 'hotels')">HOTELEK</button><button onclick="openTab(event, 'chat')">CHAT</button><button onclick="openTab(event, 'stats')">STATISZTIKA</button><button onclick="openTab(event, 'report')">MENETLEVÉL</button><button onclick="openTab(event, 'profile')">PROFIL</button></nav>
+        <nav><button data-tab="dashboard" onclick="openTab(event, 'dashboard')">DASHBOARD</button><button data-tab="tours" onclick="openTab(event, 'tours')">TÚRÁK</button><button data-tab="costs" onclick="openTab(event, 'costs')">KÖLTSÉGEK</button><button data-tab="hotels" onclick="openTab(event, 'hotels')">HOTELEK</button><button data-tab="chat" onclick="openTab(event, 'chat')">CHAT</button><button data-tab="stats" onclick="openTab(event, 'stats')">STATISZTIKA</button><button data-tab="report" onclick="openTab(event, 'report')">MENETLEVÉL</button><button data-tab="profile" onclick="openTab(event, 'profile')">PROFIL</button></nav>
         <div id="dashboard" class="tab-content">
             <div style="display:grid; grid-template-columns: 1fr 300px; gap: 20px;">
                 <div id="map"></div>
@@ -508,14 +515,23 @@ app.get('/driver/:name', async (req, res) => {
 
         <script>
             function openTab(e, t) {
+                localStorage.setItem('activeTab_${name}', t);
                 document.querySelectorAll('.tab-content').forEach(x => x.style.display = 'none');
                 document.querySelectorAll('nav button').forEach(x => x.classList.remove('active'));
                 const target = document.getElementById(t);
                 if (target) {
                     target.style.display = 'block';
-                    if (e) e.currentTarget.classList.add('active');
+                    const btn = e ? e.currentTarget : document.querySelector('nav button[data-tab="' + t + '"]');
+                    if (btn) btn.classList.add('active');
+                    if (t === 'dashboard' && typeof map !== 'undefined') {
+                        setTimeout(() => map.invalidateSize(), 100);
+                    }
                 }
             }
+
+            // Kezdő tab betöltése
+            const savedTab = localStorage.getItem('activeTab_${name}') || 'dashboard';
+            openTab(null, savedTab);
 
             // Térkép inicializálása
             let DRIVING_DONE_TODAY = ${drivingTodaySec};
@@ -617,7 +633,9 @@ app.get('/driver/:name', async (req, res) => {
             }
 
             // Kezdeti útvonal
-            drawRoute(driverLat, driverLng, rawStops, ${update.depot_lat || 0}, ${update.depot_lng || 0});
+            if (rawStops && rawStops.length > 0) {
+                drawRoute(driverLat, driverLng, rawStops, ${update.depot_lat || 0}, ${update.depot_lng || 0});
+            }
 
             async function refreshLiveStatus() {
                 try {
@@ -662,18 +680,19 @@ app.get('/driver/:name', async (req, res) => {
                     tourDur = d.tour_remaining_duration || 0;
                     nextBreak = d.next_break_in_seconds || 0;
                     isAdjusted = d.include_rests ?? true;
+                    if (d.drivingTodaySec !== undefined) DRIVING_DONE_TODAY = d.drivingTodaySec;
                     updateTimeDisplays();
 
                     // Update Map
                     if (d.latitude && d.longitude) {
                         const newPos = [d.latitude, d.longitude];
                         driverMarker.setLatLng(newPos);
+                        driverMarker.setPopupContent('<b>${name}</b><br>Sebesség: ' + Math.round(d.speed || 0) + ' km/h');
 
                         // Útvonal frissítése ha a célpont változott
                         if (d.next_lat !== lastNextLat || d.next_lng !== lastNextLng) {
                             lastNextLat = d.next_lat;
                             lastNextLng = d.next_lng;
-                            // Ha változott a cél, akkor valószínűleg egy megálló teljesült, frissítsük a listát is
                             refreshTours();
                             fetch('/api/get-tours/' + encodeURIComponent('${name}'))
                                 .then(r => r.json())
@@ -768,14 +787,20 @@ app.get('/driver/:name', async (req, res) => {
             // Kényszerített újrarajzolás a méretezési hiba ellen
             setTimeout(() => {
                 map.invalidateSize();
-                if (rawStops.length > 0 || ${update.depot_lat ? 'true' : 'false'}) {
-                     map.fitBounds(map.getBounds(), { padding: [50, 50] });
+                if ((rawStops && rawStops.length > 0) || ${update.depot_lat ? 'true' : 'false'}) {
+                     try { map.fitBounds(map.getBounds(), { padding: [50, 50] }); } catch(e) {}
                 }
             }, 800);
 
+            // Periodikus térkép frissítés a szétesés ellen
+            setInterval(() => {
+                if (document.getElementById('dashboard').style.display !== 'none') {
+                    map.invalidateSize();
+                }
+            }, 10000);
+
             // Alapértelmezett tab
-            openTab(null, 'dashboard');
-            document.querySelector('nav button').classList.add('active');
+            // Eltávolítva az openTab hívás, mert feljebb már megoldottuk a localStorage-al
 
             function showToast(msg) {
                 const c = document.getElementById('toast-container');
