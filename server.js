@@ -742,12 +742,6 @@ app.get('/driver/:name', async (req, res) => {
                     if (t === 'dashboard' && typeof map !== 'undefined') {
                         setTimeout(() => map.invalidateSize(), 100);
                     }
-                }
-            }
-
-                    if (t === 'dashboard' && typeof map !== 'undefined') {
-                        setTimeout(() => map.invalidateSize(), 100);
-                    }
                     if (t === 'history') {
                         setTimeout(() => {
                             if (historyMap) historyMap.invalidateSize();
@@ -775,7 +769,7 @@ app.get('/driver/:name', async (req, res) => {
                 if (!date) return;
                 initHistoryMap();
                 try {
-                    const r = await fetch(`/api/get-history/${encodeURIComponent('${name}')}/${date}`);
+                    const r = await fetch('/api/get-history/' + encodeURIComponent('${name}') + '/' + date);
                     const data = await r.json();
                     if (!data || data.length === 0) {
                         showToast('Nincs adat ehhez a naphoz.');
