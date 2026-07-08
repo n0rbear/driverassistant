@@ -1004,8 +1004,8 @@ app.get('/driver/:name', async (req, res) => {
                         const nDist = (d.next_stop_dist !== null && d.next_stop_dist !== undefined) ? d.next_stop_dist : 0;
                         const tDist = (d.tour_remaining_dist !== null && d.tour_remaining_dist !== undefined) ? d.tour_remaining_dist : 0;
 
-                        document.getElementById('live-next-dist').innerText = nDist > 0 ? nDist.toFixed(1) + ' km' : '---';
-                        document.getElementById('live-tour-dist').innerText = tDist > 0 ? tDist.toFixed(1) + ' km' : '---';
+                        document.getElementById('live-next-dist').innerText = nDist.toFixed(1) + ' km';
+                        document.getElementById('live-tour-dist').innerText = tDist.toFixed(1) + ' km';
                     } else {
                         document.getElementById('live-tour-container').style.display = 'none';
                         document.getElementById('no-tour-msg').style.display = 'block';
@@ -1039,9 +1039,11 @@ app.get('/driver/:name', async (req, res) => {
                         driverMarker.setPopupContent('<b>${name}</b><br>Sebesség: ' + Math.round(d.speed || 0) + ' km/h');
 
                         // Útvonal frissítése ha mozog vagy a célpont változott
-                        if (d.next_lat !== lastNextLat || d.next_lng !== lastNextLng || Math.abs(d.latitude - driverLat) > 0.001) {
+                        if (d.next_lat !== lastNextLat || d.next_lng !== lastNextLng || Math.abs(d.latitude - lastUpdateLat) > 0.0005) {
                             lastNextLat = d.next_lat;
                             lastNextLng = d.next_lng;
+                            lastUpdateLat = d.latitude;
+                            lastUpdateLng = d.longitude;
                             refreshTours();
                             fetch('/api/get-tours/' + encodeURIComponent('${name}'))
                                 .then(r => r.json())
@@ -1055,6 +1057,15 @@ app.get('/driver/:name', async (req, res) => {
                     }
                 } catch (e) { console.error('Refresh error:', e); }
             }
+
+            // Inicializálás
+            let lastUpdateLat = driverLat;
+            let lastUpdateLng = driverLng;
+
+            refreshLiveStatus();
+            refreshTours();
+            refreshChat();
+            openTab(null, savedTab);
 
             setInterval(refreshLiveStatus, 5000);
 
