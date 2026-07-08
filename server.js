@@ -46,6 +46,152 @@ const AddressEngine = {
 };
 
 // ==========================================
+// STATUS ENGINE
+// ==========================================
+const StatusEngine = {
+    calculateDistance(lat1, lon1, lat2, lon2) {
+        const R = 6371e3; // metres
+        const phi1 = lat1 * Math.PI / 180;
+        const phi2 = lat2 * Math.PI / 180;
+        const dPhi = (lat2 - lat1) * Math.PI / 180;
+        const dLambda = (lon2 - lon1) * Math.PI / 180;
+        const a = Math.sin(dPhi / 2) * Math.sin(dPhi / 2) +
+                  Math.cos(phi1) * Math.cos(phi2) *
+                  Math.sin(dLambda / 2) * Math.sin(dLambda / 2);
+        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+        return R * c;
+    },
+
+    async updateStatus(client, d) {
+        const driverName = d.driverName;
+        const now = d.timestamp || Date.now();
+        const today = new Date(now).toISOString().split('T')[0];
+
+        // 1. Get current ongoing task
+        const ongoingRes = await client.query('SELECT * FROM work_times WHERE driver_name = $1 AND end_time IS NULL ORDER BY start_time DESC LIMIT 1', [driverName]);
+        const ongoing = ongoingRes.rows[0];
+
+        // 2. Get today's work times
+        const todayWorkRes = await client.query('SELECT * FROM work_times WHERE driver_name = $1 AND date = $2', [driverName, today]);
+        const workTimesToday = todayWorkRes.rows;
+
+        // 3. Get current tour and stops
+        const tourRes = await client.query('SELECT id, name FROM tours WHERE driver_name = $1 AND is_current = true AND deleted_at IS NULL LIMIT 1', [driverName]);
+        const currentTour = tourRes.rows[0];
+        let stops = [];
+        if (currentTour) {
+            const stopsRes = await client.query('SELECT * FROM stops WHERE tour_id = $1 AND deleted_at IS NULL ORDER BY order_index ASC', [currentTour.id]);
+            stops = stopsRes.rows;
+        }
+
+        // 4. Determine Status
+        let calculatedStatus = ongoing ? ongoing.type : 'Offline';
+        let isAtTourStop = false;
+        let isNearKnownPlace = false;
+
+        // OSRM Data
+        let nextStopDist = null;
+        let nextStopDur = null;
+        let tourRemainingDist = null;
+        let tourRemainingDur = null;
+        let nextStopInfo = null;
+
+        const incompleteStops = stops.filter(s => !s.is_completed);
+        const nextStop = incompleteStops[0];
+
+        // 0. Initial Morning Start
+        if (!ongoing && workTimesToday.length === 0 && d.speed > 8) {
+            console.log(`[STATUS] Morning start for ${driverName}`);
+            await this.startWork(client, driverName, 'Munka', today, d.licensePlate, null, now);
+            calculatedStatus = 'Munka';
+        }
+
+        // 1. Proximity check (Home/Base)
+        const driverInfoRes = await client.query('SELECT home_lat, home_lng, base_lat, base_lng FROM drivers WHERE name = $1', [driverName]);
+        const dInfo = driverInfoRes.rows[0];
+        if (dInfo) {
+            const places = [{ lat: dInfo.home_lat, lng: dInfo.home_lng, name: 'Home' }, { lat: dInfo.base_lat, lng: dInfo.base_lng, name: 'Base' }];
+            for (const p of places) {
+                if (p.lat && p.lng) {
+                    const dist = this.calculateDistance(d.latitude, d.longitude, p.lat, p.lng);
+                    if (dist < 200) {
+                        isNearKnownPlace = true;
+                        if (d.speed < 1 && ongoing && ongoing.type === 'Vezetés') {
+                            await client.query('UPDATE work_times SET end_time = $1 WHERE id = $2', [now, ongoing.id]);
+                            calculatedStatus = 'Offline';
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2. Tour stops proximity
+        for (const stop of stops) {
+            if (stop.latitude && stop.longitude) {
+                const dist = this.calculateDistance(d.latitude, d.longitude, stop.latitude, stop.longitude);
+                if (dist < 200) {
+                    isAtTourStop = true;
+                    if (d.speed < 2) {
+                        if (!ongoing || ongoing.type === 'Vezetés') {
+                            await this.startWork(client, driverName, 'Rakodás', today, d.licensePlate, ongoing?.mileage, now);
+                            calculatedStatus = 'Rakodás';
+                        }
+                        if (!stop.is_completed) {
+                            const twoMinsAgo = now - (2 * 60 * 1000);
+                            const recentUpdatesAtStop = await client.query('SELECT latitude, longitude FROM live_updates WHERE driver_name = $1 AND timestamp > $2 ORDER BY timestamp ASC', [driverName, twoMinsAgo]);
+                            const stayedNear = recentUpdatesAtStop.rows.length > 3 && recentUpdatesAtStop.rows.every(r => this.calculateDistance(r.latitude, r.longitude, stop.latitude, stop.longitude) < 300);
+                            if (stayedNear) {
+                                await client.query('UPDATE stops SET is_completed = true, arrival_time = $1, updated_at = $1 WHERE id = $2', [now, stop.id]);
+                            }
+                        }
+                        calculatedStatus = 'Rakodás';
+                        break;
+                    }
+                }
+            }
+        }
+
+        // 3. Movement logic
+        if (d.speed > 10 && !isAtTourStop) {
+            if (!ongoing || ongoing.type === 'Pihenő') {
+                await this.startWork(client, driverName, 'Vezetés', today, d.licensePlate, null, now);
+                calculatedStatus = 'Vezetés';
+            }
+        } else if (d.speed < 1 && ongoing && ongoing.type === 'Vezetés' && !isAtTourStop && !isNearKnownPlace) {
+            const threeMinsAgo = now - (3 * 60 * 1000);
+            const recentUpdates = await client.query('SELECT speed FROM live_updates WHERE driver_name = $1 AND timestamp > $2', [driverName, threeMinsAgo]);
+            if (recentUpdates.rows.length > 5 && recentUpdates.rows.every(r => r.speed < 1.5)) {
+                await this.startWork(client, driverName, 'Pihenő', today, d.licensePlate, ongoing.mileage, now);
+                calculatedStatus = 'Pihenő';
+            }
+        }
+
+        // 4. OSRM Calculations (Moved from App)
+        if (nextStop) {
+            try {
+                const url = `https://router.project-osrm.org/route/v1/driving/${d.longitude},${d.latitude};${nextStop.longitude},${nextStop.latitude}?overview=false`;
+                const r = await fetch(url).then(res => res.json());
+                if (r.routes && r.routes[0]) {
+                     nextStopDist = r.routes[0].distance / 1000;
+                     nextStopDur = r.routes[0].duration;
+                }
+                nextStopInfo = `${nextStop.contact_name || nextStop.recipient} | ${nextStop.address}`;
+            } catch (e) {}
+        }
+
+        return { status: calculatedStatus, nextStopDist, nextStopDur, nextStopInfo, currentTourName: currentTour?.name };
+    },
+
+    async startWork(client, driverName, type, date, plate, mileage, now) {
+        // Close existing
+        await client.query('UPDATE work_times SET end_time = $1 WHERE driver_name = $2 AND end_time IS NULL', [now, driverName]);
+        // Insert new
+        await client.query('INSERT INTO work_times (uuid, driver_name, type, start_time, date, license_plate, mileage) VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6)',
+            [driverName, type, now, date, plate || 'N/A', mileage || 0]);
+    }
+};
+
+// ==========================================
 // IMPORT ENGINE
 // ==========================================
 const ImportEngine = {
@@ -118,7 +264,7 @@ const initDb = async () => {
     console.log('[STARTUP] initDb started');
     await pool.query('CREATE EXTENSION IF NOT EXISTS "pgcrypto"');
     const queries = [
-        `CREATE TABLE IF NOT EXISTS drivers (uuid UUID DEFAULT gen_random_uuid() PRIMARY KEY, name TEXT UNIQUE, email TEXT, phone TEXT, license_plate TEXT, photo_url TEXT, is_active BOOLEAN DEFAULT TRUE)`,
+        `CREATE TABLE IF NOT EXISTS drivers (uuid UUID DEFAULT gen_random_uuid() PRIMARY KEY, name TEXT UNIQUE, email TEXT, phone TEXT, license_plate TEXT, photo_url TEXT, is_active BOOLEAN DEFAULT TRUE, home_lat DOUBLE PRECISION, home_lng DOUBLE PRECISION, base_lat DOUBLE PRECISION, base_lng DOUBLE PRECISION)`,
         `CREATE TABLE IF NOT EXISTS live_updates (id SERIAL PRIMARY KEY, uuid UUID DEFAULT gen_random_uuid() UNIQUE, driver_name TEXT, driver_photo TEXT, driver_phone TEXT, driver_email TEXT, license_plate TEXT, latitude DOUBLE PRECISION, longitude DOUBLE PRECISION, speed FLOAT, status TEXT, current_tour TEXT, next_stop TEXT, next_lat DOUBLE PRECISION, next_lng DOUBLE PRECISION, next_stop_dist FLOAT, next_stop_duration BIGINT, tour_remaining_dist FLOAT, tour_remaining_duration BIGINT, depot_name TEXT, depot_lat DOUBLE PRECISION, depot_lng DOUBLE PRECISION, timestamp BIGINT, UNIQUE(uuid))`,
         `CREATE TABLE IF NOT EXISTS costs (id SERIAL PRIMARY KEY, uuid UUID DEFAULT gen_random_uuid() UNIQUE, driver_name TEXT, amount DECIMAL, currency TEXT, category TEXT, notes TEXT, mileage INT, status TEXT DEFAULT 'Rögzítve', timestamp BIGINT, UNIQUE(uuid))`,
         `CREATE TABLE IF NOT EXISTS chat_messages (id SERIAL PRIMARY KEY, uuid UUID DEFAULT gen_random_uuid() UNIQUE, driver_name TEXT, sender TEXT, message TEXT, timestamp BIGINT, UNIQUE(uuid))`,
@@ -156,7 +302,11 @@ const initDb = async () => {
         ['live_updates', 'next_stop_duration', 'BIGINT'],
         ['live_updates', 'tour_remaining_duration', 'BIGINT'],
         ['live_updates', 'include_rests', 'BOOLEAN DEFAULT TRUE'],
-        ['live_updates', 'next_break_in_seconds', 'BIGINT']
+        ['live_updates', 'next_break_in_seconds', 'BIGINT'],
+        ['drivers', 'home_lat', 'DOUBLE PRECISION'],
+        ['drivers', 'home_lng', 'DOUBLE PRECISION'],
+        ['drivers', 'base_lat', 'DOUBLE PRECISION'],
+        ['drivers', 'base_lng', 'DOUBLE PRECISION']
     ];
     for (const [t, c, type] of cols) {
         if (t === 'stops' && c === 'items') console.log('[SCHEMA] checking stops.items');
@@ -186,9 +336,15 @@ app.get('/health', (req, res) => res.sendStatus(200));
 
 app.post('/api/live-update', async (req, res) => {
     const d = req.body;
+    const client = await pool.connect();
     try {
-        const prevRes = await pool.query('SELECT status, license_plate FROM live_updates WHERE driver_name = $1 ORDER BY timestamp DESC LIMIT 1', [d.driverName]);
-        const prevStatus = prevRes.rows.length > 0 ? prevRes.rows[0].status : 'N/A';
+        await client.query('BEGIN');
+
+        // 1. Determine Status & OSRM Data
+        const resObj = await StatusEngine.updateStatus(client, d);
+
+        // 2. Save Live Update
+        const prevRes = await client.query('SELECT status, license_plate FROM live_updates WHERE driver_name = $1 ORDER BY timestamp DESC LIMIT 1', [d.driverName]);
         const prevPlate = prevRes.rows.length > 0 ? prevRes.rows[0].license_plate : 'N/A';
 
         let currentPlate = d.licensePlate;
@@ -198,11 +354,18 @@ app.post('/api/live-update', async (req, res) => {
 
         const sql = 'INSERT INTO live_updates (uuid, driver_name, driver_photo, driver_phone, driver_email, license_plate, latitude, longitude, speed, status, current_tour, next_stop, next_lat, next_lng, next_stop_dist, next_stop_duration, tour_remaining_dist, tour_remaining_duration, depot_name, depot_lat, depot_lng, timestamp, include_rests, next_break_in_seconds) VALUES (COALESCE($1::UUID, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)';
 
-        await pool.query(sql, [d.uuid || null, d.driverName, d.driverPhoto, d.driverPhone, d.driverEmail, currentPlate, d.latitude, d.longitude, d.speed, d.status, d.currentTour, d.nextStop, d.nextLat, d.nextLng, d.nextStopDistance, d.nextStopDuration, d.tourRemainingDistance, d.tourRemainingDuration, d.depotName, d.depotLat, d.depotLng, d.timestamp, d.includeRests ?? true, d.nextBreakInSeconds || null]);
-        res.sendStatus(200);
+        await client.query(sql, [d.uuid || null, d.driverName, d.driverPhoto, d.driverPhone, d.driverEmail, currentPlate, d.latitude, d.longitude, d.speed, resObj.status, resObj.currentTourName || d.currentTour, resObj.nextStopInfo || d.nextStop, d.nextLat, d.nextLng, resObj.nextStopDist || d.nextStopDistance, resObj.nextStopDur || d.nextStopDuration, d.tourRemainingDistance, d.tourRemainingDuration, d.depotName, d.depotLat, d.depotLng, d.timestamp, d.includeRests ?? true, d.nextBreakInSeconds || null]);
+
+        await client.query('COMMIT');
+
+        // 3. Return result to app
+        res.json({ status: resObj.status, licensePlate: currentPlate });
     } catch (e) {
+        await client.query('ROLLBACK');
         console.error(`[TRACE-LIVE] Error: ${e.message}`);
         res.status(500).send(e.message);
+    } finally {
+        client.release();
     }
 });
 
