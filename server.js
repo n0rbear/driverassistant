@@ -777,11 +777,15 @@ app.get('/driver/:name', async (req, res) => {
         <script>
             function openTab(e, t) {
                 localStorage.setItem('activeTab_${name}', t);
-                document.querySelectorAll('.tab-content').forEach(x => x.style.display = 'none');
+                document.querySelectorAll('.tab-content').forEach(x => {
+                    x.style.display = 'none';
+                    x.classList.remove('active');
+                });
                 document.querySelectorAll('nav button').forEach(x => x.classList.remove('active'));
                 const target = document.getElementById(t);
                 if (target) {
                     target.style.display = 'block';
+                    target.classList.add('active');
                     const btn = e ? e.currentTarget : document.querySelector('nav button[data-tab="' + t + '"]');
                     if (btn) btn.classList.add('active');
                     if (t === 'dashboard' && typeof map !== 'undefined') {
