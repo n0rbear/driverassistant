@@ -675,8 +675,6 @@ app.get('/driver/:name', async (req, res) => {
                     } else {
                         document.getElementById('live-next-stop-container').style.display = 'none';
                     }
-                        document.getElementById('live-next-stop-container').style.display = 'none';
-                    }
 
                     nextDur = d.next_stop_duration || 0;
                     tourDur = d.tour_remaining_duration || 0;
