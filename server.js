@@ -320,11 +320,42 @@ app.post('/admin/delete-tour', async (req, res) => {
     res.json({ success: true });
 });
 
+app.get('/api/live-status/:name', async (req, res) => {
+    try {
+        const update = (await pool.query('SELECT * FROM live_updates WHERE driver_name = $1 ORDER BY timestamp DESC LIMIT 1', [req.params.name])).rows[0];
+        res.json(update || {});
+    } catch (e) { res.status(500).send(e.message); }
+});
+
+app.get('/api/fleet-status', async (req, res) => {
+    try {
+        const drivers = await pool.query(`SELECT DISTINCT ON (driver_name) driver_name, driver_photo, status, license_plate, timestamp FROM (SELECT driver_name, driver_photo, status, license_plate, timestamp::BIGINT FROM live_updates UNION ALL SELECT driver_name, NULL as driver_photo, 'Túra feltöltve' as status, '' as license_plate, date::BIGINT as timestamp FROM tours WHERE deleted_at IS NULL) AS all_drivers ORDER BY driver_name, timestamp DESC`);
+        res.json(drivers.rows);
+    } catch (e) { res.status(500).send(e.message); }
+});
+
 app.get('/', async (req, res) => {
     try {
         const drivers = await pool.query(`SELECT DISTINCT ON (driver_name) driver_name, driver_photo, status, license_plate, timestamp FROM (SELECT driver_name, driver_photo, status, license_plate, timestamp::BIGINT FROM live_updates UNION ALL SELECT driver_name, NULL as driver_photo, 'Túra feltöltve' as status, '' as license_plate, date::BIGINT as timestamp FROM tours WHERE deleted_at IS NULL) AS all_drivers ORDER BY driver_name, timestamp DESC`);
         let list = drivers.rows.map(d => `<div class="card" onclick="location.href='/driver/${encodeURIComponent(d.driver_name)}'"><img src="${d.driver_photo || ''}" style="width:50px;height:50px;border-radius:50%;float:right;background:#444"><h3>${d.driver_name}</h3><p>${d.status} ${d.license_plate ? '| ' + d.license_plate : ''}</p></div>`).join('');
-        res.send(`<html><head><title>Driver ERP</title><style>body { font-family: sans-serif; background: #1a1a1a; color: white; padding: 40px; } .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 20px; } .card { background: #333; padding: 20px; border-radius: 12px; cursor: pointer; border-left: 8px solid #3498db; transition: 0.2s; } .card:hover { transform: scale(1.02); background: #444; }</style></head><body><h1>🚛 Flotta kiválasztása</h1><div class="grid">${list}</div></body></html>`);
+        res.send(`<html><head><title>Driver ERP</title><style>body { font-family: sans-serif; background: #1a1a1a; color: white; padding: 40px; } .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 20px; } .card { background: #333; padding: 20px; border-radius: 12px; cursor: pointer; border-left: 8px solid #3498db; transition: 0.2s; } .card:hover { transform: scale(1.02); background: #444; }</style></head><body><h1>🚛 Flotta kiválasztása</h1><div class="grid" id="driver-grid">${list}</div>
+        <script>
+            async function refreshFleet() {
+                try {
+                    const r = await fetch('/api/fleet-status');
+                    if (!r.ok) return;
+                    const drivers = await r.json();
+                    document.getElementById('driver-grid').innerHTML = drivers.map(d => \`
+                        <div class="card" onclick="location.href='/driver/\${encodeURIComponent(d.driver_name)}'">
+                            <img src="\${d.driver_photo || ''}" style="width:50px;height:50px;border-radius:50%;float:right;background:#444">
+                            <h3>\${d.driver_name}</h3>
+                            <p>\${d.status} \${d.license_plate ? '| ' + d.license_plate : ''}</p>
+                        </div>\`).join('');
+                } catch (e) { console.error('Fleet refresh error:', e); }
+            }
+            setInterval(refreshFleet, 5000);
+        </script>
+        </body></html>`);
     } catch (e) { res.status(500).send(e.message); }
 });
 
@@ -366,52 +397,56 @@ app.get('/driver/:name', async (req, res) => {
         .msg-driver { background: #34495e; color: white; }
         input, select, textarea { width: 100%; padding: 8px; background: #333; border: 1px solid #444; color: white; border-radius: 4px; box-sizing: border-box; }
         label { display: block; font-size: 11px; color: #aaa; margin-bottom: 2px; }
+        #toast-container { position: fixed; bottom: 20px; right: 20px; z-index: 9999; }
+        .toast { background: #2ecc71; color: white; padding: 12px 24px; border-radius: 8px; margin-top: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); animation: slideIn 0.3s, fadeOut 0.5s 2.5s forwards; }
+        @keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+        @keyframes fadeOut { from { opacity: 1; } to { opacity: 0; } }
     </style></head>
     <body>
+        <div id="toast-container"></div>
         <header><button onclick="location.href='/'">⬅</button><img src="${update.driver_photo || ''}" style="width:40px;height:40px;border-radius:50%;margin-left:15px;margin-right:15px;"><h2><span>${name}</span> - ERP</h2></header>
         <nav><button onclick="openTab(event, 'dashboard')">DASHBOARD</button><button onclick="openTab(event, 'tours')">TÚRÁK</button><button onclick="openTab(event, 'costs')">KÖLTSÉGEK</button><button onclick="openTab(event, 'hotels')">HOTELEK</button><button onclick="openTab(event, 'chat')">CHAT</button><button onclick="openTab(event, 'stats')">STATISZTIKA</button><button onclick="openTab(event, 'report')">MENETLEVÉL</button><button onclick="openTab(event, 'profile')">PROFIL</button></nav>
         <div id="dashboard" class="tab-content">
             <div style="display:grid; grid-template-columns: 1fr 300px; gap: 20px;">
                 <div id="map"></div>
                 <div style="background:#222; padding:20px; border-radius:8px;">
-                    <h3>Státusz: <span style="color:#3498db">${update.status}</span></h3>
-                    <p>🚗 Sebesség: ${Math.round(update.speed || 0)} km/h</p>
-                    <p>🚚 Rendszám: ${update.license_plate || 'N/A'}</p>
+                    <h3>Státusz: <span id="live-status" style="color:#3498db">${update.status}</span></h3>
+                    <p id="live-speed">🚗 Sebesség: ${Math.round(update.speed || 0)} km/h</p>
+                    <p id="live-license">🚚 Rendszám: ${update.license_plate || 'N/A'}</p>
                     <hr style="border-color:#444">
 
-                    ${update.current_tour ? `
+                    <div id="live-tour-container" style="${update.current_tour ? '' : 'display:none'}">
                         <div style="background:#333; padding:15px; border-radius:8px; margin-top:10px;">
-                            <h4 style="margin:0; color:#2ecc71;">📦 Aktuális túra: ${update.current_tour}</h4>
+                            <h4 style="margin:0; color:#2ecc71;">📦 Aktuális túra: <span id="live-tour-name">${update.current_tour || ''}</span></h4>
                             <div style="display:flex; justify-content:space-between; margin-top:10px;">
                                 <div style="text-align:center; flex:1;">
                                     <div style="font-size:11px; color:#aaa; text-transform:uppercase;">Következőig</div>
-                                    <div style="font-size:18px; font-weight:bold; color:#3498db;">${update.next_stop_dist ? update.next_stop_dist.toFixed(1) + ' km' : 'N/A'}</div>
+                                    <div id="live-next-dist" style="font-size:18px; font-weight:bold; color:#3498db;">${update.next_stop_dist ? update.next_stop_dist.toFixed(1) + ' km' : 'N/A'}</div>
                                     <div style="font-size:11px; color:#3498db;" id="nextStopDurationDisplay"></div>
                                 </div>
                                 <div style="width:1px; background:#444;"></div>
                                 <div style="text-align:center; flex:1;">
                                     <div style="font-size:11px; color:#aaa; text-transform:uppercase;">Túra összesen</div>
-                                    <div style="font-size:18px; font-weight:bold; color:#2ecc71;">${update.tour_remaining_dist ? update.tour_remaining_dist.toFixed(1) + ' km' : 'N/A'}</div>
+                                    <div id="live-tour-dist" style="font-size:18px; font-weight:bold; color:#2ecc71;">${update.tour_remaining_dist ? update.tour_remaining_dist.toFixed(1) + ' km' : 'N/A'}</div>
                                     <div style="font-size:11px; color:#2ecc71;" id="tourDurationDisplay"></div>
                                 </div>
                             </div>
-                            ${update.next_break_in_seconds ? `
-                                <div style="margin-top:10px; font-size:11px; color:#e74c3c; text-align:center; border-top:1px solid #444; padding-top:5px;">
-                                    ⚠️ Következő pihenő kb. <span id="nextBreakDisplay"></span> múlva
-                                </div>
-                            ` : ''}
+                            <div id="live-break-container" style="margin-top:10px; font-size:11px; color:#e74c3c; text-align:center; border-top:1px solid #444; padding-top:5px; ${update.next_break_in_seconds ? '' : 'display:none'}">
+                                ⚠️ Következő pihenő kb. <span id="nextBreakDisplay"></span> múlva
+                            </div>
                         </div>
-                    ` : '<p style="color:#777">Nincs aktív túra</p>'}
+                    </div>
+                    <p id="no-tour-msg" style="color:#777; ${update.current_tour ? 'display:none' : ''}">Nincs aktív túra</p>
 
-                    ${update.next_stop ? `
-                        <div style="background:#34495e; padding:15px; border-radius:8px; margin-top:10px;">
-                            <h4 style="margin:0; color:#3498db;">📍 Következő cím:</h4>
-                            ${update.next_stop.includes(' | ') ? `
+                    <div id="live-next-stop-container" style="background:#34495e; padding:15px; border-radius:8px; margin-top:10px; ${update.next_stop ? '' : 'display:none'}">
+                        <h4 style="margin:0; color:#3498db;">📍 Következő cím:</h4>
+                        <div id="live-next-stop-details">
+                            ${update.next_stop ? (update.next_stop.includes(' | ') ? `
                                 <b style="display:block; margin-top:5px; color:#fff;">${update.next_stop.split(' | ')[0]}</b>
                                 <p style="margin:2px 0; font-size:13px; color:#ccc;">${update.next_stop.split(' | ')[1]}</p>
-                            ` : `<p style="margin:5px 0; font-size:14px;">${update.next_stop}</p>`}
+                            ` : `<p style="margin:5px 0; font-size:14px;">${update.next_stop}</p>`) : ''}
                         </div>
-                    ` : ''}
+                    </div>
 
                     ${update.depot_name ? `
                         <p style="margin-top:20px; font-size:12px; color:#999;">🏠 Depó: ${update.depot_name}</p>
@@ -421,21 +456,31 @@ app.get('/driver/:name', async (req, res) => {
         </div>
         <div id="tours" class="tab-content">
             <button onclick="editTour()" style="background:#2ecc71; color:white; padding:10px; margin-bottom:20px;">+ Új túra</button>
-            ${toursRes.map(t => `
-                <div class="tour-card">
-                    <div style="float:right; display:flex; gap:5px;">
-                        <select onchange="transferTour(${t.id}, this.value)" style="width:auto;"><option value="">-- Áthelyezés --</option>${allD.map(n => `<option value="${n}">${n}</option>`).join('')}</select>
-                        <button onclick='editTour(${JSON.stringify(t).replace(/'/g, "&apos;")})'>✏</button>
-                        <button onclick="deleteTour(${t.id})" style="background:#e74c3c; color:white;">🗑</button>
+            <div id="tours-list">
+                ${toursRes.map(t => `
+                    <div class="tour-card">
+                        <div style="float:right; display:flex; gap:5px;">
+                            <select onchange="transferTour(${t.id}, this.value)" style="width:auto;"><option value="">-- Áthelyezés --</option>${allD.map(n => `<option value="${n}">${n}</option>`).join('')}</select>
+                            <button onclick='editTour(${JSON.stringify(t).replace(/'/g, "&apos;")})'>✏</button>
+                            <button onclick="deleteTour(${t.id})" style="background:#e74c3c; color:white;">🗑</button>
+                        </div>
+                        <b>${t.name}</b> (${t.customer}) - ${new Date(Number(t.date)).toLocaleDateString()}
+                        ${t.stops.map(s => `<div class="stop-item">${s.order_index + 1}. ${s.stop_type === 'HOTEL' ? '🏨 ' : (s.stop_type === 'DEPOT' ? '🏠 ' : '')}${s.address}</div>`).join('')}
                     </div>
-                    <b>${t.name}</b> (${t.customer}) - ${new Date(Number(t.date)).toLocaleDateString()}
-                    ${t.stops.map(s => `<div class="stop-item">${s.order_index + 1}. ${s.stop_type === 'HOTEL' ? '🏨 ' : (s.stop_type === 'DEPOT' ? '🏠 ' : '')}${s.address}</div>`).join('')}
-                </div>
-            `).join('')}
+                `).join('')}
+            </div>
         </div>
         <div id="costs" class="tab-content"><table><tr><th>Dátum</th><th>Kategória</th><th>Összeg</th><th>Státusz</th></tr>${costs.map(c => `<tr><td>${new Date(Number(c.timestamp)).toLocaleDateString()}</td><td>${c.category}</td><td>${c.amount} ${c.currency}</td><td>${c.status}</td></tr>`).join('')}</table></div>
         <div id="hotels" class="tab-content"><table><tr><th>Dátum</th><th>Név</th><th>Cím</th></tr>${hotelsRes.map(h => `<tr><td>${new Date(Number(h.timestamp)).toLocaleDateString()}</td><td>${h.name}</td><td>${h.address}</td></tr>`).join('')}</table></div>
-        <div id="chat" class="tab-content"><div style="height:400px; background:#111; padding:15px; overflow-y:auto; display:flex; flex-direction:column;">${chat.map(m => `<div class="msg ${m.sender === 'DISZPÉCSER' ? 'msg-boss' : 'msg-driver'}"><b>${m.sender}:</b><br>${m.message}</div>`).join('')}</div></div>
+        <div id="chat" class="tab-content">
+            <div id="chat-messages" style="height:400px; background:#111; padding:15px; overflow-y:auto; display:flex; flex-direction:column; margin-bottom:15px;">
+                ${chat.map(m => `<div class="msg ${m.sender === 'DISZPÉCSER' ? 'msg-boss' : 'msg-driver'}"><b>${m.sender}:</b><br>${m.message}</div>`).join('')}
+            </div>
+            <div style="display:flex; gap:10px;">
+                <input type="text" id="chat-input" placeholder="Üzenet írása..." onkeypress="if(event.key==='Enter') sendChat()">
+                <button onclick="sendChat()" style="width:100px; background:#F57F17; color:black; font-weight:bold;">KÜLDÉS</button>
+            </div>
+        </div>
         <div id="stats" class="tab-content"><div id="statsBox"></div></div>
         <div id="report" class="tab-content"><h3>Tagesfahrblatt</h3><div id="timelineContainer"></div></div>
         <div id="profile" class="tab-content"><h3>PROFIL</h3><p>Név: ${name}</p></div>
@@ -473,10 +518,10 @@ app.get('/driver/:name', async (req, res) => {
             }
 
             // Térkép inicializálása
-            const DRIVING_DONE_TODAY = ${drivingTodaySec};
+            let DRIVING_DONE_TODAY = ${drivingTodaySec};
 
             function formatDuration(seconds) {
-                if (!seconds) return 'N/A';
+                if (!seconds || seconds <= 0) return 'N/A';
                 let mins = Math.round(seconds / 60);
                 let hours = Math.floor(mins / 60);
                 mins = mins % 60;
@@ -506,22 +551,30 @@ app.get('/driver/:name', async (req, res) => {
             }
 
             // Update displays
-            const nextDur = ${update.next_stop_duration || 0};
-            const tourDur = ${update.tour_remaining_duration || 0};
-            const nextBreak = ${update.next_break_in_seconds || 0};
-            const isAdjusted = ${update.include_rests ?? true};
+            let nextDur = ${update.next_stop_duration || 0};
+            let tourDur = ${update.tour_remaining_duration || 0};
+            let nextBreak = ${update.next_break_in_seconds || 0};
+            let isAdjusted = ${update.include_rests ?? true};
 
-            if (nextDur > 0) {
-                const d = isAdjusted ? nextDur : calculateAdjustedDuration(nextDur, DRIVING_DONE_TODAY);
-                document.getElementById('nextStopDurationDisplay').innerText = formatDuration(d);
+            function updateTimeDisplays() {
+                if (nextDur > 0) {
+                    const d = isAdjusted ? nextDur : calculateAdjustedDuration(nextDur, DRIVING_DONE_TODAY);
+                    document.getElementById('nextStopDurationDisplay').innerText = formatDuration(d);
+                } else { document.getElementById('nextStopDurationDisplay').innerText = ''; }
+
+                if (tourDur > 0) {
+                    const d = isAdjusted ? tourDur : calculateAdjustedDuration(tourDur, DRIVING_DONE_TODAY);
+                    document.getElementById('tourDurationDisplay').innerText = formatDuration(d);
+                } else { document.getElementById('tourDurationDisplay').innerText = ''; }
+
+                if (nextBreak > 0 && document.getElementById('nextBreakDisplay')) {
+                    document.getElementById('nextBreakDisplay').innerText = formatDuration(nextBreak);
+                    document.getElementById('live-break-container').style.display = 'block';
+                } else if (document.getElementById('live-break-container')) {
+                    document.getElementById('live-break-container').style.display = 'none';
+                }
             }
-            if (tourDur > 0) {
-                const d = isAdjusted ? tourDur : calculateAdjustedDuration(tourDur, DRIVING_DONE_TODAY);
-                document.getElementById('tourDurationDisplay').innerText = formatDuration(d);
-            }
-            if (nextBreak > 0 && document.getElementById('nextBreakDisplay')) {
-                document.getElementById('nextBreakDisplay').innerText = formatDuration(nextBreak);
-            }
+            updateTimeDisplays();
 
             const driverLat = ${update.latitude || 47.4979};
             const driverLng = ${update.longitude || 19.0402};
@@ -533,7 +586,107 @@ app.get('/driver/:name', async (req, res) => {
             // Sofőr marker (kék kör fehér szegéllyel)
             const driverMarker = L.circleMarker([driverLat, driverLng], {
                 color: '#3498db', radius: 10, fillOpacity: 1, weight: 3, fillColor: '#fff'
-            }).addTo(map).bindPopup('<b>${name}</b><br>Sebesség: ${Math.round(update.speed || 0)} km/h');
+            }).addTo(map).bindPopup('<b>${name}</b><br><span id="popup-speed">Sebesség: ${Math.round(update.speed || 0)} km/h</span>');
+
+            let routeLayer = null;
+            let lastNextLat = ${update.next_lat || 0};
+            let lastNextLng = ${update.next_lng || 0};
+
+            async function drawRoute(currentLat, currentLng, stops, depotLat, depotLng) {
+                const incompleteStops = stops.filter(s => !s.is_completed && s.latitude && s.longitude);
+                let waypointStr = currentLng + ',' + currentLat;
+
+                incompleteStops.forEach(s => {
+                    waypointStr += ';' + s.longitude + ',' + s.latitude;
+                });
+
+                if (depotLat) {
+                    waypointStr += ';' + depotLng + ',' + depotLat;
+                }
+
+                if (waypointStr.includes(';')) {
+                    try {
+                        const r = await fetch('https://router.project-osrm.org/route/v1/driving/' + waypointStr + '?overview=full&geometries=geojson');
+                        const data = await r.json();
+                        if (data.routes && data.routes[0]) {
+                            if (routeLayer) map.removeLayer(routeLayer);
+                            routeLayer = L.geoJSON(data.routes[0].geometry, { style: { color: '#3498db', weight: 5, opacity: 0.7 } }).addTo(map);
+                        }
+                    } catch (e) { console.error('Route error:', e); }
+                }
+            }
+
+            // Kezdeti útvonal
+            drawRoute(driverLat, driverLng, rawStops, ${update.depot_lat || 0}, ${update.depot_lng || 0});
+
+            async function refreshLiveStatus() {
+                try {
+                    const r = await fetch('/api/live-status/' + encodeURIComponent('${name}'));
+                    if (!r.ok) return;
+                    const d = await r.json();
+                    if (!d.timestamp) return;
+
+                    // Update UI text
+                    document.getElementById('live-status').innerText = d.status || 'N/A';
+                    document.getElementById('live-speed').innerText = '🚗 Sebesség: ' + Math.round(d.speed || 0) + ' km/h';
+                    document.getElementById('live-license').innerText = '🚚 Rendszám: ' + (d.license_plate || 'N/A');
+                    const popupSpeed = document.getElementById('popup-speed');
+                    if (popupSpeed) popupSpeed.innerText = 'Sebesség: ' + Math.round(d.speed || 0) + ' km/h';
+
+                    if (d.current_tour) {
+                        document.getElementById('live-tour-container').style.display = 'block';
+                        document.getElementById('no-tour-msg').style.display = 'none';
+                        document.getElementById('live-tour-name').innerText = d.current_tour;
+                        document.getElementById('live-next-dist').innerText = d.next_stop_dist ? d.next_stop_dist.toFixed(1) + ' km' : 'N/A';
+                        document.getElementById('live-tour-dist').innerText = d.tour_remaining_dist ? d.tour_remaining_dist.toFixed(1) + ' km' : 'N/A';
+                    } else {
+                        document.getElementById('live-tour-container').style.display = 'none';
+                        document.getElementById('no-tour-msg').style.display = 'block';
+                    }
+
+                    if (d.next_stop) {
+                        document.getElementById('live-next-stop-container').style.display = 'block';
+                        let html = '';
+                        if (d.next_stop.includes(' | ')) {
+                            html = `<b style="display:block; margin-top:5px; color:#fff;">${d.next_stop.split(' | ')[0]}</b>
+                                    <p style="margin:2px 0; font-size:13px; color:#ccc;">${d.next_stop.split(' | ')[1]}</p>`;
+                        } else {
+                            html = `<p style="margin:5px 0; font-size:14px;">${d.next_stop}</p>`;
+                        }
+                        document.getElementById('live-next-stop-details').innerHTML = html;
+                    } else {
+                        document.getElementById('live-next-stop-container').style.display = 'none';
+                    }
+
+                    nextDur = d.next_stop_duration || 0;
+                    tourDur = d.tour_remaining_duration || 0;
+                    nextBreak = d.next_break_in_seconds || 0;
+                    isAdjusted = d.include_rests ?? true;
+                    updateTimeDisplays();
+
+                    // Update Map
+                    if (d.latitude && d.longitude) {
+                        const newPos = [d.latitude, d.longitude];
+                        driverMarker.setLatLng(newPos);
+
+                        // Útvonal frissítése ha a célpont változott
+                        if (d.next_lat !== lastNextLat || d.next_lng !== lastNextLng) {
+                            lastNextLat = d.next_lat;
+                            lastNextLng = d.next_lng;
+                            // Ha változott a cél, akkor valószínűleg egy megálló teljesült, frissítsük a listát is
+                            refreshTours();
+                            fetch('/api/get-tours/' + encodeURIComponent('${name}'))
+                                .then(r => r.json())
+                                .then(data => {
+                                    const stops = data.length > 0 ? data[0].stops : [];
+                                    drawRoute(d.latitude, d.longitude, stops, d.depot_lat, d.depot_lng);
+                                });
+                        }
+                    }
+                } catch (e) { console.error('Refresh error:', e); }
+            }
+
+            setInterval(refreshLiveStatus, 5000);
 
             // Túra állomások
             const rawStops = ${currentStopsJson};
@@ -624,8 +777,83 @@ app.get('/driver/:name', async (req, res) => {
             openTab(null, 'dashboard');
             document.querySelector('nav button').classList.add('active');
 
-            function transferTour(tourId, newDriverName) { if (!newDriverName) return; if (confirm('Áthelyezed ' + newDriverName + ' részére?')) fetch('/admin/transfer-tour', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ tourId, newDriverName }) }).then(r => { if(r.ok) location.reload(); }); }
-            function deleteTour(id) { if(confirm('Törlöd?')) fetch('/admin/delete-tour', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({id}) }).then(r => { if(r.ok) location.reload(); }); }
+            function showToast(msg) {
+                const c = document.getElementById('toast-container');
+                const t = document.createElement('div');
+                t.className = 'toast';
+                t.innerText = msg;
+                c.appendChild(t);
+                setTimeout(() => t.remove(), 3000);
+            }
+
+            async function refreshTours() {
+                try {
+                    const r = await fetch('/api/get-tours/' + encodeURIComponent('${name}'));
+                    if (!r.ok) return;
+                    const data = await r.json();
+                    const container = document.getElementById('tours-list');
+                    if (!container) return;
+
+                    const allDNames = ${JSON.stringify(allD)};
+
+                    container.innerHTML = data.map(item => {
+                        const t = item.tour;
+                        const stops = item.stops;
+                        return `
+                        <div class="tour-card">
+                            <div style="float:right; display:flex; gap:5px;">
+                                <select onchange="transferTour(${t.id}, this.value)" style="width:auto;"><option value="">-- Áthelyezés --</option>${allDNames.map(n => `<option value="${n}">${n}</option>`).join('')}</select>
+                                <button onclick='editTour(${JSON.stringify(t).replace(/'/g, "&apos;")})'>✏</button>
+                                <button onclick="deleteTour(${t.id})" style="background:#e74c3c; color:white;">🗑</button>
+                            </div>
+                            <b>${t.name}</b> (${t.customer}) - ${new Date(Number(t.date)).toLocaleDateString()}
+                            ${stops.map(s => `<div class="stop-item">${s.order_index + 1}. ${s.stop_type === 'HOTEL' ? '🏨 ' : (s.stop_type === 'DEPOT' ? '🏠 ' : '')}${s.address}</div>`).join('')}
+                        </div>`;
+                    }).join('');
+                } catch (e) { console.error('Refresh tours error:', e); }
+            }
+
+            async function sendChat() {
+                const input = document.getElementById('chat-input');
+                const msg = input.value.trim();
+                if (!msg) return;
+                try {
+                    const res = await fetch('/api/send-chat', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({
+                            driverName: '${name}',
+                            sender: 'DISZPÉCSER',
+                            message: msg,
+                            timestamp: Date.now()
+                        })
+                    });
+                    if (res.ok) {
+                        input.value = '';
+                        refreshChat();
+                    }
+                } catch (e) { console.error('Chat error:', e); }
+            }
+
+            async function refreshChat() {
+                try {
+                    const r = await fetch('/api/get-chat/' + encodeURIComponent('${name}'));
+                    if (!r.ok) return;
+                    const data = await r.json();
+                    const container = document.getElementById('chat-messages');
+                    if (!container) return;
+                    container.innerHTML = data.map(m => `
+                        <div class="msg ${m.sender === 'DISZPÉCSER' ? 'msg-boss' : 'msg-driver'}">
+                            <b>${m.sender}:</b><br>${m.message}
+                        </div>`).join('');
+                    container.scrollTop = container.scrollHeight;
+                } catch (e) { console.error('Refresh chat error:', e); }
+            }
+
+            setInterval(refreshChat, 3000);
+
+            function transferTour(tourId, newDriverName) { if (!newDriverName) return; if (confirm('Áthelyezed ' + newDriverName + ' részére?')) fetch('/admin/transfer-tour', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ tourId, newDriverName }) }).then(r => { if(r.ok) { showToast('Túra sikeresen áthelyezve!'); refreshTours(); } }); }
+            function deleteTour(id) { if(confirm('Törlöd?')) fetch('/admin/delete-tour', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({id}) }).then(r => { if(r.ok) { showToast('Túra törölve!'); refreshTours(); } }); }
             function closeModal() { document.getElementById('tourModal').style.display = 'none'; }
             function editTour(t) {
                 document.getElementById('tourId').value = t ? t.id : '';
@@ -741,7 +969,7 @@ app.get('/driver/:name', async (req, res) => {
                     stops
                 };
                 const res = await fetch('/admin/save-tour', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) });
-                if(res.ok) location.reload(); else { alert('Hiba!'); btn.innerText = oldText; btn.disabled = false; }
+                if(res.ok) { showToast('Túra mentve!'); closeModal(); refreshTours(); } else { alert('Hiba!'); btn.innerText = oldText; btn.disabled = false; }
             }
         </script>
     </body></html>`;
