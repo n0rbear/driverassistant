@@ -1,707 +1,679 @@
-package com.example.driverassistant.ui.screen
+// FIXED SERVER v17 - TRACE LIVE UPDATES
+const express = require('express');
+const { Pool } = require('pg');
+const app = express();
+app.use(express.json());
 
-import android.widget.Toast
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.activity.result.launch
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.foundation.Image
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.unit.dp
-import androidx.hilt.navigation.compose.hiltViewModel
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import com.example.driverassistant.R
-import com.example.driverassistant.domain.model.WorkTime
-import com.example.driverassistant.ui.components.AILoadingAnimation
-import com.example.driverassistant.ui.components.MileageDialog
-import com.example.driverassistant.ui.viewmodel.DashboardViewModel
-import com.example.driverassistant.util.FileUtils
-import com.example.driverassistant.util.NotificationUtils
-import com.example.driverassistant.util.TimeUtils
-import java.text.SimpleDateFormat
-import java.util.*
+const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
 
-@Composable
-fun DashboardScreen(
-    viewModel: DashboardViewModel = hiltViewModel(),
-    aiViewModel: com.example.driverassistant.ui.viewmodel.AIViewModel = hiltViewModel()
-) {
-    val currentTime = remember { mutableStateOf(System.currentTimeMillis()) }
-    val workTimes by viewModel.workTimes.collectAsState()
-    val isAIProcessing by aiViewModel.isProcessing.collectAsState()
-    val currentTour by viewModel.currentTour.collectAsState()
-    val nextStop by viewModel.nextStop.collectAsState()
-    val profileDepot by viewModel.profileDepot.collectAsState()
-    
-    SideEffect {
-        if (currentTour != null) {
-            android.util.Log.d("DashboardTrace", "DashboardScreen RECOMPOSE: Tour ID: ${currentTour?.id}, UUID: ${currentTour?.uuid}, Name: ${currentTour?.name}, isCurrent: ${currentTour?.isCurrent}")
+// ==========================================
+// ADDRESS ENGINE
+// ==========================================
+const AddressEngine = {
+    normalize(addr) {
+        if (!addr) return null;
+        const find = (keys) => {
+            for (const k of keys) if (addr[k] !== undefined && addr[k] !== null) return String(addr[k]).trim();
+            return '';
+        };
+        const result = {
+            recipient: find(['recipient', 'depot_name', 'depotName']),
+            company: find(['company', 'depot_company', 'depotCompany']),
+            street: find(['street', 'depot_street', 'depotStreet']),
+            house_number: find(['house_number', 'houseNumber', 'depot_house_number', 'depotHouseNumber']),
+            postal_code: find(['postal_code', 'postalCode', 'depot_postal_code', 'depotPostalCode']),
+            city: find(['city', 'depot_city', 'depotCity']),
+            state: find(['state', 'depot_state', 'depotState']),
+            country: find(['country', 'depot_country', 'depotCountry']),
+            address_full: find(['address_full', 'addressFull', 'address', 'depot_address_full', 'depotAddressFull']),
+            latitude: null, longitude: null, notes: find(['notes'])
+        };
+        const lat = addr.latitude ?? addr.depot_lat ?? addr.depotLatitude;
+        const lng = addr.longitude ?? addr.depot_lng ?? addr.depotLongitude;
+        if (lat) result.latitude = parseFloat(lat);
+        if (lng) result.longitude = parseFloat(lng);
+        if (!result.street && !result.city && result.address_full) {
+            const match = result.address_full.match(/^(.+)\s+([^,]+),\s*(\d{4})\s+(.+)$/);
+            if (match) { result.street = match[1]; result.house_number = match[2]; result.postal_code = match[3]; result.city = match[4]; }
+        }
+        if (!result.address_full && result.street && result.city) result.address_full = `${result.street} ${result.house_number}, ${result.postal_code} ${result.city}`;
+        return result;
+    },
+    getFingerprint(addr) {
+        const n = this.normalize(addr);
+        return n ? `${n.country}|${n.postal_code}|${n.city}|${n.street}|${n.house_number}`.toLowerCase() : '';
+    }
+};
+
+// ==========================================
+// IMPORT ENGINE
+// ==========================================
+const ImportEngine = {
+    async processTour(client, driverName, tourData, stopsData) {
+        // UUID alapú keresés, hogy elkerüljük a kliens/szerver ID ütközést
+        const existingRes = await client.query('SELECT id FROM tours WHERE uuid = $1', [tourData.uuid]);
+        let tourId = existingRes.rows.length > 0 ? existingRes.rows[0].id : null;
+
+        const tour = { ...tourData, driver_name: driverName, updated_at: Date.now() };
+        const depot = AddressEngine.normalize(tourData);
+        const groupedStops = new Map();
+
+        for (const rawStop of stopsData) {
+            const n = AddressEngine.normalize(rawStop);
+            const fp = AddressEngine.getFingerprint(n);
+            const item = {
+                uuid: (rawStop.uuid && String(rawStop.uuid).trim() !== "") ? String(rawStop.uuid) : null,
+                recipient: n.recipient, company: n.company, notes: n.notes,
+                contact_name: rawStop.contact_name || rawStop.contactName || '',
+                phone_number: rawStop.phone_number || rawStop.phoneNumber || '',
+                email: rawStop.email || '', time_window: rawStop.time_window || rawStop.timeWindow || '',
+                stop_type: rawStop.stop_type || rawStop.stopType || 'DELIVERY',
+                is_completed: !!(rawStop.is_completed || rawStop.isCompleted),
+                arrival_time: rawStop.arrival_time || rawStop.arrivalTime || null,
+                updated_at: rawStop.updated_at || rawStop.updatedAt || Date.now()
+            };
+            if (groupedStops.has(fp)) groupedStops.get(fp).items.push(item);
+            else groupedStops.set(fp, { ...n, items: [item] });
+        }
+
+        if (tourId) {
+            await client.query(`UPDATE tours SET driver_name=$1, name=$2, customer=$3, date=$4, day_of_week=$5, notes=$6, is_closed=$7, is_current=$8, depot_name=$9, depot_company=$10, depot_street=$11, depot_house_number=$12, depot_postal_code=$13, depot_city=$14, depot_state=$15, depot_country=$16, depot_address_full=$17, depot_lat=$18, depot_lng=$19, updated_at=$20, deleted_at=$22 WHERE id=$21`,
+                [driverName, tour.name, tour.customer, tour.date, tour.day_of_week, tour.notes, !!tour.is_closed, !!tour.is_current, depot.recipient || depot.address_full, depot.company, depot.street, depot.house_number, depot.postal_code, depot.city, depot.state, depot.country, depot.address_full, depot.latitude, depot.longitude, tour.updated_at, tourId, tour.deleted_at || tour.deletedAt || null]);
         } else {
-            android.util.Log.d("DashboardTrace", "DashboardScreen RECOMPOSE: currentTour is NULL")
+            const res = await client.query(`INSERT INTO tours (uuid, driver_name, name, customer, date, day_of_week, notes, is_closed, is_current, depot_name, depot_company, depot_street, depot_house_number, depot_postal_code, depot_city, depot_state, depot_country, depot_address_full, depot_lat, depot_lng, updated_at, deleted_at) VALUES (COALESCE($1::UUID, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22) RETURNING id`,
+                [tour.uuid || null, driverName, tour.name, tour.customer, tour.date, tour.day_of_week, tour.notes, !!tour.is_closed, !!tour.is_current, depot.recipient || depot.address_full, depot.company, depot.street, depot.house_number, depot.postal_code, depot.city, depot.state, depot.country, depot.address_full, depot.latitude, depot.longitude, tour.updated_at, tour.deleted_at || tour.deletedAt || null]);
+            tourId = res.rows[0].id;
         }
-        
-        if (nextStop != null) {
-            android.util.Log.d("DashboardTrace", "DashboardScreen RECOMPOSE: nextStop: ${nextStop?.contactName}, isCompleted: ${nextStop?.isCompleted}")
-        } else {
-            android.util.Log.d("DashboardTrace", "DashboardScreen RECOMPOSE: nextStop is NULL")
+
+        const currentUuids = [];
+        let idx = 0;
+        for (const s of groupedStops.values()) {
+            const main = s.items[0];
+            const res = await client.query(`INSERT INTO stops (uuid, tour_id, address, recipient, company, street, house_number, postal_code, city, state, country, address_full, contact_name, phone_number, email, time_window, notes, order_index, latitude, longitude, is_completed, arrival_time, stop_type, updated_at, items) VALUES (COALESCE($1::UUID, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25) ON CONFLICT (uuid) DO UPDATE SET tour_id=EXCLUDED.tour_id, address=EXCLUDED.address, recipient=EXCLUDED.recipient, company=EXCLUDED.company, street=EXCLUDED.street, house_number=EXCLUDED.house_number, postal_code=EXCLUDED.postal_code, city=EXCLUDED.city, state=EXCLUDED.state, country=EXCLUDED.country, address_full=EXCLUDED.address_full, contact_name=EXCLUDED.contact_name, phone_number=EXCLUDED.phone_number, email=EXCLUDED.email, time_window=EXCLUDED.time_window, notes=EXCLUDED.notes, order_index=EXCLUDED.order_index, latitude=EXCLUDED.latitude, longitude=EXCLUDED.longitude, is_completed=EXCLUDED.is_completed, arrival_time=EXCLUDED.arrival_time, stop_type=EXCLUDED.stop_type, updated_at=EXCLUDED.updated_at, items=EXCLUDED.items RETURNING uuid`,
+                [main.uuid, tourId, s.address_full, main.recipient, s.company, s.street, s.house_number, s.postal_code, s.city, s.state, s.country, s.address_full, main.contact_name, main.phone_number, main.email, main.time_window, main.notes, idx++, s.latitude, s.longitude, main.is_completed, main.arrival_time, main.stop_type, main.updated_at, JSON.stringify(s.items)]);
+            currentUuids.push(res.rows[0].uuid);
         }
-    }
-    val nextStopDistance by viewModel.nextStopDistance.collectAsState()
-    val tourRemainingDistance by viewModel.tourRemainingDistance.collectAsState()
-    val ongoingTask by viewModel.ongoingWorkTime.collectAsState()
-    val currentStatus = ongoingTask?.type ?: "Offline"
-    val context = LocalContext.current
-    
-    var showHistory by remember { mutableStateOf(false) }
-    var editingWorkTime by remember { mutableStateOf<WorkTime?>(null) }
-    var showMileageDialog by remember { mutableStateOf<String?>(null) }
-    val lastData by viewModel.lastData.collectAsState()
-    
-    var selectedUris by remember { mutableStateOf<List<android.net.Uri>>(emptyList()) }
-    var showPageQuestion by remember { mutableStateOf(false) }
-    var lastActionByCamera by remember { mutableStateOf(false) }
+        await client.query('UPDATE stops SET deleted_at = $1, updated_at = $1 WHERE tour_id = $2 AND deleted_at IS NULL AND NOT (uuid = ANY($3::UUID[]))', [tour.updated_at, tourId, currentUuids]);
 
-    var tempUri by remember { mutableStateOf<android.net.Uri?>(null) }
-    
-    val pendingTour by aiViewModel.pendingTour.collectAsState()
-    val existingCustomers by aiViewModel.existingCustomers.collectAsState()
-
-    val photoLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.TakePicture()
-    ) { success ->
-        if (success) {
-            tempUri?.let { u ->
-                selectedUris = selectedUris + u
-                showPageQuestion = true
-            }
-        }
-    }
-
-    val filePickerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetContent()
-    ) { uri ->
-        uri?.let { u ->
-            selectedUris = selectedUris + u
-            showPageQuestion = true
-        }
-    }
-
-    if (showPageQuestion) {
-        AlertDialog(
-            onDismissRequest = { showPageQuestion = false },
-            title = { Text("További oldalak?") },
-            text = { Text("Szeretnél még egy oldalt hozzáadni ehhez a dokumentumhoz?") },
-            confirmButton = {
-                Button(onClick = {
-                    showPageQuestion = false
-                    if (lastActionByCamera) {
-                        val uri = FileUtils.getTempUri(context)
-                        tempUri = uri
-                        photoLauncher.launch(uri)
-                    } else {
-                        filePickerLauncher.launch("*/*")
-                    }
-                }) {
-                    Text("Igen, újabb oldal")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = {
-                    showPageQuestion = false
-                    if (selectedUris.isNotEmpty()) {
-                        aiViewModel.processAnyDocument(context, selectedUris) { msg ->
-                            Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
-                            selectedUris = emptyList()
-                        }
-                    }
-                }) {
-                    Text("Nem, feldolgozás indítása")
-                }
-            }
-        )
-    }
-
-    if (pendingTour != null) {
-        CustomerSelectionDialog(
-            initialCustomer = pendingTour?.customer,
-            options = existingCustomers,
-            onDismiss = { aiViewModel.clearPendingTour() },
-            onConfirm = { name -> aiViewModel.confirmTour(name) }
-        )
-    }
-
-    LaunchedEffect(Unit) {
-        while (true) {
-            currentTime.value = System.currentTimeMillis()
-            kotlinx.coroutines.delay(1000)
-        }
-    }
-
-    val sdf = SimpleDateFormat("yyyy.MM.dd HH:mm:ss", Locale.getDefault())
-    val timeSdf = SimpleDateFormat("HH:mm", Locale.getDefault())
-
-    Box(modifier = Modifier.fillMaxSize()) {
-        Image(
-            painter = painterResource(id = R.drawable.background_main),
-            contentDescription = null,
-            modifier = Modifier.fillMaxSize(),
-            contentScale = ContentScale.Crop,
-            alpha = 0.3f
-        )
-        
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(16.dp)
-                .verticalScroll(rememberScrollState())
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(text = "Aktuális idő: ${sdf.format(Date(currentTime.value))}", style = MaterialTheme.typography.titleMedium)
-                IconButton(onClick = { showHistory = !showHistory }) {
-                    Icon(Icons.Default.History, contentDescription = "Előzmények")
-                }
-            }
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Button(
-                    onClick = { 
-                        lastActionByCamera = true
-                        val uri = FileUtils.getTempUri(context)
-                        tempUri = uri
-                        photoLauncher.launch(uri) 
-                    },
-                    modifier = Modifier.weight(1f),
-                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.tertiary)
-                ) {
-                    Icon(Icons.Default.CameraAlt, contentDescription = null)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Fotózás (AI)")
-                }
-
-                Button(
-                    onClick = { 
-                        lastActionByCamera = false
-                        filePickerLauncher.launch("*/*") 
-                    },
-                    modifier = Modifier.weight(1f),
-                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.tertiary)
-                ) {
-                    Icon(Icons.Default.UploadFile, contentDescription = null)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Feltöltés (AI)")
-                }
-            }
-        
-            Spacer(modifier = Modifier.height(16.dp))
-            
-            DashboardCard("Munkaidő", viewModel.getTotalTime("Munka", currentTime.value))
-            DashboardCard("Vezetési idő", viewModel.getTotalTime("Vezetés", currentTime.value))
-            DashboardCard("Pihenőidő", viewModel.getTotalTime("Pihenő", currentTime.value))
-            
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // --- TÉRKÉP SZEKCIÓ ---
-            val lastLocation by viewModel.lastLocation.collectAsState()
-            val currentStops by viewModel.currentStops.collectAsState()
-            
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(320.dp)
-                    .padding(vertical = 8.dp),
-                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-                colors = CardDefaults.cardColors(containerColor = Color(0xFF1A1A1A))
-            ) {
-                Box(modifier = Modifier.fillMaxSize()) {
-                    androidx.compose.ui.viewinterop.AndroidView(
-                        factory = { ctx ->
-                            android.webkit.WebView(ctx).apply {
-                                layoutParams = android.view.ViewGroup.LayoutParams(
-                                    android.view.ViewGroup.LayoutParams.MATCH_PARENT,
-                                    android.view.ViewGroup.LayoutParams.MATCH_PARENT
-                                )
-                                settings.javaScriptEnabled = true
-                                settings.domStorageEnabled = true
-                                settings.loadWithOverviewMode = true
-                                settings.useWideViewPort = true
-                                settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-                                
-                                // OSM Policy: Kötelező egyedi User-Agent beállítása
-                                settings.userAgentString = "DriverAssistantApp/1.0 (com.example.driverassistant; contact: horvath.d.norbert@gmail.com)"
-
-                                // Samsung/Modern Android fix: transzparens háttér a WebView-nak
-                                setBackgroundColor(0) 
-                                
-                                webViewClient = object : android.webkit.WebViewClient() {
-                                    override fun onPageFinished(view: android.webkit.WebView?, url: String?) {
-                                        android.util.Log.d("WebViewTrace", "Map HTML loaded")
-                                        view?.evaluateJavascript("setTimeout(function(){ map.invalidateSize(); }, 500);", null)
-                                    }
-                                }
-                                webChromeClient = android.webkit.WebChromeClient()
-                            }
-                        },
-                        update = { webView ->
-                            val lat = lastLocation?.latitude ?: 47.4979
-                            val lng = lastLocation?.longitude ?: 19.0402
-                            
-                            val safeLat = if (lat.isNaN() || lat == 0.0) 47.4979 else lat
-                            val safeLng = if (lng.isNaN() || lng == 0.0) 19.0402 else lng
-
-                            val stopsJs = currentStops.filter { it.latitude != null && it.longitude != null && !it.latitude!!.isNaN() }
-                                .joinToString(",") { "{lat: ${it.latitude}, lng: ${it.longitude}, name: '${it.recipient.replace("'", "")}', completed: ${it.isCompleted}}" }
-
-                            val depotJs = profileDepot?.let { 
-                                if (it.latitude != null && it.longitude != null) 
-                                    "{lat: ${it.latitude}, lng: ${it.longitude}, name: '${it.name.replace("'", "")}'}" 
-                                else "null" 
-                            } ?: "null"
-
-                            val html = """
-                                <!DOCTYPE html>
-                                <html style="height:100%; width:100%;">
-                                <head>
-                                    <meta charset="utf-8" />
-                                    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-                                    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-                                    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-                                    <style>
-                                        html, body, #map { height: 100%; width: 100%; margin: 0; padding: 0; background: #1a1a1a; }
-                                        .driver-icon-inner { background:#3498db; width:12px; height:12px; border-radius:50%; border:3px solid white; box-shadow:0 0 10px rgba(52,152,219,0.8); }
-                                    </style>
-                                </head>
-                                <body>
-                                    <div id="map"></div>
-                                    <script>
-                                        var map = L.map('map', { zoomControl: false, attributionControl: true }).setView([$safeLat, $safeLng], 13);
-                                        L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-                                            attribution: '&copy; OpenStreetMap'
-                                        }).addTo(map);
-                                        
-                                        var driverIcon = L.divIcon({
-                                            className: 'driver-icon',
-                                            html: '<div class="driver-icon-inner"></div>',
-                                            iconSize: [18, 18], iconAnchor: [9, 9]
-                                        });
-                                        var marker = L.marker([$safeLat, $safeLng], { icon: driverIcon }).addTo(map);
-                                        
-                                        var stops = [$stopsJs];
-                                        var depot = $depotJs;
-                                        var group = [[$safeLat, $safeLng]];
-                                        var nextStop = null;
-
-                                        stops.forEach(function(s) {
-                                            var color = s.completed ? '#7f8c8d' : '#e74c3c';
-                                            L.circleMarker([s.lat, s.lng], { radius: 6, color: color, fillColor: color, fillOpacity: 0.8 }).addTo(map);
-                                            group.push([s.lat, s.lng]);
-                                            if (!s.completed && !nextStop) {
-                                                nextStop = s;
-                                            }
-                                        });
-
-                                        if (depot) {
-                                            L.marker([depot.lat, depot.lng], { 
-                                                icon: L.divIcon({ className: 'depot-icon', html: '<div style="background:#2ecc71; width:10px; height:10px; border-radius:4px; border:2px solid white;"></div>' }) 
-                                            }).addTo(map);
-                                            group.push([depot.lat, depot.lng]);
-                                        }
-
-                                        if (group.length > 1) {
-                                            map.fitBounds(group, { padding: [40, 40] });
-                                        }
-                                        
-                                        var waypointStr = $safeLng + ',' + $safeLat;
-                                        var incompleteStops = stops.filter(function(s) { return !s.completed; });
-                                        
-                                        incompleteStops.forEach(function(s) {
-                                            waypointStr += ';' + s.lng + ',' + s.lat;
-                                        });
-                                        
-                                        if (depot) {
-                                            waypointStr += ';' + depot.lng + ',' + depot.lat;
-                                        }
-
-                                        if (waypointStr.includes(';')) {
-                                            fetch('https://router.project-osrm.org/route/v1/driving/' + waypointStr + '?overview=full&geometries=geojson')
-                                                .then(r => r.json())
-                                                .then(data => {
-                                                    if (data.routes && data.routes[0]) {
-                                                        L.geoJSON(data.routes[0].geometry, { style: { color: '#3498db', weight: 5, opacity: 0.6 } }).addTo(map);
-                                                    }
-                                                });
-                                        }
-                                    </script>
-                                </body>
-                                </html>
-                            """.trimIndent()
-                            
-                            // Csak 50-100 méterenként töltsük újra, vagy ha a megállók/depó változnak
-                            val latTag = (safeLat * 1000).toInt()
-                            val lngTag = (safeLng * 1000).toInt()
-                            val contentTag = "${latTag}_${lngTag}_${stopsJs.hashCode()}_${depotJs.hashCode()}"
-                            
-                            if (webView.tag != contentTag) {
-                                webView.loadDataWithBaseURL("https://www.openstreetmap.org", html, "text/html", "UTF-8", null)
-                                webView.tag = contentTag
-                            }
-                        },
-                        modifier = Modifier.fillMaxSize()
-                    )
-                }
-            }
-
-
-            Spacer(modifier = Modifier.height(16.dp))
-            
-            if (ongoingTask != null) {
-                val task = ongoingTask!!
-                val duration = currentTime.value - task.startTime
-                val hours = duration / 3600000
-                val minutes = (duration % 3600000) / 60000
-                val seconds = (duration % 60000) / 1000
-                
-                Card(
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(modifier = Modifier.padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(text = "Aktív: ${task.type}", style = MaterialTheme.typography.headlineSmall)
-                        Text(
-                            text = String.format("%02d:%02d:%02d", hours, minutes, seconds),
-                            style = MaterialTheme.typography.displayMedium
-                        )
-                    }
-                }
-            }
-
-            AnimatedVisibility(visible = showHistory) {
-                Column {
-                    Text(text = "Mai munkaidők:", style = MaterialTheme.typography.titleSmall)
-                    LazyColumn(modifier = Modifier.heightIn(max = 250.dp)) {
-                        items(workTimes) { wt ->
-                            Row(
-                                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                val start = timeSdf.format(Date(wt.startTime))
-                                val end = wt.endTime?.let { timeSdf.format(Date(it)) } ?: "..."
-                                Text("${wt.type}: $start - $end")
-                                Row {
-                                    IconButton(onClick = { editingWorkTime = wt }, modifier = Modifier.size(24.dp)) {
-                                        Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(16.dp))
-                                    }
-                                    IconButton(onClick = { viewModel.deleteWorkTime(wt) }, modifier = Modifier.size(24.dp)) {
-                                        Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(16.dp))
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-                }
-            }
-
-            if (editingWorkTime != null) {
-                EditWorkTimeDialog(
-                    workTime = editingWorkTime!!,
-                    onDismiss = { editingWorkTime = null },
-                    onConfirm = { updated ->
-                        viewModel.updateWorkTime(updated)
-                        editingWorkTime = null
-                    }
-                )
-            }
-
-            Spacer(modifier = Modifier.height(16.dp))
-            
-            Text(
-                text = if (currentTour == null) {
-                    "❌ DEBUG: Nincs aktív túra (currentTour = null)"
+        if (tour.is_current) {
+            try {
+                const tourUuid = tour.uuid || tourData.uuid;
+                if (tourUuid) {
+                    console.log(`[TRACE-TOUR] Calling set_current_tour for driver: ${driverName}, tourUuid: ${tourUuid}`);
+                    await client.query('SELECT set_current_tour($1, $2)', [driverName, tourUuid]);
                 } else {
-                    "✅ DEBUG: Aktív túra: ${currentTour!!.name} (isCurrent = ${currentTour!!.isCurrent})"
-                },
-                color = if (currentTour == null) Color.Red else Color.Green,
-                style = MaterialTheme.typography.labelSmall,
-                modifier = Modifier.padding(16.dp)
-            )
-
-            Text(text = "Következő cím:", style = MaterialTheme.typography.titleMedium)
-            
-            Card(
-                colors = CardDefaults.cardColors(
-                    containerColor = if (nextStop != null || profileDepot != null) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceVariant
-                ),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    if (nextStop != null || profileDepot != null) {
-                        if (nextStop != null) {
-                            Text(text = nextStop!!.contactName, style = MaterialTheme.typography.titleSmall)
-                            Text(text = nextStop!!.address, style = MaterialTheme.typography.bodyLarge)
-                        } else {
-                            Text(text = "Visszatérés a depóba", style = MaterialTheme.typography.titleSmall)
-                            Text(text = profileDepot!!.name, style = MaterialTheme.typography.bodyLarge)
-                            Text(text = profileDepot!!.address, style = MaterialTheme.typography.bodySmall)
-                        }
-                        
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column {
-                                if (nextStop?.timeWindow?.isNotBlank() == true) {
-                                    Text(text = "Időablak: ${nextStop!!.timeWindow}", style = MaterialTheme.typography.labelSmall)
-                                }
-                                nextStopDistance?.let { (dist, dur) ->
-                                    val drivingDone = viewModel.drivingTimeTodaySeconds.collectAsState().value
-                                    val adjustedDur = TimeUtils.calculateAdjustedDuration(dur, drivingDone)
-                                    val formattedDur = TimeUtils.formatDuration(adjustedDur)
-                                    Text(
-                                        text = String.format("📍 %s: %.1f km (%s)", if (nextStop != null) "Következő" else "Depó", dist, formattedDur),
-                                        style = MaterialTheme.typography.titleMedium,
-                                        color = MaterialTheme.colorScheme.primary,
-                                        fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
-                                    )
-                                }
-                                tourRemainingDistance?.let { (dist, dur) ->
-                                    val drivingDone = viewModel.drivingTimeTodaySeconds.collectAsState().value
-                                    val adjustedDur = TimeUtils.calculateAdjustedDuration(dur, drivingDone)
-                                    val formattedDur = TimeUtils.formatDuration(adjustedDur)
-                                    Text(
-                                        text = String.format("🏁 Túra: %.1f km (%s)", dist, formattedDur),
-                                        style = MaterialTheme.typography.titleMedium,
-                                        color = MaterialTheme.colorScheme.secondary,
-                                        fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
-                                    )
-                                }
-                            }
-                            if (nextStop != null) {
-                                TextButton(onClick = { viewModel.completeStop(nextStop!!.id) }) {
-                                    Icon(Icons.Default.Check, contentDescription = null)
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text("Kész")
-                                }
-                            } else {
-                                Icon(Icons.Default.Home, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                            }
-                        }
-                    } else {
-                        Text(text = "Nincs aktív túra vagy több megálló.", style = MaterialTheme.typography.bodyMedium, color = Color.Gray)
-                    }
+                    console.warn(`[TRACE-TOUR] Cannot call set_current_tour, UUID is missing for tourId: ${tourId}`);
                 }
-            }
-            
-            Spacer(modifier = Modifier.height(16.dp))
-            
-            Text(
-                text = "Napi állapot: $currentStatus", 
-                color = if (currentStatus == "Offline") MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary, 
-                style = MaterialTheme.typography.titleLarge
-            )
-            
-            Spacer(modifier = Modifier.height(32.dp))
-            
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                StatusButton("Pihenő", currentStatus, enabled = currentStatus != "Offline" && currentStatus != "Pihenő") { 
-                    viewModel.updateStatus("Pihenő")
-                    NotificationUtils.showSimpleNotification(context, "Munkaidő napló", "Pihenőidő elindítva")
-                }
-                StatusButton("Vezetés", currentStatus, enabled = currentStatus != "Offline" && currentStatus != "Vezetés") { 
-                    viewModel.updateStatus("Vezetés")
-                    NotificationUtils.showSimpleNotification(context, "Munkaidő napló", "Vezetés megkezdve")
-                }
-                StatusButton("Rakodás", currentStatus, enabled = currentStatus != "Offline" && currentStatus != "Rakodás") { 
-                    viewModel.updateStatus("Rakodás")
-                }
-            }
-            Spacer(modifier = Modifier.height(8.dp))
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                StatusButton("Munka", currentStatus, enabled = currentStatus == "Offline" || currentStatus != "Munka") { 
-                    if (currentStatus == "Offline") {
-                        showMileageDialog = "Munka"
-                    } else {
-                        viewModel.updateStatus("Munka")
-                    }
-                }
-                OutlinedButton(
-                    onClick = { showMileageDialog = "Offline" },
-                    enabled = currentStatus != "Offline"
-                ) { Text("Műszak vége") }
-            }
-
-            if (showMileageDialog != null) {
-                MileageDialog(
-                    initialMileage = lastData?.second ?: 0,
-                    initialLicensePlate = lastData?.first ?: "",
-                    showLicensePlate = showMileageDialog != "Offline",
-                    onDismiss = { showMileageDialog = null },
-                    onConfirm = { mileageValue, plate ->
-                        val type = showMileageDialog!!
-                        viewModel.updateStatus(type, mileageValue, plate)
-                        if (type == "Offline") {
-                            NotificationUtils.showSimpleNotification(context, "Műszak vége", "A mai nap rögzítve lett. Km: $mileageValue")
-                        } else {
-                            val msg = when(type) {
-                                "Vezetés" -> "Vezetés megkezdve"
-                                "Pihenő" -> "Pihenőidő elindítva"
-                                else -> "Munkaidő napló elindítva"
-                            }
-                            NotificationUtils.showSimpleNotification(context, "Műszak kezdése", msg)
-                        }
-                        showMileageDialog = null
-                    }
-                )
+            } catch (err) {
+                console.error(`[TRACE-TOUR] Failed to set current tour in processTour: ${err.message}`);
             }
         }
 
-        if (isAIProcessing) {
-            AILoadingAnimation()
+        return tourId;
+    }
+};
+
+const initDb = async () => {
+    console.log('[STARTUP] initDb started');
+    await pool.query('CREATE EXTENSION IF NOT EXISTS "pgcrypto"');
+    const queries = [
+        `CREATE TABLE IF NOT EXISTS drivers (uuid UUID DEFAULT gen_random_uuid() PRIMARY KEY, name TEXT UNIQUE, email TEXT, phone TEXT, license_plate TEXT, photo_url TEXT, is_active BOOLEAN DEFAULT TRUE)`,
+        `CREATE TABLE IF NOT EXISTS live_updates (id SERIAL PRIMARY KEY, uuid UUID DEFAULT gen_random_uuid() UNIQUE, driver_name TEXT, driver_photo TEXT, driver_phone TEXT, driver_email TEXT, license_plate TEXT, latitude DOUBLE PRECISION, longitude DOUBLE PRECISION, speed FLOAT, status TEXT, current_tour TEXT, next_stop TEXT, next_lat DOUBLE PRECISION, next_lng DOUBLE PRECISION, next_stop_dist FLOAT, next_stop_duration BIGINT, tour_remaining_dist FLOAT, tour_remaining_duration BIGINT, depot_name TEXT, depot_lat DOUBLE PRECISION, depot_lng DOUBLE PRECISION, timestamp BIGINT, UNIQUE(uuid))`,
+        `CREATE TABLE IF NOT EXISTS costs (id SERIAL PRIMARY KEY, uuid UUID DEFAULT gen_random_uuid() UNIQUE, driver_name TEXT, amount DECIMAL, currency TEXT, category TEXT, notes TEXT, mileage INT, status TEXT DEFAULT 'Rögzítve', timestamp BIGINT, UNIQUE(uuid))`,
+        `CREATE TABLE IF NOT EXISTS chat_messages (id SERIAL PRIMARY KEY, uuid UUID DEFAULT gen_random_uuid() UNIQUE, driver_name TEXT, sender TEXT, message TEXT, timestamp BIGINT, UNIQUE(uuid))`,
+        `CREATE TABLE IF NOT EXISTS work_times (id SERIAL PRIMARY KEY, uuid UUID DEFAULT gen_random_uuid() UNIQUE, driver_name TEXT, type TEXT, start_time BIGINT, end_time BIGINT, mileage INT, end_mileage INT, license_plate TEXT, notes TEXT, date TEXT, UNIQUE(uuid))`,
+        `CREATE TABLE IF NOT EXISTS hotels (id SERIAL PRIMARY KEY, uuid UUID DEFAULT gen_random_uuid() UNIQUE, driver_name TEXT, name TEXT, address TEXT, timestamp BIGINT, UNIQUE(uuid))`,
+        `CREATE TABLE IF NOT EXISTS tours (id SERIAL PRIMARY KEY, uuid UUID DEFAULT gen_random_uuid() UNIQUE, driver_name TEXT, name TEXT, customer TEXT, date BIGINT, day_of_week TEXT, notes TEXT, is_closed BOOLEAN, is_current BOOLEAN, depot_name TEXT, depot_company TEXT, depot_street TEXT, depot_house_number TEXT, depot_postal_code TEXT, depot_city TEXT, depot_state TEXT, depot_country TEXT, depot_address_full TEXT, depot_lat DOUBLE PRECISION, depot_lng DOUBLE PRECISION, deleted_at BIGINT, updated_at BIGINT, UNIQUE(uuid))`,
+        `CREATE TABLE IF NOT EXISTS stops (id SERIAL PRIMARY KEY, uuid UUID DEFAULT gen_random_uuid() UNIQUE, tour_id INT, address TEXT, recipient TEXT, company TEXT, street TEXT, house_number TEXT, postal_code TEXT, city TEXT, state TEXT, country TEXT, address_full TEXT, contact_name TEXT, phone_number TEXT, email TEXT, time_window TEXT, notes TEXT, alternative_names TEXT, order_index INT, latitude DOUBLE PRECISION, longitude DOUBLE PRECISION, is_completed BOOLEAN, arrival_time BIGINT, deleted_at BIGINT, updated_at BIGINT, stop_type TEXT DEFAULT 'DELIVERY', items JSONB, UNIQUE(uuid))`,
+        `CREATE OR REPLACE FUNCTION set_current_tour(p_driver_name TEXT, p_tour_uuid UUID) RETURNS VOID AS $$
+        BEGIN
+            UPDATE tours SET is_current = false, updated_at = EXTRACT(EPOCH FROM NOW()) * 1000
+            WHERE driver_name = p_driver_name AND uuid != p_tour_uuid;
+            UPDATE tours SET is_current = true, updated_at = EXTRACT(EPOCH FROM NOW()) * 1000
+            WHERE uuid = p_tour_uuid AND driver_name = p_driver_name;
+        END;
+        $$ LANGUAGE plpgsql;`
+    ];
+    for (let q of queries) await pool.query(q);
+    const cols = [
+        ['stops', 'items', 'JSONB'],
+        ['stops', 'stop_type', 'TEXT DEFAULT \'DELIVERY\''],
+        ['tours', 'depot_company', 'TEXT'],
+        ['tours', 'depot_street', 'TEXT'],
+        ['tours', 'depot_house_number', 'TEXT'],
+        ['tours', 'depot_postal_code', 'TEXT'],
+        ['tours', 'depot_city', 'TEXT'],
+        ['tours', 'depot_state', 'TEXT'],
+        ['tours', 'depot_country', 'TEXT'],
+        ['tours', 'depot_address_full', 'TEXT'],
+        ['stops', 'company', 'TEXT'],
+        ['stops', 'state', 'TEXT'],
+        ['stops', 'country', 'TEXT'],
+        ['live_updates', 'depot_name', 'TEXT'],
+        ['live_updates', 'depot_lat', 'DOUBLE PRECISION'],
+        ['live_updates', 'depot_lng', 'DOUBLE PRECISION'],
+        ['live_updates', 'next_stop_duration', 'BIGINT'],
+        ['live_updates', 'tour_remaining_duration', 'BIGINT']
+    ];
+    for (const [t, c, type] of cols) {
+        if (t === 'stops' && c === 'items') console.log('[SCHEMA] checking stops.items');
+        const check = await pool.query("SELECT column_name FROM information_schema.columns WHERE table_name = $1 AND column_name = $2", [t, c]);
+        if (check.rows.length === 0) {
+            if (t === 'stops' && c === 'items') console.log('[SCHEMA] adding items column');
+            await pool.query(`ALTER TABLE ${t} ADD COLUMN ${c} ${type}`);
         }
     }
-}
+    const verifyItems = await pool.query("SELECT column_name FROM information_schema.columns WHERE table_name='stops' AND column_name='items'");
+    if (verifyItems.rows.length === 0) throw new Error("FATAL: Schema migration failed - column 'items' still does not exist in table 'stops'.");
+    console.log('[SCHEMA] items column exists');
+    const constraints = [['work_times', 'unique_worktime', 'UNIQUE (driver_name, start_time)'], ['costs', 'unique_cost', 'UNIQUE (driver_name, timestamp, amount)'], ['hotels', 'unique_hotel', 'UNIQUE (driver_name, timestamp, name)']];
+    for (const [t, name, def] of constraints) {
+        try {
+            const check = await pool.query("SELECT conname FROM pg_constraint WHERE conname = $1", [name]);
+            if (check.rows.length === 0) {
+                console.log(`[SCHEMA] adding constraint ${name} to ${t}`);
+                await pool.query(`ALTER TABLE ${t} ADD CONSTRAINT ${name} ${def}`);
+            }
+        } catch (e) { console.error(`[SCHEMA] Skip constraint ${name}:`, e.message); }
+    }
+    console.log('[STARTUP] initDb finished');
+};
 
-@Composable
-fun CustomerSelectionDialog(
-    initialCustomer: String?,
-    options: List<String>,
-    onDismiss: () -> Unit,
-    onConfirm: (String) -> Unit
-) {
-    var text by remember { mutableStateOf(if (initialCustomer == "UNCLEAR") "" else (initialCustomer ?: "")) }
-    var expanded by remember { mutableStateOf(false) }
-    
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Megrendelő pontosítása") },
-        text = {
-            Column {
-                Text("Az AI nem tudta pontosan beazonosítani a megrendelőt. Kérlek add meg vagy válaszd ki!")
-                Spacer(modifier = Modifier.height(8.dp))
-                
-                Box {
-                    OutlinedTextField(
-                        value = text,
-                        onValueChange = { text = it },
-                        label = { Text("Megrendelő neve") },
-                        modifier = Modifier.fillMaxWidth(),
-                        trailingIcon = {
-                            IconButton(onClick = { expanded = true }) {
-                                Icon(Icons.Default.ArrowDropDown, contentDescription = null)
-                            }
-                        }
-                    )
-                    DropdownMenu(
-                        expanded = expanded,
-                        onDismissRequest = { expanded = false },
-                        modifier = Modifier.fillMaxWidth(0.8f)
-                    ) {
-                        options.forEach { option ->
-                            DropdownMenuItem(
-                                text = { Text(option) },
-                                onClick = {
-                                    text = option
-                                    expanded = false
-                                }
-                            )
-                        }
-                    }
+app.get('/health', (req, res) => res.sendStatus(200));
+
+app.post('/api/live-update', async (req, res) => {
+    const d = req.body;
+    try {
+        const prevRes = await pool.query('SELECT status FROM live_updates WHERE driver_name = $1 ORDER BY timestamp DESC LIMIT 1', [d.driverName]);
+        const prevStatus = prevRes.rows.length > 0 ? prevRes.rows[0].status : 'N/A';
+
+        const sql = 'INSERT INTO live_updates (uuid, driver_name, driver_photo, driver_phone, driver_email, license_plate, latitude, longitude, speed, status, current_tour, next_stop, next_lat, next_lng, next_stop_dist, next_stop_duration, tour_remaining_dist, tour_remaining_duration, depot_name, depot_lat, depot_lng, timestamp) VALUES (COALESCE($1::UUID, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)';
+
+        console.log(`[TRACE-LIVE] Endpoint: /api/live-update`);
+        console.log(`[TRACE-LIVE] Body: ${JSON.stringify(d)}`);
+        console.log(`[TRACE-LIVE] Driver: ${d.driverName}`);
+        console.log(`[TRACE-LIVE] Prev Status: ${prevStatus}`);
+        console.log(`[TRACE-LIVE] New Status: ${d.status}`);
+        console.log(`[TRACE-LIVE] SQL: ${sql}`);
+
+        await pool.query(sql, [d.uuid || null, d.driverName, d.driverPhoto, d.driverPhone, d.driverEmail, d.licensePlate, d.latitude, d.longitude, d.speed, d.status, d.currentTour, d.nextStop, d.nextLat, d.nextLng, d.nextStopDistance, d.nextStopDuration, d.tourRemainingDistance, d.tourRemainingDuration, d.depotName, d.depotLat, d.depotLng, d.timestamp]);
+        res.sendStatus(200);
+    } catch (e) {
+        console.error(`[TRACE-LIVE] Error: ${e.message}`);
+        res.status(500).send(e.message);
+    }
+});
+
+app.post('/api/send-chat', async (req, res) => {
+    const { uuid, driverName, sender, message, timestamp } = req.body;
+    if (!message) return res.sendStatus(400);
+    await pool.query('INSERT INTO chat_messages (uuid, driver_name, sender, message, timestamp) VALUES (COALESCE($1::UUID, gen_random_uuid()), $2, $3, $4, $5)', [uuid || null, driverName, sender, message, timestamp || Date.now()]);
+    res.sendStatus(200);
+});
+
+app.get('/api/get-chat/:driverName', async (req, res) => {
+    const result = await pool.query('SELECT uuid, sender, message, timestamp FROM chat_messages WHERE driver_name = $1 ORDER BY timestamp ASC', [req.params.driverName]);
+    res.json(result.rows.map(r => ({ uuid: r.uuid, driverName: req.params.driverName, sender: r.sender || 'RENDSZER', message: r.message || '', timestamp: Number(r.timestamp) || Date.now() })));
+});
+
+app.post('/api/sync-worktimes', async (req, res) => {
+    for (const wt of req.body) await pool.query(`INSERT INTO work_times (uuid, driver_name, type, start_time, end_time, mileage, end_mileage, license_plate, notes, date) VALUES (COALESCE($1::UUID, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8, $9, $10) ON CONFLICT (driver_name, start_time) DO UPDATE SET end_time = EXCLUDED.end_time, end_mileage = EXCLUDED.end_mileage, notes = EXCLUDED.notes`, [wt.uuid || null, wt.driverName, wt.type, wt.startTime, wt.endTime, wt.mileage, wt.endMileage, wt.licensePlate, wt.notes, wt.date]);
+    res.sendStatus(200);
+});
+
+app.post('/api/sync-costs', async (req, res) => {
+    for (const c of req.body) await pool.query('INSERT INTO costs (uuid, driver_name, amount, currency, category, notes, mileage, timestamp) VALUES (COALESCE($1::UUID, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8) ON CONFLICT (driver_name, timestamp, amount) DO UPDATE SET status = EXCLUDED.status, notes = EXCLUDED.notes', [c.uuid || null, c.driverName, c.amount, c.currency, c.category, c.notes, c.mileage, c.timestamp]);
+    res.sendStatus(200);
+});
+
+app.post('/api/set-current-tour', async (req, res) => {
+    const { driverName, tourUuid } = req.body;
+    console.log(`[TRACE-TOUR] Endpoint: /api/set-current-tour | Driver: ${driverName} | TourUUID: ${tourUuid}`);
+    try {
+        await pool.query('SELECT set_current_tour($1, $2)', [driverName, tourUuid]);
+        res.sendStatus(200);
+    } catch (e) {
+        console.error(`[TRACE-TOUR] Error in set-current-tour: ${e.message}`);
+        res.status(500).send(e.message);
+    }
+});
+
+app.post('/api/sync-tours/:driverName', async (req, res) => {
+    const driverName = req.params.driverName;
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        for (const item of (req.body || [])) {
+            if (!item.tour) continue;
+            if (item.tour.deletedAt && item.tour.uuid) {
+                const now = Date.now();
+                await client.query('UPDATE stops SET deleted_at = $1, updated_at = $1 WHERE tour_id IN (SELECT id FROM tours WHERE uuid::text = $2 AND driver_name = $3)', [now, item.tour.uuid, driverName]);
+                await client.query('UPDATE tours SET deleted_at = $1, updated_at = $1 WHERE uuid::text = $2 AND driver_name = $3', [now, item.tour.uuid, driverName]);
+                continue;
+            }
+            await ImportEngine.processTour(client, driverName, item.tour, item.stops || []);
+        }
+        await client.query('COMMIT');
+        res.sendStatus(200);
+    } catch (e) { await client.query('ROLLBACK'); console.error(e); res.status(500).send(e.message); }
+    finally { client.release(); }
+});
+
+app.get('/api/get-tours/:driverName', async (req, res) => {
+    try {
+        const toursRes = await pool.query('SELECT * FROM tours WHERE driver_name = $1 AND deleted_at IS NULL ORDER BY date DESC', [req.params.driverName]);
+        const results = [];
+        for (let tour of toursRes.rows) {
+            const stopsRes = await pool.query('SELECT * FROM stops WHERE tour_id = $1 AND deleted_at IS NULL ORDER BY order_index ASC', [tour.id]);
+            results.push({
+                tour: { ...tour, date: Number(tour.date), deletedAt: tour.deleted_at ? Number(tour.deleted_at) : null, updatedAt: tour.updated_at ? Number(tour.updated_at) : null, depotLatitude: tour.depot_lat, depotLongitude: tour.depot_lng },
+                stops: stopsRes.rows.map(s => ({ ...s, latitude: s.latitude, longitude: s.longitude, isCompleted: !!s.is_completed, stopType: s.stop_type, arrivalTime: s.arrival_time ? Number(s.arrival_time) : null, updatedAt: s.updated_at ? Number(s.updated_at) : null }))
+            });
+        }
+        res.json(results);
+    } catch (e) { res.status(500).send(e.message); }
+});
+
+app.post('/admin/save-tour', async (req, res) => {
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        const tourId = await ImportEngine.processTour(client, req.body.driver_name, req.body, req.body.stops || []);
+        await client.query('COMMIT');
+        res.json({ success: true, tourId });
+    } catch (e) { await client.query('ROLLBACK'); console.error(e); res.status(500).send(e.message); }
+    finally { client.release(); }
+});
+
+app.post('/admin/transfer-tour', async (req, res) => {
+    const { tourId, newDriverName } = req.body;
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        const tourRes = await client.query('SELECT uuid, is_current FROM tours WHERE id = $1', [tourId]);
+        if (tourRes.rows.length === 0) throw new Error('Tour not found');
+        const { uuid, is_current } = tourRes.rows[0];
+
+        await client.query('UPDATE tours SET driver_name = $1, updated_at = $2 WHERE id = $3', [newDriverName, Date.now(), tourId]);
+
+        if (is_current) {
+            await client.query('SELECT set_current_tour($1, $2)', [newDriverName, uuid]);
+        }
+
+        await client.query('COMMIT');
+        res.json({ success: true });
+    } catch (e) {
+        await client.query('ROLLBACK');
+        res.status(500).send(e.message);
+    } finally {
+        client.release();
+    }
+});
+
+app.post('/admin/delete-tour', async (req, res) => {
+    const now = Date.now();
+    await pool.query('UPDATE stops SET deleted_at = $1, updated_at = $1 WHERE tour_id = $2', [now, req.body.id]);
+    await pool.query('UPDATE tours SET deleted_at = $1, updated_at = $1 WHERE id = $2', [now, req.body.id]);
+    res.json({ success: true });
+});
+
+app.get('/', async (req, res) => {
+    try {
+        const drivers = await pool.query(`SELECT DISTINCT ON (driver_name) driver_name, driver_photo, status, license_plate, timestamp FROM (SELECT driver_name, driver_photo, status, license_plate, timestamp::BIGINT FROM live_updates UNION ALL SELECT driver_name, NULL as driver_photo, 'Túra feltöltve' as status, '' as license_plate, date::BIGINT as timestamp FROM tours WHERE deleted_at IS NULL) AS all_drivers ORDER BY driver_name, timestamp DESC`);
+        let list = drivers.rows.map(d => `<div class="card" onclick="location.href='/driver/${encodeURIComponent(d.driver_name)}'"><img src="${d.driver_photo || ''}" style="width:50px;height:50px;border-radius:50%;float:right;background:#444"><h3>${d.driver_name}</h3><p>${d.status} ${d.license_plate ? '| ' + d.license_plate : ''}</p></div>`).join('');
+        res.send(`<html><head><title>Driver ERP</title><style>body { font-family: sans-serif; background: #1a1a1a; color: white; padding: 40px; } .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 20px; } .card { background: #333; padding: 20px; border-radius: 12px; cursor: pointer; border-left: 8px solid #3498db; transition: 0.2s; } .card:hover { transform: scale(1.02); background: #444; }</style></head><body><h1>🚛 Flotta kiválasztása</h1><div class="grid">${list}</div></body></html>`);
+    } catch (e) { res.status(500).send(e.message); }
+});
+
+app.get('/driver/:name', async (req, res) => {
+    const name = req.params.name;
+    const allD = (await pool.query('SELECT DISTINCT driver_name FROM (SELECT driver_name FROM live_updates UNION SELECT driver_name FROM tours) as d')).rows.map(r => r.driver_name).filter(n => n && n !== name);
+    const update = (await pool.query('SELECT * FROM live_updates WHERE driver_name = $1 ORDER BY timestamp DESC LIMIT 1', [name])).rows[0] || { driver_name: name };
+    const costs = (await pool.query('SELECT * FROM costs WHERE driver_name = $1 ORDER BY timestamp DESC', [name])).rows;
+    const chat = (await pool.query('SELECT * FROM chat_messages WHERE driver_name = $1 ORDER BY timestamp ASC', [name])).rows;
+    const work = (await pool.query('SELECT DISTINCT ON (start_time) * FROM work_times WHERE driver_name = $1 ORDER BY start_time DESC, id DESC', [name])).rows;
+    const toursRes = (await pool.query('SELECT * FROM tours WHERE driver_name = $1 AND deleted_at IS NULL ORDER BY date DESC', [name])).rows;
+    const hotelsRes = (await pool.query(`SELECT name::TEXT, address::TEXT, timestamp::BIGINT FROM hotels WHERE driver_name = $1 UNION ALL SELECT COALESCE(recipient, address_full)::TEXT as name, address_full::TEXT as address, COALESCE(arrival_time::BIGINT, (SELECT date::BIGINT FROM tours WHERE id = tour_id))::BIGINT as timestamp FROM stops WHERE tour_id IN (SELECT id FROM tours WHERE driver_name = $1) AND stop_type = 'HOTEL' ORDER BY timestamp DESC`, [name])).rows;
+    for (let t of toursRes) t.stops = (await pool.query('SELECT * FROM stops WHERE tour_id = $1 AND deleted_at IS NULL ORDER BY order_index ASC', [t.id])).rows;
+    const currentTourObj = toursRes.find(t => t.is_current);
+    const currentStopsJson = JSON.stringify(currentTourObj ? currentTourObj.stops : []);
+
+    const drivingTodaySec = work
+        .filter(w => w.type === 'Vezetés' && w.date === new Date().toISOString().split('T')[0])
+        .reduce((sum, w) => sum + (Number(w.end_time || Date.now()) - Number(w.start_time)) / 1000, 0);
+
+    const html = `<html><head><title>ERP - ${name}</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <style>
+        body { font-family: sans-serif; margin: 0; background: #1a1a1a; color: white; display: flex; flex-direction: column; height: 100vh; }
+        header { background: #222; padding: 15px 30px; display: flex; align-items: center; border-bottom: 1px solid #444; }
+        nav { background: #333; display: flex; padding: 0 30px; }
+        nav button { background: none; border: none; color: #aaa; padding: 15px 20px; cursor: pointer; font-size: 14px; border-bottom: 3px solid transparent; }
+        nav button.active { color: white; border-bottom-color: #3498db; background: #444; }
+        .tab-content { flex-grow: 1; display: none; padding: 20px; overflow-y: auto; }
+        .tab-content.active { display: block; }
+        #map { height: 500px; width: 100%; border-radius: 8px; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { text-align: left; padding: 12px; border-bottom: 1px solid #333; }
+        .tour-card { background: #222; padding: 15px; border-radius: 8px; margin-bottom: 15px; }
+        .stop-item { margin-left: 20px; border-left: 2px solid #444; padding-left: 10px; margin-top: 5px; }
+        .msg { padding: 8px; margin: 5px 0; border-radius: 8px; max-width: 80%; }
+        .msg-boss { background: #F57F17; color: black; align-self: flex-end; margin-left: auto; }
+        .msg-driver { background: #34495e; color: white; }
+        input, select, textarea { width: 100%; padding: 8px; background: #333; border: 1px solid #444; color: white; border-radius: 4px; box-sizing: border-box; }
+        label { display: block; font-size: 11px; color: #aaa; margin-bottom: 2px; }
+    </style></head>
+    <body>
+        <header><button onclick="location.href='/'">⬅</button><img src="${update.driver_photo || ''}" style="width:40px;height:40px;border-radius:50%;margin-left:15px;margin-right:15px;"><h2><span>${name}</span> - ERP</h2></header>
+        <nav><button onclick="openTab(event, 'dashboard')">DASHBOARD</button><button onclick="openTab(event, 'tours')">TÚRÁK</button><button onclick="openTab(event, 'costs')">KÖLTSÉGEK</button><button onclick="openTab(event, 'hotels')">HOTELEK</button><button onclick="openTab(event, 'chat')">CHAT</button><button onclick="openTab(event, 'stats')">STATISZTIKA</button><button onclick="openTab(event, 'report')">MENETLEVÉL</button><button onclick="openTab(event, 'profile')">PROFIL</button></nav>
+        <div id="dashboard" class="tab-content">
+            <div style="display:grid; grid-template-columns: 1fr 300px; gap: 20px;">
+                <div id="map"></div>
+                <div style="background:#222; padding:20px; border-radius:8px;">
+                    <h3>Státusz: <span style="color:#3498db">${update.status}</span></h3>
+                    <p>🚗 Sebesség: ${Math.round(update.speed || 0)} km/h</p>
+                    <p>🚚 Rendszám: ${update.license_plate || 'N/A'}</p>
+                    <hr style="border-color:#444">
+
+                    ${update.current_tour ? `
+                        <div style="background:#333; padding:15px; border-radius:8px; margin-top:10px;">
+                            <h4 style="margin:0; color:#2ecc71;">📦 Aktuális túra: ${update.current_tour}</h4>
+                            <div style="display:flex; justify-content:space-between; margin-top:10px;">
+                                <div style="text-align:center; flex:1;">
+                                    <div style="font-size:11px; color:#aaa; text-transform:uppercase;">Következőig</div>
+                                    <div style="font-size:18px; font-weight:bold; color:#3498db;">${update.next_stop_dist ? update.next_stop_dist.toFixed(1) + ' km' : 'N/A'}</div>
+                                    <div style="font-size:11px; color:#3498db;" id="nextStopDurationDisplay"></div>
+                                </div>
+                                <div style="width:1px; background:#444;"></div>
+                                <div style="text-align:center; flex:1;">
+                                    <div style="font-size:11px; color:#aaa; text-transform:uppercase;">Túra összesen</div>
+                                    <div style="font-size:18px; font-weight:bold; color:#2ecc71;">${update.tour_remaining_dist ? update.tour_remaining_dist.toFixed(1) + ' km' : 'N/A'}</div>
+                                    <div style="font-size:11px; color:#2ecc71;" id="tourDurationDisplay"></div>
+                                </div>
+                            </div>
+                        </div>
+                    ` : '<p style="color:#777">Nincs aktív túra</p>'}
+
+                    ${update.next_stop ? `
+                        <div style="background:#34495e; padding:15px; border-radius:8px; margin-top:10px;">
+                            <h4 style="margin:0; color:#3498db;">📍 Következő cím:</h4>
+                            ${update.next_stop.includes(' | ') ? `
+                                <b style="display:block; margin-top:5px; color:#fff;">${update.next_stop.split(' | ')[0]}</b>
+                                <p style="margin:2px 0; font-size:13px; color:#ccc;">${update.next_stop.split(' | ')[1]}</p>
+                            ` : `<p style="margin:5px 0; font-size:14px;">${update.next_stop}</p>`}
+                        </div>
+                    ` : ''}
+
+                    ${update.depot_name ? `
+                        <p style="margin-top:20px; font-size:12px; color:#999;">🏠 Depó: ${update.depot_name}</p>
+                    ` : ''}
+                </div>
+            </div>
+        </div>
+        <div id="tours" class="tab-content">
+            <button onclick="editTour()" style="background:#2ecc71; color:white; padding:10px; margin-bottom:20px;">+ Új túra</button>
+            ${toursRes.map(t => `
+                <div class="tour-card">
+                    <div style="float:right; display:flex; gap:5px;">
+                        <select onchange="transferTour(${t.id}, this.value)" style="width:auto;"><option value="">-- Áthelyezés --</option>${allD.map(n => `<option value="${n}">${n}</option>`).join('')}</select>
+                        <button onclick='editTour(${JSON.stringify(t).replace(/'/g, "&apos;")})'>✏</button>
+                        <button onclick="deleteTour(${t.id})" style="background:#e74c3c; color:white;">🗑</button>
+                    </div>
+                    <b>${t.name}</b> (${t.customer}) - ${new Date(Number(t.date)).toLocaleDateString()}
+                    ${t.stops.map(s => `<div class="stop-item">${s.order_index + 1}. ${s.stop_type === 'HOTEL' ? '🏨 ' : (s.stop_type === 'DEPOT' ? '🏠 ' : '')}${s.address}</div>`).join('')}
+                </div>
+            `).join('')}
+        </div>
+        <div id="costs" class="tab-content"><table><tr><th>Dátum</th><th>Kategória</th><th>Összeg</th><th>Státusz</th></tr>${costs.map(c => `<tr><td>${new Date(Number(c.timestamp)).toLocaleDateString()}</td><td>${c.category}</td><td>${c.amount} ${c.currency}</td><td>${c.status}</td></tr>`).join('')}</table></div>
+        <div id="hotels" class="tab-content"><table><tr><th>Dátum</th><th>Név</th><th>Cím</th></tr>${hotelsRes.map(h => `<tr><td>${new Date(Number(h.timestamp)).toLocaleDateString()}</td><td>${h.name}</td><td>${h.address}</td></tr>`).join('')}</table></div>
+        <div id="chat" class="tab-content"><div style="height:400px; background:#111; padding:15px; overflow-y:auto; display:flex; flex-direction:column;">${chat.map(m => `<div class="msg ${m.sender === 'DISZPÉCSER' ? 'msg-boss' : 'msg-driver'}"><b>${m.sender}:</b><br>${m.message}</div>`).join('')}</div></div>
+        <div id="stats" class="tab-content"><div id="statsBox"></div></div>
+        <div id="report" class="tab-content"><h3>Tagesfahrblatt</h3><div id="timelineContainer"></div></div>
+        <div id="profile" class="tab-content"><h3>PROFIL</h3><p>Név: ${name}</p></div>
+
+        <div id="tourModal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.8); z-index:1000; padding:50px;">
+            <div style="background:#222; padding:30px; border-radius:12px; max-width:800px; margin:auto; max-height:90vh; overflow-y:auto;">
+                <h2>Túra szerkesztése</h2><input type="hidden" id="tourId"><input type="hidden" id="tourUuid">
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:15px; margin-bottom:20px;">
+                    <div><label>Túra neve</label><input type="text" id="tName"></div><div><label>Megrendelő</label><input type="text" id="tCustomer"></div>
+                    <div><label>Dátum</label><input type="date" id="tDate"></div><div><label>Nap</label><input type="text" id="tDay"></div>
+                </div>
+                <label>Megjegyzések</label><textarea id="tNotes" style="height:60px; margin-bottom:20px;"></textarea>
+                <h3>Depó</h3>
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;"><input type="text" id="tDepotName" placeholder="Név"><input type="text" id="tDepotCompany" placeholder="Cég"></div>
+                <div style="display:grid; grid-template-columns:2fr 1fr; gap:10px; margin-top:10px;"><input type="text" id="tDepotStreet" placeholder="Utca"><input type="text" id="tDepotHouse" placeholder="Házszám"></div>
+                <div style="display:grid; grid-template-columns:1fr 2fr; gap:10px; margin-top:10px;"><input type="text" id="tDepotPostal" placeholder="Irsz"><input type="text" id="tDepotCity" placeholder="Város"></div>
+                <h3>Megállók</h3><div id="modalStops"></div><button onclick="addStopRow()">+ Megálló</button>
+                <div style="margin-top:30px; display:flex; gap:10px; justify-content:flex-end;"><button onclick="closeModal()">Mégse</button><button onclick="saveTour()" style="background:#3498db; color:white; padding:10px 30px;">Mentés</button></div>
+            </div>
+        </div>
+
+        <script>
+            function openTab(e, t) {
+                document.querySelectorAll('.tab-content').forEach(x => x.style.display = 'none');
+                document.querySelectorAll('nav button').forEach(x => x.classList.remove('active'));
+                const target = document.getElementById(t);
+                if (target) {
+                    target.style.display = 'block';
+                    if (e) e.currentTarget.classList.add('active');
                 }
             }
-        },
-        confirmButton = {
-            Button(onClick = { onConfirm(text) }, enabled = text.isNotBlank()) {
-                Text("Mentés")
+
+            // Térkép inicializálása
+            const DRIVING_DONE_TODAY = ${drivingTodaySec};
+
+            function formatDuration(seconds) {
+                if (!seconds) return 'N/A';
+                let mins = Math.round(seconds / 60);
+                let hours = Math.floor(mins / 60);
+                mins = mins % 60;
+                let days = Math.floor(hours / 24);
+                hours = hours % 24;
+                if (days > 0) return days + ' nap, ' + hours + ':' + mins.toString().padStart(2, '0');
+                return hours + ':' + mins.toString().padStart(2, '0');
             }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("Mégse")
-            }
-        }
-    )
-}
 
-@Composable
-fun StatusButton(label: String, currentStatus: String, enabled: Boolean = true, onClick: () -> Unit) {
-    Button(
-        onClick = onClick,
-        enabled = enabled,
-        colors = if (currentStatus == label) ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary) else ButtonDefaults.buttonColors()
-    ) {
-        Text(label)
-    }
-}
-
-@Composable
-fun EditWorkTimeDialog(workTime: WorkTime, onDismiss: () -> Unit, onConfirm: (WorkTime) -> Unit) {
-    var selectedType by remember { mutableStateOf(workTime.type) }
-    val types = listOf("Munka", "Vezetés", "Pihenő", "Rakodás")
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Munkaidő szerkesztése") },
-        text = {
-            Column {
-                types.forEach { type ->
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        RadioButton(selected = selectedType == type, onClick = { selectedType = type })
-                        Text(type)
-                    }
+            function calculateAdjustedDuration(pureSec, doneSec) {
+                if (!pureSec) return 0;
+                let total = pureSec;
+                let progress = doneSec % 16200; // 4.5h block
+                let remaining = 16200 - progress;
+                if (pureSec > remaining) {
+                    total += 2700; // first 45m rest
+                    let left = pureSec - remaining;
+                    total += Math.floor(left / 16200) * 2700;
                 }
-                Spacer(modifier = Modifier.height(16.dp))
-                Text("Az időmódosítás ebben a verzióban még nem elérhető.", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+                return total;
             }
-        },
-        confirmButton = {
-            Button(onClick = { onConfirm(workTime.copy(type = selectedType)) }) {
-                Text("Mentés")
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("Mégse")
-            }
-        }
-    )
-}
 
-@Composable
-fun DashboardCard(label: String, value: String) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 4.dp)
-    ) {
-        Row(
-            modifier = Modifier
-                .padding(16.dp)
-                .fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Text(text = label)
-            Text(text = value, style = MaterialTheme.typography.titleMedium)
-        }
+            // Update displays
+            const nextDur = ${update.next_stop_duration || 0};
+            const tourDur = ${update.tour_remaining_duration || 0};
+
+            if (nextDur > 0) {
+                document.getElementById('nextStopDurationDisplay').innerText = formatDuration(calculateAdjustedDuration(nextDur, DRIVING_DONE_TODAY));
+            }
+            if (tourDur > 0) {
+                document.getElementById('tourDurationDisplay').innerText = formatDuration(calculateAdjustedDuration(tourDur, DRIVING_DONE_TODAY));
+            }
+
+            const driverLat = ${update.latitude || 47.4979};
+            const driverLng = ${update.longitude || 19.0402};
+            const map = L.map('map', { zoomControl: true }).setView([driverLat, driverLng], 13);
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '&copy; OpenStreetMap'
+            }).addTo(map);
+
+            // Sofőr marker (kék kör fehér szegéllyel)
+            const driverMarker = L.circleMarker([driverLat, driverLng], {
+                color: '#3498db', radius: 10, fillOpacity: 1, weight: 3, fillColor: '#fff'
+            }).addTo(map).bindPopup('<b>${name}</b><br>Sebesség: ${Math.round(update.speed || 0)} km/h');
+
+            // Túra állomások
+            const rawStops = ${currentStopsJson};
+            const bounds = L.latLngBounds([driverLat, driverLng]);
+
+            rawStops.forEach(s => {
+                if (s.latitude && s.longitude) {
+                    const icon = L.divIcon({
+                        className: 'custom-div-icon',
+                        html: "<div style='background-color:#e74c3c; color:white; border-radius:50%; width:20px; height:20px; display:flex; align-items:center; justify-content:center; font-size:10px; font-weight:bold; border:2px solid white;'>" + (s.order_index + 1) + "</div>",
+                        iconSize: [20, 20],
+                        iconAnchor: [10, 10]
+                    });
+                    L.marker([s.latitude, s.longitude], { icon: icon }).addTo(map)
+                        .bindPopup((s.order_index + 1) + '. ' + (s.recipient || s.address_full || s.address));
+                    bounds.extend([s.latitude, s.longitude]);
+                }
+            });
+
+            // Depó marker
+            if (${update.depot_lat ? 'true' : 'false'}) {
+                const depotIcon = L.divIcon({
+                    className: 'custom-div-icon',
+                    html: "<div style='background-color:#2ecc71; color:white; border-radius:50%; width:24px; height:24px; display:flex; align-items:center; justify-content:center; font-size:12px; border:2px solid white;'>🏠</div>",
+                    iconSize: [24, 24],
+                    iconAnchor: [12, 12]
+                });
+                L.marker([${update.depot_lat || 0}, ${update.depot_lng || 0}], { icon: depotIcon }).addTo(map).bindPopup('🏠 Depó: ${update.depot_name}');
+                bounds.extend([${update.depot_lat || 0}, ${update.depot_lng || 0}]);
+            }
+
+            // Térkép igazítása
+            if (rawStops.length > 0 || ${update.depot_lat ? 'true' : 'false'}) {
+                const center = [driverLat, driverLng];
+                let maxDLat = 0;
+                let maxDLng = 0;
+
+                rawStops.forEach(s => {
+                    if (s.latitude && s.longitude) {
+                        maxDLat = Math.max(maxDLat, Math.abs(s.latitude - driverLat));
+                        maxDLng = Math.max(maxDLng, Math.abs(s.longitude - driverLng));
+                    }
+                });
+
+                if (${update.depot_lat ? 'true' : 'false'}) {
+                    maxDLat = Math.max(maxDLat, Math.abs(${update.depot_lat || 0} - driverLat));
+                    maxDLng = Math.max(maxDLng, Math.abs(${update.depot_lng || 0} - driverLng));
+                }
+
+                const fitBounds = [
+                    [driverLat - maxDLat * 1.1 - 0.002, driverLng - maxDLng * 1.1 - 0.002],
+                    [driverLat + maxDLat * 1.1 + 0.002, driverLng + maxDLng * 1.1 + 0.002]
+                ];
+                map.fitBounds(fitBounds, { padding: [50, 50], maxZoom: 15 });
+            }
+
+            // Útvonal tervezése a teljes hátralévő túrára
+            const incompleteStops = rawStops.filter(s => !s.is_completed && s.latitude && s.longitude);
+            let waypointStr = driverLng + ',' + driverLat;
+
+            incompleteStops.forEach(s => {
+                waypointStr += ';' + s.longitude + ',' + s.latitude;
+            });
+
+            if (${update.depot_lat ? 'true' : 'false'}) {
+                waypointStr += ';' + ${update.depot_lng || 0} + ',' + ${update.depot_lat || 0};
+            }
+
+            if (waypointStr.includes(';')) {
+                fetch('https://router.project-osrm.org/route/v1/driving/' + waypointStr + '?overview=full&geometries=geojson')
+                    .then(r => r.json())
+                    .then(data => {
+                        if (data.routes && data.routes[0]) {
+                            L.geoJSON(data.routes[0].geometry, { style: { color: '#3498db', weight: 5, opacity: 0.7 } }).addTo(map);
+                        }
+                    });
+            }
+
+            // Kényszerített újrarajzolás a méretezési hiba ellen
+            setTimeout(() => {
+                map.invalidateSize();
+                if (rawStops.length > 0 || ${update.depot_lat ? 'true' : 'false'}) {
+                     map.fitBounds(map.getBounds(), { padding: [50, 50] });
+                }
+            }, 800);
+
+            // Alapértelmezett tab
+            openTab(null, 'dashboard');
+            document.querySelector('nav button').classList.add('active');
+
+            function transferTour(tourId, newDriverName) { if (!newDriverName) return; if (confirm('Áthelyezed ' + newDriverName + ' részére?')) fetch('/admin/transfer-tour', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ tourId, newDriverName }) }).then(r => { if(r.ok) location.reload(); }); }
+            function deleteTour(id) { if(confirm('Törlöd?')) fetch('/admin/delete-tour', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({id}) }).then(r => { if(r.ok) location.reload(); }); }
+            function closeModal() { document.getElementById('tourModal').style.display = 'none'; }
+            function editTour(t) {
+                document.getElementById('tourId').value = t ? t.id : '';
+                document.getElementById('tourUuid').value = t ? t.uuid : '';
+                document.getElementById('tName').value = t ? t.name : '';
+                document.getElementById('tCustomer').value = t ? t.customer : '';
+                document.getElementById('tDate').value = t ? new Date(Number(t.date)).toISOString().split('T')[0] : '';
+                document.getElementById('tDay').value = t ? (t.day_of_week || '') : '';
+                document.getElementById('tNotes').value = t ? t.notes : '';
+                document.getElementById('tDepotName').value = t ? (t.depot_name || '') : '';
+                document.getElementById('tDepotCompany').value = t ? (t.depot_company || '') : '';
+                document.getElementById('tDepotStreet').value = t ? (t.depot_street || '') : '';
+                document.getElementById('tDepotHouse').value = t ? (t.depot_house_number || '') : '';
+                document.getElementById('tDepotPostal').value = t ? (t.depot_postal_code || '') : '';
+                document.getElementById('tDepotCity').value = t ? (t.depot_city || '') : '';
+                document.getElementById('modalStops').innerHTML = '';
+                if(t && t.stops) t.stops.forEach(s => addStopRow(s)); else addStopRow(null);
+                document.getElementById('tourModal').style.display = 'block';
+            }
+            function addStopRow(s) {
+                const d = document.createElement('div'); d.className = 'stop-edit-row'; d.style = 'border:1px solid #444; padding:15px; margin-bottom:15px; border-radius:8px; position:relative;';
+                const uuid = s ? s.uuid : (crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2,15));
+                const items = s && s.items ? (Array.isArray(s.items) ? s.items : [s.items]) : [{ recipient: s ? s.recipient : '', notes: s ? s.notes : '', stop_type: s ? s.stop_type : 'DELIVERY' }];
+                d.innerHTML = \`<button onclick="this.parentElement.remove()" style="position:absolute; right:10px; top:10px; background:#e74c3c; border:none; color:white; padding:5px 10px; border-radius:4px; cursor:pointer;">X</button>
+                    <input type="hidden" class="stop-uuid" value="\${uuid}">
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+                        <div><label>Címzett</label><input type="text" class="stop-recipient" value="\${items[0].recipient || ''}"></div>
+                        <div><label>Cég</label><input type="text" class="stop-company" value="\${s ? (s.company || '') : ''}"></div>
+                    </div>
+                    <div style="display:grid; grid-template-columns:2fr 1fr; gap:10px; margin-top:5px;">
+                        <div><label>Utca</label><input type="text" class="stop-street" value="\${s ? (s.street || '') : ''}"></div>
+                        <div><label>Házszám</label><input type="text" class="stop-house" value="\${s ? (s.house_number || '') : ''}"></div>
+                    </div>
+                    <div style="display:grid; grid-template-columns:1fr 2fr; gap:10px; margin-top:5px;">
+                        <div><label>Irsz</label><input type="text" class="stop-postal" value="\${s ? (s.postal_code || '') : ''}"></div>
+                        <div><label>Város</label><input type="text" class="stop-city" value="\${s ? (s.city || '') : ''}"></div>
+                    </div>
+                    <div style="margin-top:10px;"><label>Típus</label><select class="stop-type"><option value="DELIVERY" \${items[0].stop_type==='DELIVERY'?'selected':''}>DELIVERY</option><option value="PICKUP" \${items[0].stop_type==='PICKUP'?'selected':''}>PICKUP</option><option value="HOTEL" \${items[0].stop_type==='HOTEL'?'selected':''}>HOTEL</option></select></div>\`;
+                document.getElementById('modalStops').appendChild(d);
+            }
+            async function saveTour() {
+                const stops = []; document.querySelectorAll('.stop-edit-row').forEach((r, i) => {
+                    stops.push({
+                        uuid: r.querySelector('.stop-uuid').value, recipient: r.querySelector('.stop-recipient').value, company: r.querySelector('.stop-company').value,
+                        street: r.querySelector('.stop-street').value, house_number: r.querySelector('.stop-house').value, postal_code: r.querySelector('.stop-postal').value,
+                        city: r.querySelector('.stop-city').value, stop_type: r.querySelector('.stop-type').value, order_index: i
+                    });
+                });
+                const tourId = document.getElementById('tourId').value;
+                const data = {
+                    id: tourId === "" ? null : parseInt(tourId), uuid: document.getElementById('tourUuid').value,
+                    driver_name: '${name}', name: document.getElementById('tName').value, customer: document.getElementById('tCustomer').value,
+                    date: new Date(document.getElementById('tDate').value).getTime(), day_of_week: document.getElementById('tDay').value, notes: document.getElementById('tNotes').value,
+                    depot_name: document.getElementById('tDepotName').value, depot_company: document.getElementById('tDepotCompany').value,
+                    depot_street: document.getElementById('tDepotStreet').value, depot_house_number: document.getElementById('tDepotHouse').value,
+                    depot_postal_code: document.getElementById('tDepotPostal').value, depot_city: document.getElementById('tDepotCity').value, stops
+                };
+                const res = await fetch('/admin/save-tour', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) });
+                if(res.ok) location.reload(); else alert('Hiba!');
+            }
+        </script>
+    </body></html>`;
+    res.send(html);
+});
+
+const PORT = process.env.PORT || 3000;
+const start = async () => {
+    try {
+        await initDb();
+        app.listen(PORT, () => console.log('[STARTUP] Express server starting on port ' + PORT));
+    } catch (err) {
+        console.error('[STARTUP] Fatal error during initDb:', err);
+        process.exit(1);
     }
-}
+};
+start();
