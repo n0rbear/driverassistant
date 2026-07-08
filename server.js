@@ -326,6 +326,8 @@ app.get('/driver/:name', async (req, res) => {
     const toursRes = (await pool.query('SELECT * FROM tours WHERE driver_name = $1 AND deleted_at IS NULL ORDER BY date DESC', [name])).rows;
     const hotelsRes = (await pool.query(`SELECT name::TEXT, address::TEXT, timestamp::BIGINT FROM hotels WHERE driver_name = $1 UNION ALL SELECT COALESCE(recipient, address_full)::TEXT as name, address_full::TEXT as address, COALESCE(arrival_time::BIGINT, (SELECT date::BIGINT FROM tours WHERE id = tour_id))::BIGINT as timestamp FROM stops WHERE tour_id IN (SELECT id FROM tours WHERE driver_name = $1) AND stop_type = 'HOTEL' ORDER BY timestamp DESC`, [name])).rows;
     for (let t of toursRes) t.stops = (await pool.query('SELECT * FROM stops WHERE tour_id = $1 AND deleted_at IS NULL ORDER BY order_index ASC', [t.id])).rows;
+    const currentTourObj = toursRes.find(t => t.is_current);
+    const currentStopsJson = JSON.stringify(currentTourObj ? currentTourObj.stops : []);
 
     const html = `<html><head><title>ERP - ${name}</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
@@ -364,7 +366,17 @@ app.get('/driver/:name', async (req, res) => {
                     ${update.current_tour ? `
                         <div style="background:#333; padding:15px; border-radius:8px; margin-top:10px;">
                             <h4 style="margin:0; color:#2ecc71;">📦 Aktuális túra: ${update.current_tour}</h4>
-                            <p style="margin:5px 0 0 0; font-size:13px; color:#aaa;">Hátralévő: <b>${update.tour_remaining_dist ? update.tour_remaining_dist.toFixed(1) + ' km' : 'N/A'}</b></p>
+                            <div style="display:flex; justify-content:space-between; margin-top:10px;">
+                                <div style="text-align:center; flex:1;">
+                                    <div style="font-size:11px; color:#aaa; text-transform:uppercase;">Következőig</div>
+                                    <div style="font-size:18px; font-weight:bold; color:#3498db;">${update.next_stop_dist ? update.next_stop_dist.toFixed(1) + ' km' : 'N/A'}</div>
+                                </div>
+                                <div style="width:1px; background:#444;"></div>
+                                <div style="text-align:center; flex:1;">
+                                    <div style="font-size:11px; color:#aaa; text-transform:uppercase;">Túra összesen</div>
+                                    <div style="font-size:18px; font-weight:bold; color:#2ecc71;">${update.tour_remaining_dist ? update.tour_remaining_dist.toFixed(1) + ' km' : 'N/A'}</div>
+                                </div>
+                            </div>
                         </div>
                     ` : '<p style="color:#777">Nincs aktív túra</p>'}
 
@@ -372,7 +384,6 @@ app.get('/driver/:name', async (req, res) => {
                         <div style="background:#34495e; padding:15px; border-radius:8px; margin-top:10px;">
                             <h4 style="margin:0; color:#3498db;">📍 Következő cím:</h4>
                             <p style="margin:5px 0; font-size:14px;">${update.next_stop}</p>
-                            <p style="margin:0; font-size:13px; color:#bdc3c7;">Távolság: <b>${update.next_stop_dist ? update.next_stop_dist.toFixed(1) + ' km' : 'N/A'}</b></p>
                         </div>
                     ` : ''}
 
@@ -432,30 +443,52 @@ app.get('/driver/:name', async (req, res) => {
             }
 
             // Térkép inicializálása
-            const lat = ${update.latitude || 47.4979};
-            const lng = ${update.longitude || 19.0402};
-            const map = L.map('map').setView([lat, lng], 13);
+            const driverLat = ${update.latitude || 47.4979};
+            const driverLng = ${update.longitude || 19.0402};
+            const map = L.map('map', { zoomControl: true }).setView([driverLat, driverLng], 13);
             L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
                 attribution: '&copy; OpenStreetMap'
             }).addTo(map);
 
-            // Sofőr marker
-            L.marker([lat, lng]).addTo(map)
-                .bindPopup('<b>${name}</b><br>Sebesség: ${Math.round(update.speed || 0)} km/h')
-                .openPopup();
+            // Sofőr marker (kék kör fehér szegéllyel)
+            const driverMarker = L.circleMarker([driverLat, driverLng], {
+                color: '#3498db', radius: 10, fillOpacity: 1, weight: 3, fillColor: '#fff'
+            }).addTo(map).bindPopup('<b>${name}</b><br>Sebesség: ${Math.round(update.speed || 0)} km/h');
 
-            // Következő megálló marker
-            ${update.next_lat && update.next_lng ? `
-                L.marker([${update.next_lat}, ${update.next_lng}]).addTo(map)
-                    .bindPopup('📍 Következő: ${update.next_stop}');
-            ` : ''}
+            // Túra állomások
+            const rawStops = ${currentStopsJson};
+            const bounds = L.latLngBounds([driverLat, driverLng]);
+
+            rawStops.forEach(s => {
+                if (s.latitude && s.longitude) {
+                    const icon = L.divIcon({
+                        className: 'custom-div-icon',
+                        html: "<div style='background-color:#e74c3c; color:white; border-radius:50%; width:20px; height:20px; display:flex; align-items:center; justify-content:center; font-size:10px; font-weight:bold; border:2px solid white;'>" + (s.order_index + 1) + "</div>",
+                        iconSize: [20, 20],
+                        iconAnchor: [10, 10]
+                    });
+                    L.marker([s.latitude, s.longitude], { icon: icon }).addTo(map)
+                        .bindPopup((s.order_index + 1) + '. ' + (s.recipient || s.address_full || s.address));
+                    bounds.extend([s.latitude, s.longitude]);
+                }
+            });
 
             // Depó marker
-            ${update.depot_lat && update.depot_lng ? `
-                L.circleMarker([${update.depot_lat}, ${update.depot_lng}], {
-                    color: '#2ecc71', radius: 10, fillOpacity: 0.8
-                }).addTo(map).bindPopup('🏠 Depó: ${update.depot_name}');
-            ` : ''}
+            if (${update.depot_lat ? 'true' : 'false'}) {
+                const depotIcon = L.divIcon({
+                    className: 'custom-div-icon',
+                    html: "<div style='background-color:#2ecc71; color:white; border-radius:50%; width:24px; height:24px; display:flex; align-items:center; justify-content:center; font-size:12px; border:2px solid white;'>🏠</div>",
+                    iconSize: [24, 24],
+                    iconAnchor: [12, 12]
+                });
+                L.marker([${update.depot_lat || 0}, ${update.depot_lng || 0}], { icon: depotIcon }).addTo(map).bindPopup('🏠 Depó: ${update.depot_name}');
+                bounds.extend([${update.depot_lat || 0}, ${update.depot_lng || 0}]);
+            }
+
+            // Térkép igazítása
+            if (rawStops.length > 0 || ${update.depot_lat ? 'true' : 'false'}) {
+                map.fitBounds(bounds, { padding: [50, 50], maxZoom: 15 });
+            }
 
             // Alapértelmezett tab
             openTab(null, 'dashboard');
