@@ -169,17 +169,25 @@ const StatusEngine = {
         // 4. OSRM Calculations (Moved from App)
         if (nextStop) {
             try {
-                const url = `https://router.project-osrm.org/route/v1/driving/${d.longitude},${d.latitude};${nextStop.longitude},${nextStop.latitude}?overview=false`;
+                const waypoints = incompleteStops
+                    .filter(s => s.latitude && s.longitude)
+                    .map(s => `${s.longitude},${s.latitude}`);
+
+                const url = `https://router.project-osrm.org/route/v1/driving/${d.longitude},${d.latitude};${waypoints.join(';')}?overview=false`;
                 const r = await fetch(url).then(res => res.json());
                 if (r.routes && r.routes[0]) {
-                     nextStopDist = r.routes[0].distance / 1000;
-                     nextStopDur = Math.round(r.routes[0].duration);
+                     tourRemainingDist = r.routes[0].distance / 1000;
+                     tourRemainingDur = Math.round(r.routes[0].duration);
+                     if (r.routes[0].legs && r.routes[0].legs[0]) {
+                         nextStopDist = r.routes[0].legs[0].distance / 1000;
+                         nextStopDur = Math.round(r.routes[0].legs[0].duration);
+                     }
                 }
                 nextStopInfo = `${nextStop.contact_name || nextStop.recipient} | ${nextStop.address}`;
             } catch (e) {}
         }
 
-        return { status: calculatedStatus, nextStopDist, nextStopDur, nextStopInfo, currentTourName: currentTour?.name };
+        return { status: calculatedStatus, nextStopDist, nextStopDur, tourRemainingDist, tourRemainingDur, nextStopInfo, currentTourName: currentTour?.name };
     },
 
     async startWork(client, driverName, type, date, plate, mileage, now) {
@@ -371,8 +379,8 @@ app.post('/api/live-update', async (req, res) => {
             d.nextLng,
             resObj.nextStopDist || d.nextStopDistance,
             Math.round(resObj.nextStopDur || d.nextStopDuration || 0),
-            d.tourRemainingDistance,
-            Math.round(d.tourRemainingDuration || 0),
+            resObj.tourRemainingDist || d.tourRemainingDistance,
+            Math.round(resObj.tourRemainingDur || d.tourRemainingDuration || 0),
             d.depotName,
             d.depotLat,
             d.depotLng,
