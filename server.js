@@ -118,7 +118,7 @@ const initDb = async () => {
     await pool.query('CREATE EXTENSION IF NOT EXISTS "pgcrypto"');
     const queries = [
         `CREATE TABLE IF NOT EXISTS drivers (uuid UUID DEFAULT gen_random_uuid() PRIMARY KEY, name TEXT UNIQUE, email TEXT, phone TEXT, license_plate TEXT, photo_url TEXT, is_active BOOLEAN DEFAULT TRUE)`,
-        `CREATE TABLE IF NOT EXISTS live_updates (id SERIAL PRIMARY KEY, uuid UUID DEFAULT gen_random_uuid() UNIQUE, driver_name TEXT, driver_photo TEXT, driver_phone TEXT, driver_email TEXT, license_plate TEXT, latitude DOUBLE PRECISION, longitude DOUBLE PRECISION, speed FLOAT, status TEXT, current_tour TEXT, next_stop TEXT, next_lat DOUBLE PRECISION, next_lng DOUBLE PRECISION, next_stop_dist FLOAT, tour_remaining_dist FLOAT, depot_name TEXT, depot_lat DOUBLE PRECISION, depot_lng DOUBLE PRECISION, timestamp BIGINT, UNIQUE(uuid))`,
+        `CREATE TABLE IF NOT EXISTS live_updates (id SERIAL PRIMARY KEY, uuid UUID DEFAULT gen_random_uuid() UNIQUE, driver_name TEXT, driver_photo TEXT, driver_phone TEXT, driver_email TEXT, license_plate TEXT, latitude DOUBLE PRECISION, longitude DOUBLE PRECISION, speed FLOAT, status TEXT, current_tour TEXT, next_stop TEXT, next_lat DOUBLE PRECISION, next_lng DOUBLE PRECISION, next_stop_dist FLOAT, next_stop_duration BIGINT, tour_remaining_dist FLOAT, tour_remaining_duration BIGINT, depot_name TEXT, depot_lat DOUBLE PRECISION, depot_lng DOUBLE PRECISION, timestamp BIGINT, UNIQUE(uuid))`,
         `CREATE TABLE IF NOT EXISTS costs (id SERIAL PRIMARY KEY, uuid UUID DEFAULT gen_random_uuid() UNIQUE, driver_name TEXT, amount DECIMAL, currency TEXT, category TEXT, notes TEXT, mileage INT, status TEXT DEFAULT 'Rögzítve', timestamp BIGINT, UNIQUE(uuid))`,
         `CREATE TABLE IF NOT EXISTS chat_messages (id SERIAL PRIMARY KEY, uuid UUID DEFAULT gen_random_uuid() UNIQUE, driver_name TEXT, sender TEXT, message TEXT, timestamp BIGINT, UNIQUE(uuid))`,
         `CREATE TABLE IF NOT EXISTS work_times (id SERIAL PRIMARY KEY, uuid UUID DEFAULT gen_random_uuid() UNIQUE, driver_name TEXT, type TEXT, start_time BIGINT, end_time BIGINT, mileage INT, end_mileage INT, license_plate TEXT, notes TEXT, date TEXT, UNIQUE(uuid))`,
@@ -151,7 +151,9 @@ const initDb = async () => {
         ['stops', 'country', 'TEXT'],
         ['live_updates', 'depot_name', 'TEXT'],
         ['live_updates', 'depot_lat', 'DOUBLE PRECISION'],
-        ['live_updates', 'depot_lng', 'DOUBLE PRECISION']
+        ['live_updates', 'depot_lng', 'DOUBLE PRECISION'],
+        ['live_updates', 'next_stop_duration', 'BIGINT'],
+        ['live_updates', 'tour_remaining_duration', 'BIGINT']
     ];
     for (const [t, c, type] of cols) {
         if (t === 'stops' && c === 'items') console.log('[SCHEMA] checking stops.items');
@@ -185,7 +187,7 @@ app.post('/api/live-update', async (req, res) => {
         const prevRes = await pool.query('SELECT status FROM live_updates WHERE driver_name = $1 ORDER BY timestamp DESC LIMIT 1', [d.driverName]);
         const prevStatus = prevRes.rows.length > 0 ? prevRes.rows[0].status : 'N/A';
 
-        const sql = 'INSERT INTO live_updates (uuid, driver_name, driver_photo, driver_phone, driver_email, license_plate, latitude, longitude, speed, status, current_tour, next_stop, next_lat, next_lng, next_stop_dist, tour_remaining_dist, depot_name, depot_lat, depot_lng, timestamp) VALUES (COALESCE($1::UUID, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)';
+        const sql = 'INSERT INTO live_updates (uuid, driver_name, driver_photo, driver_phone, driver_email, license_plate, latitude, longitude, speed, status, current_tour, next_stop, next_lat, next_lng, next_stop_dist, next_stop_duration, tour_remaining_dist, tour_remaining_duration, depot_name, depot_lat, depot_lng, timestamp) VALUES (COALESCE($1::UUID, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)';
 
         console.log(`[TRACE-LIVE] Endpoint: /api/live-update`);
         console.log(`[TRACE-LIVE] Body: ${JSON.stringify(d)}`);
@@ -194,7 +196,7 @@ app.post('/api/live-update', async (req, res) => {
         console.log(`[TRACE-LIVE] New Status: ${d.status}`);
         console.log(`[TRACE-LIVE] SQL: ${sql}`);
 
-        await pool.query(sql, [d.uuid || null, d.driverName, d.driverPhoto, d.driverPhone, d.driverEmail, d.licensePlate, d.latitude, d.longitude, d.speed, d.status, d.currentTour, d.nextStop, d.nextLat, d.nextLng, d.nextStopDistance, d.tourRemainingDistance, d.depotName, d.depotLat, d.depotLng, d.timestamp]);
+        await pool.query(sql, [d.uuid || null, d.driverName, d.driverPhoto, d.driverPhone, d.driverEmail, d.licensePlate, d.latitude, d.longitude, d.speed, d.status, d.currentTour, d.nextStop, d.nextLat, d.nextLng, d.nextStopDistance, d.nextStopDuration, d.tourRemainingDistance, d.tourRemainingDuration, d.depotName, d.depotLat, d.depotLng, d.timestamp]);
         res.sendStatus(200);
     } catch (e) {
         console.error(`[TRACE-LIVE] Error: ${e.message}`);
@@ -377,11 +379,13 @@ app.get('/driver/:name', async (req, res) => {
                                 <div style="text-align:center; flex:1;">
                                     <div style="font-size:11px; color:#aaa; text-transform:uppercase;">Következőig</div>
                                     <div style="font-size:18px; font-weight:bold; color:#3498db;">${update.next_stop_dist ? update.next_stop_dist.toFixed(1) + ' km' : 'N/A'}</div>
+                                    <div style="font-size:11px; color:#3498db;">${update.next_stop_duration ? Math.round(update.next_stop_duration / 60) + ' perc' : ''}</div>
                                 </div>
                                 <div style="width:1px; background:#444;"></div>
                                 <div style="text-align:center; flex:1;">
                                     <div style="font-size:11px; color:#aaa; text-transform:uppercase;">Túra összesen</div>
                                     <div style="font-size:18px; font-weight:bold; color:#2ecc71;">${update.tour_remaining_dist ? update.tour_remaining_dist.toFixed(1) + ' km' : 'N/A'}</div>
+                                    <div style="font-size:11px; color:#2ecc71;">${update.tour_remaining_duration ? Math.round(update.tour_remaining_duration / 60) + ' perc' : ''}</div>
                                 </div>
                             </div>
                         </div>
@@ -516,6 +520,17 @@ app.get('/driver/:name', async (req, res) => {
                 ];
                 map.fitBounds(fitBounds, { padding: [50, 50], maxZoom: 15 });
             }
+
+            // Útvonal tervezése a következő megállóig
+            ${update.next_lat && update.next_lng ? `
+                fetch('https://router.project-osrm.org/route/v1/driving/' + driverLng + ',' + driverLat + ';' + ${update.next_lng} + ',' + ${update.next_lat} + '?overview=full&geometries=geojson')
+                    .then(r => r.json())
+                    .then(data => {
+                        if (data.routes && data.routes[0]) {
+                            L.geoJSON(data.routes[0].geometry, { style: { color: '#3498db', weight: 5, opacity: 0.7 } }).addTo(map);
+                        }
+                    });
+            ` : ''}
 
             // Kényszerített újrarajzolás a méretezési hiba ellen
             setTimeout(() => {
