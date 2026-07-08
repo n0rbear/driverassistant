@@ -1037,7 +1037,7 @@ app.get('/driver/:name', async (req, res) => {
                     updateTimeDisplays();
 
                     // Update Map
-                    if (d.latitude && d.longitude) {
+            if (d.latitude && d.longitude) {
                         const newPos = [d.latitude, d.longitude];
                         driverMarker.setLatLng(newPos);
                         driverMarker.setPopupContent('<b>${name}</b><br>Sebesség: ' + Math.round(d.speed || 0) + ' km/h');
@@ -1052,9 +1052,10 @@ app.get('/driver/:name', async (req, res) => {
                             fetch('/api/get-tours/' + encodeURIComponent('${name}'))
                                 .then(r => r.json())
                                 .then(data => {
-                                    const stops = data.length > 0 ? data[0].stops : [];
-                                    const dLat = d.depot_lat || (data.length > 0 ? data[0].tour.depot_lat : 0);
-                                    const dLng = d.depot_lng || (data.length > 0 ? data[0].tour.depot_lng : 0);
+                                    const tourData = data.find(item => item.tour.is_current) || (data.length > 0 ? data[0] : null);
+                                    const stops = tourData ? tourData.stops : [];
+                                    const dLat = (tourData && tourData.tour.depot_lat) ? tourData.tour.depot_lat : d.depot_lat;
+                                    const dLng = (tourData && tourData.tour.depot_lng) ? tourData.tour.depot_lng : d.depot_lng;
                                     drawRoute(d.latitude, d.longitude, stops, dLat, dLng);
                                 });
                         }
@@ -1139,6 +1140,7 @@ app.get('/driver/:name', async (req, res) => {
             }
 
             // Útvonal tervezése a teljes hátralévő túrára
+            const currentTourData = ${JSON.stringify(currentTourObj || (toursRes.length > 0 ? toursRes[0] : null))};
             const incompleteStops = (rawStops || []).filter(s => !s.is_completed && s.latitude && s.longitude);
             let waypointStr = driverLng + ',' + driverLat;
 
@@ -1146,8 +1148,11 @@ app.get('/driver/:name', async (req, res) => {
                 waypointStr += ';' + s.longitude + ',' + s.latitude;
             });
 
-            if (${update.depot_lat != null ? 'true' : 'false'}) {
-                waypointStr += ';' + ${update.depot_lng || 0} + ',' + ${update.depot_lat || 0};
+            const initialDepotLat = (currentTourData && currentTourData.depot_lat) ? currentTourData.depot_lat : ${update.depot_lat || 0};
+            const initialDepotLng = (currentTourData && currentTourData.depot_lng) ? currentTourData.depot_lng : ${update.depot_lng || 0};
+
+            if (initialDepotLat != null && initialDepotLat !== 0) {
+                waypointStr += ';' + initialDepotLng + ',' + initialDepotLat;
             }
 
             if (waypointStr.includes(';')) {
