@@ -187,6 +187,7 @@ const StatusEngine = {
                              nextStopDist = r.routes[0].legs[0].distance / 1000;
                              nextStopDur = Math.round(r.routes[0].legs[0].duration);
                          }
+                         console.log(`[OSRM] ${driverName} -> Remaining: ${tourRemainingDist.toFixed(1)}km`);
                     }
                     if (nextStop) {
                         nextStopInfo = `${nextStop.contact_name || nextStop.recipient} | ${nextStop.address}`;
@@ -194,7 +195,9 @@ const StatusEngine = {
                         nextStopInfo = `Vissza a depóba | ${currentTour.depot_name || 'Depó'}`;
                     }
                 }
-            } catch (e) {}
+            } catch (e) {
+                console.error(`[OSRM-ERROR] ${driverName}: ${e.message}`);
+            }
         }
 
         return {
@@ -375,8 +378,9 @@ app.post('/api/live-update', async (req, res) => {
         const resObj = await StatusEngine.updateStatus(client, d);
 
         // 2. Save Live Update
-        const prevRes = await client.query('SELECT status, license_plate FROM live_updates WHERE driver_name = $1 ORDER BY timestamp DESC LIMIT 1', [d.driverName]);
-        const prevPlate = prevRes.rows.length > 0 ? prevRes.rows[0].license_plate : 'N/A';
+        const prevRes = await client.query('SELECT status, license_plate, depot_name, depot_lat, depot_lng FROM live_updates WHERE driver_name = $1 ORDER BY timestamp DESC LIMIT 1', [d.driverName]);
+        const prev = prevRes.rows[0] || {};
+        const prevPlate = prev.license_plate || 'N/A';
 
         let currentPlate = d.licensePlate;
         if ((!currentPlate || currentPlate === 'N/A') && prevPlate && prevPlate !== 'N/A') {
@@ -400,13 +404,13 @@ app.post('/api/live-update', async (req, res) => {
             resObj.nextStopInfo || d.nextStop,
             resObj.nextLat || d.nextLat,
             resObj.nextLng || d.nextLng,
-            resObj.nextStopDist || d.nextStopDistance,
-            Math.round(resObj.nextStopDur || d.nextStopDuration || 0),
-            resObj.tourRemainingDist || d.tourRemainingDistance,
-            Math.round(resObj.tourRemainingDur || d.tourRemainingDuration || 0),
-            resObj.depotName || d.depotName,
-            resObj.depotLat || d.depotLat,
-            resObj.depotLng || d.depotLng,
+            (resObj.nextStopDist !== null) ? resObj.nextStopDist : (d.nextStopDistance || 0),
+            Math.round((resObj.nextStopDur !== null) ? resObj.nextStopDur : (d.nextStopDuration || 0)),
+            (resObj.tourRemainingDist !== null) ? resObj.tourRemainingDist : (d.tourRemainingDistance || 0),
+            Math.round((resObj.tourRemainingDur !== null) ? resObj.tourRemainingDur : (d.tourRemainingDuration || 0)),
+            resObj.depotName || d.depotName || prev.depot_name,
+            resObj.depotLat || d.depotLat || prev.depot_lat,
+            resObj.depotLng || d.depotLng || prev.depot_lng,
             d.timestamp,
             d.includeRests ?? true,
             d.nextBreakInSeconds ? Math.round(d.nextBreakInSeconds) : null
@@ -957,8 +961,11 @@ app.get('/driver/:name', async (req, res) => {
 
             // Kezdeti útvonal
             const rawStops = ${currentStopsJson};
+            const tourDepotLat = ${currentTourObj ? currentTourObj.depot_lat || 0 : 0};
+            const tourDepotLng = ${currentTourObj ? currentTourObj.depot_lng || 0 : 0};
+
             if (rawStops && rawStops.length > 0) {
-                drawRoute(driverLat, driverLng, rawStops, ${update.depot_lat || 0}, ${update.depot_lng || 0});
+                drawRoute(driverLat, driverLng, rawStops, tourDepotLat, tourDepotLng);
             }
 
             async function refreshLiveStatus() {
@@ -979,8 +986,8 @@ app.get('/driver/:name', async (req, res) => {
                         document.getElementById('live-tour-container').style.display = 'block';
                         document.getElementById('no-tour-msg').style.display = 'none';
                         document.getElementById('live-tour-name').innerText = d.current_tour;
-                        document.getElementById('live-next-dist').innerText = d.next_stop_dist ? d.next_stop_dist.toFixed(1) + ' km' : 'N/A';
-                        document.getElementById('live-tour-dist').innerText = d.tour_remaining_dist ? d.tour_remaining_dist.toFixed(1) + ' km' : 'N/A';
+                        document.getElementById('live-next-dist').innerText = d.next_stop_dist !== null ? d.next_stop_dist.toFixed(1) + ' km' : 'N/A';
+                        document.getElementById('live-tour-dist').innerText = d.tour_remaining_dist !== null ? d.tour_remaining_dist.toFixed(1) + ' km' : 'N/A';
                     } else {
                         document.getElementById('live-tour-container').style.display = 'none';
                         document.getElementById('no-tour-msg').style.display = 'block';
@@ -1013,8 +1020,8 @@ app.get('/driver/:name', async (req, res) => {
                         driverMarker.setLatLng(newPos);
                         driverMarker.setPopupContent('<b>${name}</b><br>Sebesség: ' + Math.round(d.speed || 0) + ' km/h');
 
-                        // Útvonal frissítése ha a célpont változott
-                        if (d.next_lat !== lastNextLat || d.next_lng !== lastNextLng) {
+                        // Útvonal frissítése ha mozog vagy a célpont változott
+                        if (d.next_lat !== lastNextLat || d.next_lng !== lastNextLng || Math.abs(d.latitude - driverLat) > 0.001) {
                             lastNextLat = d.next_lat;
                             lastNextLng = d.next_lng;
                             refreshTours();
@@ -1022,7 +1029,9 @@ app.get('/driver/:name', async (req, res) => {
                                 .then(r => r.json())
                                 .then(data => {
                                     const stops = data.length > 0 ? data[0].stops : [];
-                                    drawRoute(d.latitude, d.longitude, stops, d.depot_lat, d.depot_lng);
+                                    const dLat = d.depot_lat || (data.length > 0 ? data[0].tour.depot_lat : 0);
+                                    const dLng = d.depot_lng || (data.length > 0 ? data[0].tour.depot_lng : 0);
+                                    drawRoute(d.latitude, d.longitude, stops, dLat, dLng);
                                 });
                         }
                     }
