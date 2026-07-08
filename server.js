@@ -648,10 +648,10 @@ app.get('/driver/:name', async (req, res) => {
                         document.getElementById('live-next-stop-container').style.display = 'block';
                         let html = '';
                         if (d.next_stop.includes(' | ')) {
-                            html = `<b style="display:block; margin-top:5px; color:#fff;">${d.next_stop.split(' | ')[0]}</b>
-                                    <p style="margin:2px 0; font-size:13px; color:#ccc;">${d.next_stop.split(' | ')[1]}</p>`;
+                            html = '<b style="display:block; margin-top:5px; color:#fff;">' + d.next_stop.split(' | ')[0] + '</b>' +
+                                   '<p style="margin:2px 0; font-size:13px; color:#ccc;">' + d.next_stop.split(' | ')[1] + '</p>';
                         } else {
-                            html = `<p style="margin:5px 0; font-size:14px;">${d.next_stop}</p>`;
+                            html = '<p style="margin:5px 0; font-size:14px;">' + d.next_stop + '</p>';
                         }
                         document.getElementById('live-next-stop-details').innerHTML = html;
                     } else {
@@ -799,16 +799,16 @@ app.get('/driver/:name', async (req, res) => {
                     container.innerHTML = data.map(item => {
                         const t = item.tour;
                         const stops = item.stops;
-                        return `
+                        return \`
                         <div class="tour-card">
                             <div style="float:right; display:flex; gap:5px;">
-                                <select onchange="transferTour(${t.id}, this.value)" style="width:auto;"><option value="">-- Áthelyezés --</option>${allDNames.map(n => `<option value="${n}">${n}</option>`).join('')}</select>
-                                <button onclick='editTour(${JSON.stringify(t).replace(/'/g, "&apos;")})'>✏</button>
-                                <button onclick="deleteTour(${t.id})" style="background:#e74c3c; color:white;">🗑</button>
+                                <select onchange="transferTour(\${t.id}, this.value)" style="width:auto;"><option value="">-- Áthelyezés --</option>\${allDNames.map(n => "<option value='" + n + "'>" + n + "</option>").join('')}</select>
+                                <button onclick='editTour(\${JSON.stringify(t).replace(/'/g, "&apos;")})'>✏</button>
+                                <button onclick="deleteTour(\${t.id})" style="background:#e74c3c; color:white;">🗑</button>
                             </div>
-                            <b>${t.name}</b> (${t.customer}) - ${new Date(Number(t.date)).toLocaleDateString()}
-                            ${stops.map(s => `<div class="stop-item">${s.order_index + 1}. ${s.stop_type === 'HOTEL' ? '🏨 ' : (s.stop_type === 'DEPOT' ? '🏠 ' : '')}${s.address}</div>`).join('')}
-                        </div>`;
+                            <b>\${t.name}</b> (\${t.customer}) - \${new Date(Number(t.date)).toLocaleDateString()}
+                            \${stops.map(s => "<div class='stop-item'>" + (s.order_index + 1) + ". " + (s.stop_type === 'HOTEL' ? '🏨 ' : (s.stop_type === 'DEPOT' ? '🏠 ' : '')) + s.address + "</div>").join('')}
+                        </div>\`;
                     }).join('');
                 } catch (e) { console.error('Refresh tours error:', e); }
             }
@@ -842,10 +842,10 @@ app.get('/driver/:name', async (req, res) => {
                     const data = await r.json();
                     const container = document.getElementById('chat-messages');
                     if (!container) return;
-                    container.innerHTML = data.map(m => `
-                        <div class="msg ${m.sender === 'DISZPÉCSER' ? 'msg-boss' : 'msg-driver'}">
-                            <b>${m.sender}:</b><br>${m.message}
-                        </div>`).join('');
+                    container.innerHTML = data.map(m => \`
+                        <div class="msg \${m.sender === 'DISZPÉCSER' ? 'msg-boss' : 'msg-driver'}">
+                            <b>\${m.sender}:</b><br>\${m.message}
+                        </div>\`).join('');
                     container.scrollTop = container.scrollHeight;
                 } catch (e) { console.error('Refresh chat error:', e); }
             }
