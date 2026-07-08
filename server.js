@@ -677,10 +677,10 @@ app.get('/driver/:name', async (req, res) => {
                 document.getElementById('modalStops').appendChild(d);
             }
             async function geocode(street, house, postal, city) {
-                const q = `${street} ${house}, ${postal} ${city}`.trim();
+                const q = (street + ' ' + house + ', ' + postal + ' ' + city).trim();
                 if (q.length < 5) return null;
                 try {
-                    const r = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(q)}&limit=1`);
+                    const r = await fetch('https://nominatim.openstreetmap.org/search?format=json&q=' + encodeURIComponent(q) + '&limit=1');
                     const d = await r.json();
                     return d && d.length > 0 ? { lat: d[0].lat, lon: d[0].lon } : null;
                 } catch (e) { return null; }
