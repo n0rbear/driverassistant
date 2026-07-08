@@ -487,8 +487,36 @@ app.get('/driver/:name', async (req, res) => {
 
             // Térkép igazítása
             if (rawStops.length > 0 || ${update.depot_lat ? 'true' : 'false'}) {
-                map.fitBounds(bounds, { padding: [50, 50], maxZoom: 15 });
+                const center = [driverLat, driverLng];
+                let maxDLat = 0;
+                let maxDLng = 0;
+
+                rawStops.forEach(s => {
+                    if (s.latitude && s.longitude) {
+                        maxDLat = Math.max(maxDLat, Math.abs(s.latitude - driverLat));
+                        maxDLng = Math.max(maxDLng, Math.abs(s.longitude - driverLng));
+                    }
+                });
+
+                if (${update.depot_lat ? 'true' : 'false'}) {
+                    maxDLat = Math.max(maxDLat, Math.abs(${update.depot_lat || 0} - driverLat));
+                    maxDLng = Math.max(maxDLng, Math.abs(${update.depot_lng || 0} - driverLng));
+                }
+
+                const fitBounds = [
+                    [driverLat - maxDLat * 1.1 - 0.002, driverLng - maxDLng * 1.1 - 0.002],
+                    [driverLat + maxDLat * 1.1 + 0.002, driverLng + maxDLng * 1.1 + 0.002]
+                ];
+                map.fitBounds(fitBounds, { padding: [50, 50], maxZoom: 15 });
             }
+
+            // Kényszerített újrarajzolás a méretezési hiba ellen
+            setTimeout(() => {
+                map.invalidateSize();
+                if (rawStops.length > 0 || ${update.depot_lat ? 'true' : 'false'}) {
+                     map.fitBounds(map.getBounds(), { padding: [50, 50] });
+                }
+            }, 800);
 
             // Alapértelmezett tab
             openTab(null, 'dashboard');
