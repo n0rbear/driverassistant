@@ -676,9 +676,40 @@ app.get('/driver/:name', async (req, res) => {
                     <div style="margin-top:10px;"><label>Típus</label><select class="stop-type"><option value="DELIVERY" \${items[0].stop_type==='DELIVERY'?'selected':''}>DELIVERY</option><option value="PICKUP" \${items[0].stop_type==='PICKUP'?'selected':''}>PICKUP</option><option value="HOTEL" \${items[0].stop_type==='HOTEL'?'selected':''}>HOTEL</option></select></div>\`;
                 document.getElementById('modalStops').appendChild(d);
             }
+            async function geocode(street, house, postal, city) {
+                const q = `${street} ${house}, ${postal} ${city}`.trim();
+                if (q.length < 5) return null;
+                try {
+                    const r = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(q)}&limit=1`);
+                    const d = await r.json();
+                    return d && d.length > 0 ? { lat: d[0].lat, lon: d[0].lon } : null;
+                } catch (e) { return null; }
+            }
+
             async function saveTour() {
-                const stops = []; document.querySelectorAll('.stop-edit-row').forEach((r, i) => {
+                const btn = event.target;
+                const oldText = btn.innerText;
+                btn.innerText = 'Mentés... (Geocoding)';
+                btn.disabled = true;
+
+                const modal = document.getElementById('tourModal');
+                // Depó koordináták ha hiányzik
+                if (!modal.dataset.lat || modal.dataset.lat === "") {
+                    const c = await geocode(document.getElementById('tDepotStreet').value, document.getElementById('tDepotHouse').value, document.getElementById('tDepotPostal').value, document.getElementById('tDepotCity').value);
+                    if (c) { modal.dataset.lat = c.lat; modal.dataset.lng = c.lon; }
+                }
+
+                const stops = [];
+                const rows = document.querySelectorAll('.stop-edit-row');
+                for (let i = 0; i < rows.length; i++) {
+                    const r = rows[i];
                     const u = r.querySelector('.stop-uuid').value;
+
+                    if (!r.dataset.lat || r.dataset.lat === "") {
+                        const c = await geocode(r.querySelector('.stop-street').value, r.querySelector('.stop-house').value, r.querySelector('.stop-postal').value, r.querySelector('.stop-city').value);
+                        if (c) { r.dataset.lat = c.lat; r.dataset.lng = c.lon; }
+                    }
+
                     stops.push({
                         uuid: u === "" ? null : u,
                         recipient: r.querySelector('.stop-recipient').value,
@@ -692,9 +723,9 @@ app.get('/driver/:name', async (req, res) => {
                         latitude: r.dataset.lat ? parseFloat(r.dataset.lat) : null,
                         longitude: r.dataset.lng ? parseFloat(r.dataset.lng) : null
                     });
-                });
+                }
+
                 const tourId = document.getElementById('tourId').value;
-                const modal = document.getElementById('tourModal');
                 const uId = document.getElementById('tourUuid').value;
                 const tourDate = document.getElementById('tDate').value ? new Date(document.getElementById('tDate').value).getTime() : Date.now();
                 const data = {
@@ -710,7 +741,7 @@ app.get('/driver/:name', async (req, res) => {
                     stops
                 };
                 const res = await fetch('/admin/save-tour', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) });
-                if(res.ok) location.reload(); else alert('Hiba!');
+                if(res.ok) location.reload(); else { alert('Hiba!'); btn.innerText = oldText; btn.disabled = false; }
             }
         </script>
     </body></html>`;
