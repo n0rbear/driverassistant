@@ -689,19 +689,21 @@ app.post('/admin/delete-driver', async (req, res) => {
 
 app.post('/api/upload-photo', async (req, res) => {
     try {
-        const { driverName, imageBase64 } = req.body;
+        const { driverName, imageBase64, uuid } = req.body;
         if (!imageBase64) {
             console.warn('[UPLOAD] No image data received');
             return res.status(400).send('No image data');
         }
-        if (!driverName) {
-            console.warn('[UPLOAD] No driver name received');
-            return res.status(400).send('No driver name');
+
+        const identifier = uuid || driverName;
+        if (!identifier) {
+            console.warn('[UPLOAD] No driver identifier (uuid or name) received');
+            return res.status(400).send('No driver identifier');
         }
 
-        console.log(`[UPLOAD] Receiving photo for ${driverName}, size: ${imageBase64.length} chars`);
+        console.log(`[UPLOAD] Receiving photo for ${identifier}, size: ${imageBase64.length} chars`);
 
-        const fileName = `photo_${driverName.replace(/[^a-z0-9]/gi, '_')}_${Date.now()}.jpg`;
+        const fileName = `photo_${String(identifier).replace(/[^a-z0-9]/gi, '_')}_${Date.now()}.jpg`;
         const filePath = `uploads/${fileName}`;
         const buffer = Buffer.from(imageBase64, 'base64');
 
@@ -714,7 +716,11 @@ app.post('/api/upload-photo', async (req, res) => {
         console.log(`[UPLOAD] Saved to ${filePath}, size: ${buffer.length} bytes`);
 
         const photoUrl = `/uploads/${fileName}`;
-        await pool.query('UPDATE drivers SET photo_url = $1 WHERE name = $2', [photoUrl, driverName]);
+        if (uuid) {
+            await pool.query('UPDATE drivers SET photo_url = $1 WHERE uuid = $2', [photoUrl, uuid]);
+        } else {
+            await pool.query('UPDATE drivers SET photo_url = $1 WHERE name = $2', [photoUrl, driverName]);
+        }
 
         res.json({ photoUrl });
     } catch (e) {
@@ -916,6 +922,13 @@ app.get('/', async (req, res) => {
                 <div style="background:#222; padding:30px; border-radius:12px; max-width:600px; margin:auto;">
                     <h2>Sofőr szerkesztése</h2>
                     <input type="hidden" id="dUuid">
+                    <div style="text-align: center; margin-bottom: 20px;">
+                        <div style="position: relative; display: inline-block;">
+                            <img id="dPhotoPreview" src="" style="width:100px; height:100px; border-radius:50%; background:#333; object-fit: cover; border: 2px solid #444;">
+                            <label for="admin-photo-upload" style="position: absolute; bottom: 0; right: 0; background: #3498db; color: white; width: 30px; height: 30px; border-radius: 50%; display: flex; align-items: center; justify-content: center; cursor: pointer; border: 2px solid #222;">📷</label>
+                            <input type="file" id="admin-photo-upload" style="display: none;" onchange="uploadAdminPhoto(this)" accept="image/*">
+                        </div>
+                    </div>
                     <div style="display:grid; grid-template-columns:1fr 1fr; gap:15px; margin-bottom:20px;">
                         <div><label style="display:block; font-size:11px; color:#aaa;">Név</label><input type="text" id="dName" style="width:100%"></div>
                         <div><label style="display:block; font-size:11px; color:#aaa;">Rendszám</label><input type="text" id="dPlate" style="width:100%"></div>
@@ -950,30 +963,33 @@ app.get('/', async (req, res) => {
                         const r = await fetch('/api/fleet-status');
                         if (!r.ok) return;
                         const drivers = await r.json();
-                        document.getElementById('driver-grid').innerHTML = drivers.map(d => \`
-                            <div class="card" onclick="location.href='/driver/\${encodeURIComponent(d.driver_name)}'">
-                                <img src="\${d.driver_photo || ''}" style="width:50px;height:50px;border-radius:50%;float:right;background:#444">
-                                <h3>\${d.driver_name}</h3>
-                                <p>\${d.status} \${d.license_plate ? '| ' + d.license_plate : ''}</p>
-                            </div>\`).join('');
+                        document.getElementById('driver-grid').innerHTML = drivers.map(d => `
+                            <div class="card" onclick="location.href='/driver/${encodeURIComponent(d.driver_name)}'">
+                                <img src="${d.driver_photo || ''}" style="width:50px;height:50px;border-radius:50%;float:right;background:#444;object-fit:cover;">
+                                <h3>${d.driver_name}</h3>
+                                <p>${d.status} ${d.license_plate ? '| ' + d.license_plate : ''}</p>
+                            </div>`).join('');
                     } catch (e) { console.error('Fleet refresh error:', e); }
                 }
 
                 async function refreshDrivers() {
                     const r = await fetch('/api/all-drivers');
                     const drivers = await r.json();
-                    document.getElementById('drivers-list').innerHTML = drivers.map(d => \`
+                    document.getElementById('drivers-list').innerHTML = drivers.map(d => `
                         <tr>
-                            <td><b>\${d.name}</b></td>
-                            <td>\${d.email || ''}<br><small>\${d.phone || ''}</small></td>
-                            <td>\${d.license_plate || ''}</td>
-                            <td><code style="background:#444; padding:2px 5px;">\${d.activation_code || '---'}</code></td>
-                            <td><span style="color:\${d.is_active ? '#2ecc71' : '#e74c3c'}">\${d.is_active ? 'AKTÍV' : 'INAKTÍV'}</span></td>
                             <td>
-                                <button onclick='editDriver(\${JSON.stringify(d).replace(/'/g, "&apos;")})'>✏</button>
-                                <button onclick="deleteDriver('\${d.uuid}')" style="background:#e74c3c; color:white; border:none; border-radius:4px; padding:5px 10px; cursor:pointer;">🗑</button>
+                                <img src="${d.photo_url || ''}" style="width:30px;height:30px;border-radius:50%;vertical-align:middle;margin-right:10px;background:#444;object-fit:cover;">
+                                <b>${d.name}</b>
                             </td>
-                        </tr>\`).join('');
+                            <td>${d.email || ''}<br><small>${d.phone || ''}</small></td>
+                            <td>${d.license_plate || ''}</td>
+                            <td><code style="background:#444; padding:2px 5px;">${d.activation_code || '---'}</code></td>
+                            <td><span style="color:${d.is_active ? '#2ecc71' : '#e74c3c'}">${d.is_active ? 'AKTÍV' : 'INAKTÍV'}</span></td>
+                            <td>
+                                <button onclick='editDriver(${JSON.stringify(d).replace(/'/g, "&apos;")})'>✏</button>
+                                <button onclick="deleteDriver('${d.uuid}')" style="background:#e74c3c; color:white; border:none; border-radius:4px; padding:5px 10px; cursor:pointer;">🗑</button>
+                            </td>
+                        </tr>`).join('');
                 }
 
                 function editDriver(d) {
@@ -985,8 +1001,34 @@ app.get('/', async (req, res) => {
                     document.getElementById('dWhatsapp').value = d ? d.whatsapp : '';
                     document.getElementById('dTelegram').value = d ? d.telegram : '';
                     document.getElementById('dPhoto').value = d ? d.photo_url : '';
+                    document.getElementById('dPhotoPreview').src = d ? (d.photo_url || '') : '';
                     document.getElementById('dActive').checked = d ? d.is_active : true;
                     document.getElementById('driverModal').style.display = 'block';
+                }
+
+                async function uploadAdminPhoto(input) {
+                    if (!input.files || !input.files[0]) return;
+                    const file = input.files[0];
+                    const reader = new FileReader();
+                    reader.onload = async (e) => {
+                        const base64 = e.target.result.split(',')[1];
+                        const res = await fetch('/api/upload-photo', {
+                            method: 'POST',
+                            headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify({
+                                uuid: document.getElementById('dUuid').value,
+                                driverName: document.getElementById('dName').value,
+                                imageBase64: base64
+                            })
+                        });
+                        if (res.ok) {
+                            const data = await res.json();
+                            document.getElementById('dPhotoPreview').src = data.photoUrl;
+                            document.getElementById('dPhoto').value = data.photoUrl;
+                            showToast('Kép feltöltve!');
+                        }
+                    };
+                    reader.readAsDataURL(file);
                 }
 
                 async function saveDriver() {
@@ -1106,7 +1148,7 @@ app.get('/driver/:name', async (req, res) => {
     </style></head>
     <body>
         <div id="toast-container"></div>
-        <header><button onclick="location.href='/'">⬅</button><img src="${dInfo.photo_url || update.driver_photo || ''}" style="width:40px;height:40px;border-radius:50%;margin-left:15px;margin-right:15px;"><h2><span>${name}</span> - ERP</h2></header>
+        <header><button onclick="location.href='/'">⬅</button><img src="${dInfo.photo_url || update.driver_photo || ''}" style="width:40px;height:40px;border-radius:50%;margin-left:15px;margin-right:15px;object-fit:cover;background:#333;"><h2><span>${name}</span> - ERP</h2></header>
         <nav>
             <button data-tab="dashboard" onclick="openTab(event, 'dashboard')">DASHBOARD</button>
             <button data-tab="tours" onclick="openTab(event, 'tours')">TÚRÁK</button>
@@ -1212,8 +1254,15 @@ app.get('/driver/:name', async (req, res) => {
         <div id="profile" class="tab-content">
             <div style="max-width:600px; background:#222; padding:30px; border-radius:12px;">
                 <h3>SOFŐR PROFIL</h3>
+                <input type="hidden" id="prof-uuid" value="${dInfo.uuid || ''}">
                 <div id="profile-display">
-                    <img id="p-photo" src="${dInfo.photo_url || update.driver_photo || ''}" style="width:100px; height:100px; border-radius:50%; margin-bottom:20px; background:#333;">
+                    <div style="text-align: center; margin-bottom: 20px;">
+                        <div style="position: relative; display: inline-block;">
+                            <img id="p-photo" src="${dInfo.photo_url || update.driver_photo || ''}" style="width:120px; height:120px; border-radius:50%; background:#333; object-fit: cover; border: 2px solid #444;">
+                            <label for="prof-photo-upload" style="position: absolute; bottom: 0; right: 0; background: #3498db; color: white; width: 35px; height: 35px; border-radius: 50%; display: flex; align-items: center; justify-content: center; cursor: pointer; border: 2px solid #222; font-size: 18px;">📷</label>
+                            <input type="file" id="prof-photo-upload" style="display: none;" onchange="uploadWebPhoto(this)" accept="image/*">
+                        </div>
+                    </div>
                     <div style="display:grid; grid-template-columns:1fr 1fr; gap:20px;">
                         <div><label>Név</label><input type="text" id="prof-name" value="${name}"></div>
                         <div><label>Rendszám</label><input type="text" id="prof-plate" value="${dInfo.license_plate || update.license_plate || ''}"></div>
@@ -1672,6 +1721,7 @@ app.get('/driver/:name', async (req, res) => {
 
             async function saveProfile() {
                 const data = {
+                    uuid: document.getElementById('prof-uuid').value,
                     name: document.getElementById('prof-name').value,
                     licensePlate: document.getElementById('prof-plate').value,
                     email: document.getElementById('prof-email').value,
@@ -1681,7 +1731,37 @@ app.get('/driver/:name', async (req, res) => {
                     photoUrl: document.getElementById('prof-photo-url').value
                 };
                 const r = await fetch('/api/sync-profile', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) });
-                if(r.ok) { showToast('Profil mentve és szinkronizálva!'); }
+                if(r.ok) {
+                    showToast('Profil mentve és szinkronizálva!');
+                    if (data.name !== '${name}') {
+                        setTimeout(() => location.href = '/driver/' + encodeURIComponent(data.name), 1000);
+                    }
+                }
+            }
+
+            async function uploadWebPhoto(input) {
+                if (!input.files || !input.files[0]) return;
+                const file = input.files[0];
+                const reader = new FileReader();
+                reader.onload = async (e) => {
+                    const base64 = e.target.result.split(',')[1];
+                    const res = await fetch('/api/upload-photo', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({
+                            uuid: document.getElementById('prof-uuid').value,
+                            driverName: document.getElementById('prof-name').value,
+                            imageBase64: base64
+                        })
+                    });
+                    if (res.ok) {
+                        const data = await res.json();
+                        document.getElementById('p-photo').src = data.photoUrl;
+                        document.getElementById('prof-photo-url').value = data.photoUrl;
+                        showToast('Kép sikeresen feltöltve!');
+                    }
+                };
+                reader.readAsDataURL(file);
             }
 
             async function refreshDrivers() {
