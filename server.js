@@ -819,30 +819,30 @@ app.get('/', async (req, res) => {
                         const r = await fetch('/api/fleet-status');
                         if (!r.ok) return;
                         const drivers = await r.json();
-                        document.getElementById('driver-grid').innerHTML = drivers.map(d => `
-                            <div class="card" onclick="location.href='/driver/${encodeURIComponent(d.driver_name)}'">
-                                <img src="${d.driver_photo || ''}" style="width:50px;height:50px;border-radius:50%;float:right;background:#444">
-                                <h3>${d.driver_name}</h3>
-                                <p>${d.status} ${d.license_plate ? '| ' + d.license_plate : ''}</p>
-                            </div>`).join('');
+                        document.getElementById('driver-grid').innerHTML = drivers.map(d => \`
+                            <div class="card" onclick="location.href='/driver/\${encodeURIComponent(d.driver_name)}'">
+                                <img src="\${d.driver_photo || ''}" style="width:50px;height:50px;border-radius:50%;float:right;background:#444">
+                                <h3>\${d.driver_name}</h3>
+                                <p>\${d.status} \${d.license_plate ? '| ' + d.license_plate : ''}</p>
+                            </div>\`).join('');
                     } catch (e) { console.error('Fleet refresh error:', e); }
                 }
 
                 async function refreshDrivers() {
                     const r = await fetch('/api/all-drivers');
                     const drivers = await r.json();
-                    document.getElementById('drivers-list').innerHTML = drivers.map(d => `
+                    document.getElementById('drivers-list').innerHTML = drivers.map(d => \`
                         <tr>
-                            <td><b>${d.name}</b></td>
-                            <td>${d.email || ''}<br><small>${d.phone || ''}</small></td>
-                            <td>${d.license_plate || ''}</td>
-                            <td><code style="background:#444; padding:2px 5px;">${d.activation_code || '---'}</code></td>
-                            <td><span style="color:${d.is_active ? '#2ecc71' : '#e74c3c'}">${d.is_active ? 'AKTÍV' : 'INAKTÍV'}</span></td>
+                            <td><b>\${d.name}</b></td>
+                            <td>\${d.email || ''}<br><small>\${d.phone || ''}</small></td>
+                            <td>\${d.license_plate || ''}</td>
+                            <td><code style="background:#444; padding:2px 5px;">\${d.activation_code || '---'}</code></td>
+                            <td><span style="color:\${d.is_active ? '#2ecc71' : '#e74c3c'}">\${d.is_active ? 'AKTÍV' : 'INAKTÍV'}</span></td>
                             <td>
-                                <button onclick='editDriver(${JSON.stringify(d).replace(/'/g, "&apos;")})'>✏</button>
-                                <button onclick="deleteDriver('${d.uuid}')" style="background:#e74c3c; color:white; border:none; border-radius:4px; padding:5px 10px; cursor:pointer;">🗑</button>
+                                <button onclick='editDriver(\${JSON.stringify(d).replace(/'/g, "&apos;")})'>✏</button>
+                                <button onclick="deleteDriver('\${d.uuid}')" style="background:#e74c3c; color:white; border:none; border-radius:4px; padding:5px 10px; cursor:pointer;">🗑</button>
                             </td>
-                        </tr>`).join('');
+                        </tr>\`).join('');
                 }
 
                 function editDriver(d) {
@@ -1283,7 +1283,7 @@ app.get('/driver/:name', async (req, res) => {
             // Sofőr marker (kék kör fehér szegéllyel)
             const driverMarker = L.circleMarker([driverLat, driverLng], {
                 color: '#3498db', radius: 10, fillOpacity: 1, weight: 3, fillColor: '#fff'
-            }).addTo(map).bindPopup(`<b>${name}</b><br><span id="popup-speed">Sebesség: ${Math.round(update.speed || 0)} km/h</span>`);
+            }).addTo(map).bindPopup(\`<b>${name}</b><br><span id="popup-speed">Sebesség: ${Math.round(update.speed || 0)} km/h</span>\`);
 
             let routeLayer = null;
             let lastNextLat = ${update.next_lat || 0};
@@ -1380,7 +1380,7 @@ app.get('/driver/:name', async (req, res) => {
             if (d.latitude && d.longitude) {
                         const newPos = [d.latitude, d.longitude];
                         driverMarker.setLatLng(newPos);
-                        driverMarker.setPopupContent(`<b>${name}</b><br>Sebesség: ` + Math.round(d.speed || 0) + ' km/h');
+                        driverMarker.setPopupContent(\`<b>${name}</b><br>Sebesség: \` + Math.round(d.speed || 0) + ' km/h');
 
                         // Útvonal frissítése ha mozog vagy a célpont változott
                         if (d.next_lat !== lastNextLat || d.next_lng !== lastNextLng || Math.abs(d.latitude - lastUpdateLat) > 0.0005) {
@@ -1553,7 +1553,7 @@ app.get('/driver/:name', async (req, res) => {
             async function refreshDrivers() {
                 const r = await fetch('/api/all-drivers');
                 const drivers = await r.json();
-                document.getElementById('drivers-list').innerHTML = drivers.map(d => `
+                document.getElementById('drivers-list').innerHTML = drivers.map(d => \`
                     <tr>
                         <td><b>\${d.name}</b></td>
                         <td>\${d.email || ''}<br><small>\${d.phone || ''}</small></td>
@@ -1564,7 +1564,7 @@ app.get('/driver/:name', async (req, res) => {
                             <button onclick='editDriver(\${JSON.stringify(d).replace(/'/g, "&apos;")})'>✏</button>
                             <button onclick="deleteDriver('\${d.uuid}')" style="background:#e74c3c; color:white; border:none; border-radius:4px; padding:5px 10px; cursor:pointer;">🗑</button>
                         </td>
-                    </tr>`).join('');
+                    </tr>\`).join('');
             }
             refreshDrivers();
 
@@ -1656,7 +1656,7 @@ app.get('/driver/:name', async (req, res) => {
                     container.innerHTML = data.map(item => {
                         const t = item.tour;
                         const stops = item.stops;
-                        return `
+                        return \`
                         <div class="tour-card">
                             <div style="float:right; display:flex; gap:5px;">
                                 <select onchange="transferTour(\${t.id}, this.value)" style="width:auto;"><option value="">-- Áthelyezés --</option>\${allDNames.map(n => "<option value='" + n + "'>" + n + "</option>").join('')}</select>
@@ -1665,7 +1665,7 @@ app.get('/driver/:name', async (req, res) => {
                             </div>
                             <b>\${t.name}</b> (\${t.customer}) - \${new Date(Number(t.date)).toLocaleDateString()}
                             \${stops.map(s => "<div class='stop-item'>" + (s.order_index + 1) + ". " + (s.stop_type === 'HOTEL' ? '🏨 ' : (s.stop_type === 'DEPOT' ? '🏠 ' : '')) + s.address + "</div>").join('')}
-                        </div>`;
+                        </div>\`;
                     }).join('');
                 } catch (e) { console.error('Refresh tours error:', e); }
             }
@@ -1699,10 +1699,10 @@ app.get('/driver/:name', async (req, res) => {
                     const data = await r.json();
                     const container = document.getElementById('chat-messages');
                     if (!container) return;
-                    container.innerHTML = data.map(m => `
+                    container.innerHTML = data.map(m => \`
                         <div class="msg \${m.sender === 'DISZPÉCSER' ? 'msg-boss' : 'msg-driver'}">
                             <b>\${m.sender}:</b><br>\${m.message}
-                        </div>`).join('');
+                        </div>\`).join('');
                     container.scrollTop = container.scrollHeight;
                 } catch (e) { console.error('Refresh chat error:', e); }
             }
