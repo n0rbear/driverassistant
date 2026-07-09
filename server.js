@@ -963,33 +963,33 @@ app.get('/', async (req, res) => {
                         const r = await fetch('/api/fleet-status');
                         if (!r.ok) return;
                         const drivers = await r.json();
-                        document.getElementById('driver-grid').innerHTML = drivers.map(d => `
-                            <div class="card" onclick="location.href='/driver/${encodeURIComponent(d.driver_name)}'">
-                                <img src="${d.driver_photo || ''}" style="width:50px;height:50px;border-radius:50%;float:right;background:#444;object-fit:cover;">
-                                <h3>${d.driver_name}</h3>
-                                <p>${d.status} ${d.license_plate ? '| ' + d.license_plate : ''}</p>
-                            </div>`).join('');
+                        document.getElementById('driver-grid').innerHTML = drivers.map(d =>
+                            '<div class="card" onclick="location.href=\'/driver/' + encodeURIComponent(d.driver_name) + '\'">' +
+                                '<img src="' + (d.driver_photo || '') + '" style="width:50px;height:50px;border-radius:50%;float:right;background:#444;object-fit:cover;">' +
+                                '<h3>' + d.driver_name + '</h3>' +
+                                '<p>' + d.status + (d.license_plate ? ' | ' + d.license_plate : '') + '</p>' +
+                            '</div>').join('');
                     } catch (e) { console.error('Fleet refresh error:', e); }
                 }
 
                 async function refreshDrivers() {
                     const r = await fetch('/api/all-drivers');
                     const drivers = await r.json();
-                    document.getElementById('drivers-list').innerHTML = drivers.map(d => `
-                        <tr>
-                            <td>
-                                <img src="${d.photo_url || ''}" style="width:30px;height:30px;border-radius:50%;vertical-align:middle;margin-right:10px;background:#444;object-fit:cover;">
-                                <b>${d.name}</b>
-                            </td>
-                            <td>${d.email || ''}<br><small>${d.phone || ''}</small></td>
-                            <td>${d.license_plate || ''}</td>
-                            <td><code style="background:#444; padding:2px 5px;">${d.activation_code || '---'}</code></td>
-                            <td><span style="color:${d.is_active ? '#2ecc71' : '#e74c3c'}">${d.is_active ? 'AKTÍV' : 'INAKTÍV'}</span></td>
-                            <td>
-                                <button onclick='editDriver(${JSON.stringify(d).replace(/'/g, "&apos;")})'>✏</button>
-                                <button onclick="deleteDriver('${d.uuid}')" style="background:#e74c3c; color:white; border:none; border-radius:4px; padding:5px 10px; cursor:pointer;">🗑</button>
-                            </td>
-                        </tr>`).join('');
+                    document.getElementById('drivers-list').innerHTML = drivers.map(d =>
+                        '<tr>' +
+                            '<td>' +
+                                '<img src="' + (d.photo_url || '') + '" style="width:30px;height:30px;border-radius:50%;vertical-align:middle;margin-right:10px;background:#444;object-fit:cover;">' +
+                                '<b>' + d.name + '</b>' +
+                            '</td>' +
+                            '<td>' + (d.email || '') + '<br><small>' + (d.phone || '') + '</small></td>' +
+                            '<td>' + (d.license_plate || '') + '</td>' +
+                            '<td><code style="background:#444; padding:2px 5px;">' + (d.activation_code || '---') + '</code></td>' +
+                            '<td><span style="color:' + (d.is_active ? '#2ecc71' : '#e74c3c') + '">' + (d.is_active ? 'AKTÍV' : 'INAKTÍV') + '</span></td>' +
+                            '<td>' +
+                                '<button onclick=\'editDriver(' + JSON.stringify(d).replace(/'/g, "&apos;") + ')\'>✏</button>' +
+                                '<button onclick="deleteDriver(\'' + d.uuid + '\')" style="background:#e74c3c; color:white; border:none; border-radius:4px; padding:5px 10px; cursor:pointer;">🗑</button>' +
+                            '</td>' +
+                        '</tr>').join('');
                 }
 
                 function editDriver(d) {
