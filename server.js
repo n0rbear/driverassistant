@@ -9,6 +9,22 @@ if (!fs.existsSync('uploads')) fs.mkdirSync('uploads');
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
 
+const ADMIN_TOKEN = process.env.ADMIN_TOKEN || '';
+const MAX_UPLOAD_BYTES = Number(process.env.MAX_UPLOAD_BYTES || 5 * 1024 * 1024);
+const requireAdmin = (req, res, next) => {
+    if (!ADMIN_TOKEN) return next();
+    const header = req.headers.authorization || '';
+    const token = header.startsWith('Bearer ') ? header.slice(7) : (req.headers['x-admin-token'] || req.query.adminToken);
+    if (token === ADMIN_TOKEN) return next();
+    return res.sendStatus(401);
+};
+const escapeHtml = (value) => String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+
 // ==========================================
 // ADDRESS ENGINE
 // ==========================================
@@ -369,6 +385,12 @@ const initDb = async () => {
         ['live_updates', 'tour_remaining_duration', 'BIGINT'],
         ['live_updates', 'include_rests', 'BOOLEAN DEFAULT TRUE'],
         ['live_updates', 'next_break_in_seconds', 'BIGINT'],
+        ['costs', 'photo_path', 'TEXT'],
+        ['hotels', 'room_number', 'TEXT'],
+        ['hotels', 'entry_code', 'TEXT'],
+        ['hotels', 'phone_number', 'TEXT'],
+        ['hotels', 'email', 'TEXT'],
+        ['hotels', 'notes', 'TEXT'],
         ['drivers', 'photo_url', 'TEXT'],
         ['drivers', 'home_lat', 'DOUBLE PRECISION'],
         ['drivers', 'home_lng', 'DOUBLE PRECISION'],
@@ -537,14 +559,90 @@ app.post('/api/sync-costs', async (req, res) => {
     try {
         await client.query('BEGIN');
         for (const c of req.body) {
-            await client.query('INSERT INTO costs (uuid, driver_name, amount, currency, category, notes, mileage, timestamp) VALUES (COALESCE($1::UUID, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8) ON CONFLICT (uuid) DO UPDATE SET amount = EXCLUDED.amount, status = EXCLUDED.status, notes = EXCLUDED.notes, mileage = EXCLUDED.mileage',
-                [c.uuid || null, c.driverName, c.amount, c.currency, c.category, c.notes, c.mileage, c.timestamp]);
+            await client.query(`INSERT INTO costs (uuid, driver_name, amount, currency, category, notes, mileage, photo_path, status, timestamp)
+                VALUES (COALESCE($1::UUID, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8, COALESCE($9, 'RĂ¶gzĂ­tve'), $10)
+                ON CONFLICT (uuid) DO UPDATE SET
+                    driver_name = EXCLUDED.driver_name,
+                    amount = EXCLUDED.amount,
+                    currency = EXCLUDED.currency,
+                    category = EXCLUDED.category,
+                    notes = EXCLUDED.notes,
+                    mileage = EXCLUDED.mileage,
+                    photo_path = EXCLUDED.photo_path,
+                    status = EXCLUDED.status,
+                    timestamp = EXCLUDED.timestamp`,
+                [c.uuid || null, c.driverName, c.amount, c.currency, c.category, c.notes, c.mileage, c.photoPath || c.photo_path || null, c.status || null, c.timestamp]);
         }
         await client.query('COMMIT');
         res.sendStatus(200);
     } catch (e) {
         await client.query('ROLLBACK');
         console.error(`[SYNC-COSTS-ERROR] ${e.message}`);
+        res.status(500).send(e.message);
+    } finally {
+        client.release();
+    }
+});
+
+app.get('/api/cost-status/:driverName', async (req, res) => {
+    try {
+        const result = await pool.query(
+            'SELECT id, uuid, status, timestamp, amount FROM costs WHERE driver_name = $1 ORDER BY timestamp DESC',
+            [req.params.driverName]
+        );
+        res.json(result.rows.map(r => ({
+            id: r.id,
+            uuid: r.uuid,
+            status: r.status,
+            timestamp: Number(r.timestamp),
+            amount: Number(r.amount)
+        })));
+    } catch (e) {
+        res.status(500).send(e.message);
+    }
+});
+
+app.post('/admin/update-cost-status', requireAdmin, async (req, res) => {
+    const { uuid, id, status } = req.body;
+    const allowed = new Set(['RĂ¶gzĂ­tve', 'BekĂĽldve', 'Elfogadva', 'Kifizetve', 'Rogzitve', 'Bekuldve']);
+    if (!status || (!uuid && !id)) return res.sendStatus(400);
+    if (!allowed.has(status)) return res.status(400).send('Invalid status');
+    try {
+        if (uuid) {
+            await pool.query('UPDATE costs SET status = $1 WHERE uuid::text = $2', [status, uuid]);
+        } else {
+            await pool.query('UPDATE costs SET status = $1 WHERE id = $2', [status, id]);
+        }
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).send(e.message);
+    }
+});
+
+app.post('/api/sync-hotels', async (req, res) => {
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        for (const h of (req.body || [])) {
+            await client.query(`INSERT INTO hotels (uuid, driver_name, name, address, room_number, entry_code, phone_number, email, notes, timestamp)
+                VALUES (COALESCE($1::UUID, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                ON CONFLICT (uuid) DO UPDATE SET
+                    driver_name = EXCLUDED.driver_name,
+                    name = EXCLUDED.name,
+                    address = EXCLUDED.address,
+                    room_number = EXCLUDED.room_number,
+                    entry_code = EXCLUDED.entry_code,
+                    phone_number = EXCLUDED.phone_number,
+                    email = EXCLUDED.email,
+                    notes = EXCLUDED.notes,
+                    timestamp = EXCLUDED.timestamp`,
+                [h.uuid || null, h.driverName, h.name, h.address, h.roomNumber || h.room_number || '', h.entryCode || h.entry_code || '', h.phoneNumber || h.phone_number || '', h.email || '', h.notes || '', h.timestamp || Date.now()]);
+        }
+        await client.query('COMMIT');
+        res.sendStatus(200);
+    } catch (e) {
+        await client.query('ROLLBACK');
+        console.error(`[SYNC-HOTELS-ERROR] ${e.message}`);
         res.status(500).send(e.message);
     } finally {
         client.release();
@@ -638,7 +736,7 @@ app.get('/api/get-profile/:name', async (req, res) => {
     } catch (e) { res.status(500).send(e.message); }
 });
 
-app.post('/admin/save-driver', async (req, res) => {
+app.post('/admin/save-driver', requireAdmin, async (req, res) => {
     const d = req.body;
     const client = await pool.connect();
     try {
@@ -679,7 +777,7 @@ app.post('/admin/save-driver', async (req, res) => {
     }
 });
 
-app.post('/admin/delete-driver', async (req, res) => {
+app.post('/admin/delete-driver', requireAdmin, async (req, res) => {
     const { uuid } = req.body;
     try {
         await pool.query('DELETE FROM drivers WHERE uuid = $1', [uuid]);
@@ -703,14 +801,31 @@ app.post('/api/upload-photo', async (req, res) => {
 
         console.log(`[UPLOAD] Receiving photo for ${identifier}, size: ${imageBase64.length} chars`);
 
-        const fileName = `photo_${String(identifier).replace(/[^a-z0-9]/gi, '_')}_${Date.now()}.jpg`;
-        const filePath = `uploads/${fileName}`;
-        const buffer = Buffer.from(imageBase64, 'base64');
+        const normalizedBase64 = String(imageBase64).replace(/^data:image\/[a-zA-Z0-9.+-]+;base64,/, '');
+        if (!/^[a-zA-Z0-9+/=\r\n]+$/.test(normalizedBase64)) {
+            return res.status(400).send('Invalid base64 data');
+        }
+
+        const buffer = Buffer.from(normalizedBase64, 'base64');
 
         if (buffer.length === 0) {
             console.warn('[UPLOAD] Decoded buffer is empty');
             return res.status(400).send('Invalid base64 data');
         }
+        if (buffer.length > MAX_UPLOAD_BYTES) {
+            return res.status(413).send('Image too large');
+        }
+
+        let ext = null;
+        if (buffer.length > 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) ext = 'jpg';
+        if (buffer.length > 8 && buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47) ext = 'png';
+        if (buffer.length > 12 && buffer.toString('ascii', 0, 4) === 'RIFF' && buffer.toString('ascii', 8, 12) === 'WEBP') ext = 'webp';
+        if (!ext) {
+            return res.status(400).send('Unsupported image type');
+        }
+
+        const fileName = `photo_${String(identifier).replace(/[^a-z0-9]/gi, '_')}_${Date.now()}.${ext}`;
+        const filePath = `uploads/${fileName}`;
 
         fs.writeFileSync(filePath, buffer);
         console.log(`[UPLOAD] Saved to ${filePath}, size: ${buffer.length} bytes`);
@@ -770,7 +885,7 @@ app.get('/api/get-tours/:driverName', async (req, res) => {
     } catch (e) { res.status(500).send(e.message); }
 });
 
-app.post('/admin/save-tour', async (req, res) => {
+app.post('/admin/save-tour', requireAdmin, async (req, res) => {
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
@@ -781,7 +896,7 @@ app.post('/admin/save-tour', async (req, res) => {
     finally { client.release(); }
 });
 
-app.post('/admin/transfer-tour', async (req, res) => {
+app.post('/admin/transfer-tour', requireAdmin, async (req, res) => {
     const { tourId, newDriverName } = req.body;
     const client = await pool.connect();
     try {
@@ -806,7 +921,7 @@ app.post('/admin/transfer-tour', async (req, res) => {
     }
 });
 
-app.post('/admin/delete-tour', async (req, res) => {
+app.post('/admin/delete-tour', requireAdmin, async (req, res) => {
     const now = Date.now();
     await pool.query('UPDATE stops SET deleted_at = $1, updated_at = $1 WHERE tour_id = $2', [now, req.body.id]);
     await pool.query('UPDATE tours SET deleted_at = $1, updated_at = $1 WHERE id = $2', [now, req.body.id]);
@@ -858,6 +973,36 @@ app.get('/api/fleet-status', async (req, res) => {
     } catch (e) { res.status(500).send(e.message); }
 });
 
+app.get('/api/stats/:driverName', async (req, res) => {
+    try {
+        const driverName = req.params.driverName;
+        const now = new Date();
+        const today = now.toISOString().split('T')[0];
+        const month = today.slice(0, 7);
+        const work = (await pool.query('SELECT * FROM work_times WHERE driver_name = $1 AND date LIKE $2', [driverName, `${month}%`])).rows;
+        const costs = (await pool.query('SELECT COALESCE(SUM(amount), 0) AS total, COUNT(*)::INT AS count FROM costs WHERE driver_name = $1 AND timestamp >= $2', [driverName, new Date(`${month}-01T00:00:00.000Z`).getTime()])).rows[0];
+        const tours = (await pool.query('SELECT COUNT(*)::INT AS count FROM tours WHERE driver_name = $1 AND deleted_at IS NULL AND date >= $2', [driverName, new Date(`${month}-01T00:00:00.000Z`).getTime()])).rows[0];
+
+        const sumSeconds = (rows, type, onlyToday = false) => rows
+            .filter(w => (!type || w.type === type) && (!onlyToday || w.date === today))
+            .reduce((sum, w) => sum + Math.max(0, Number(w.end_time || Date.now()) - Number(w.start_time || 0)) / 1000, 0);
+
+        res.json({
+            today,
+            month,
+            workTodaySeconds: Math.round(sumSeconds(work, null, true)),
+            drivingTodaySeconds: Math.round(sumSeconds(work, 'VezetĂ©s', true)),
+            workMonthSeconds: Math.round(sumSeconds(work, null, false)),
+            drivingMonthSeconds: Math.round(sumSeconds(work, 'VezetĂ©s', false)),
+            costMonthTotal: Number(costs.total || 0),
+            costMonthCount: Number(costs.count || 0),
+            tourMonthCount: Number(tours.count || 0)
+        });
+    } catch (e) {
+        res.status(500).send(e.message);
+    }
+});
+
 app.get('/', async (req, res) => {
     try {
         const driversRes = await pool.query(`
@@ -875,7 +1020,7 @@ app.get('/', async (req, res) => {
             LEFT JOIN drivers d ON d.name = all_drivers.driver_name
             ORDER BY all_drivers.driver_name, all_drivers.timestamp DESC
         `);
-        let list = driversRes.rows.map(d => `<div class="card" onclick="location.href='/driver/${encodeURIComponent(d.driver_name)}'"><img src="${d.driver_photo || ''}" style="width:50px;height:50px;border-radius:50%;float:right;background:#444"><h3>${d.driver_name}</h3><p>${d.status} ${d.license_plate ? '| ' + d.license_plate : ''}</p></div>`).join('');
+        let list = driversRes.rows.map(d => '<div class="card" onclick="location.href=\'/driver/' + encodeURIComponent(d.driver_name) + '\'"><img src="' + escapeHtml(d.driver_photo || '') + '" style="width:50px;height:50px;border-radius:50%;float:right;background:#444;object-fit:cover;"><h3>' + escapeHtml(d.driver_name) + '</h3><p>' + escapeHtml(d.status) + (d.license_plate ? ' | ' + escapeHtml(d.license_plate) : '') + '</p></div>').join('');
         res.send(`<html><head><title>Driver ERP</title><style>
             body { font-family: sans-serif; background: #1a1a1a; color: white; padding: 40px; }
             .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 20px; }
@@ -950,6 +1095,15 @@ app.get('/', async (req, res) => {
             </div>
 
             <script>
+                function esc(value) {
+                    return String(value ?? '').replace(/[&<>"']/g, ch => ({
+                        '&': '&amp;',
+                        '<': '&lt;',
+                        '>': '&gt;',
+                        '"': '&quot;',
+                        "'": '&#39;'
+                    }[ch]));
+                }
                 function toggleAdmin() {
                     const isAdmin = document.getElementById('admin-section').classList.toggle('active');
                     document.getElementById('fleet-section').classList.toggle('active', !isAdmin);
@@ -965,9 +1119,9 @@ app.get('/', async (req, res) => {
                         const drivers = await r.json();
                         document.getElementById('driver-grid').innerHTML = drivers.map(d =>
                             '<div class="card" onclick="location.href=\'/driver/' + encodeURIComponent(d.driver_name) + '\'">' +
-                                '<img src="' + (d.driver_photo || '') + '" style="width:50px;height:50px;border-radius:50%;float:right;background:#444;object-fit:cover;">' +
-                                '<h3>' + d.driver_name + '</h3>' +
-                                '<p>' + d.status + (d.license_plate ? ' | ' + d.license_plate : '') + '</p>' +
+                                '<img src="' + esc(d.driver_photo || '') + '" style="width:50px;height:50px;border-radius:50%;float:right;background:#444;object-fit:cover;">' +
+                                '<h3>' + esc(d.driver_name) + '</h3>' +
+                                '<p>' + esc(d.status) + (d.license_plate ? ' | ' + esc(d.license_plate) : '') + '</p>' +
                             '</div>').join('');
                     } catch (e) { console.error('Fleet refresh error:', e); }
                 }
@@ -978,12 +1132,12 @@ app.get('/', async (req, res) => {
                     document.getElementById('drivers-list').innerHTML = drivers.map(d =>
                         '<tr>' +
                             '<td>' +
-                                '<img src="' + (d.photo_url || '') + '" style="width:30px;height:30px;border-radius:50%;vertical-align:middle;margin-right:10px;background:#444;object-fit:cover;">' +
-                                '<b>' + d.name + '</b>' +
+                                '<img src="' + esc(d.photo_url || '') + '" style="width:30px;height:30px;border-radius:50%;vertical-align:middle;margin-right:10px;background:#444;object-fit:cover;">' +
+                                '<b>' + esc(d.name) + '</b>' +
                             '</td>' +
-                            '<td>' + (d.email || '') + '<br><small>' + (d.phone || '') + '</small></td>' +
-                            '<td>' + (d.license_plate || '') + '</td>' +
-                            '<td><code style="background:#444; padding:2px 5px;">' + (d.activation_code || '---') + '</code></td>' +
+                            '<td>' + esc(d.email || '') + '<br><small>' + esc(d.phone || '') + '</small></td>' +
+                            '<td>' + esc(d.license_plate || '') + '</td>' +
+                            '<td><code style="background:#444; padding:2px 5px;">' + esc(d.activation_code || '---') + '</code></td>' +
                             '<td><span style="color:' + (d.is_active ? '#2ecc71' : '#e74c3c') + '">' + (d.is_active ? 'AKTÍV' : 'INAKTÍV') + '</span></td>' +
                             '<td>' +
                                 '<button onclick=\'editDriver(' + JSON.stringify(d).replace(/'/g, "&apos;") + ')\'>✏</button>' +
@@ -1110,7 +1264,7 @@ app.get('/driver/:name', async (req, res) => {
     const chat = (await pool.query('SELECT * FROM chat_messages WHERE driver_name = $1 ORDER BY timestamp ASC', [name])).rows;
     const work = (await pool.query('SELECT DISTINCT ON (start_time) * FROM work_times WHERE driver_name = $1 ORDER BY start_time DESC, id DESC', [name])).rows;
     const toursRes = (await pool.query('SELECT * FROM tours WHERE driver_name = $1 AND deleted_at IS NULL ORDER BY date DESC', [name])).rows;
-    const hotelsRes = (await pool.query(`SELECT name::TEXT, address::TEXT, timestamp::BIGINT FROM hotels WHERE driver_name = $1 UNION ALL SELECT COALESCE(recipient, address_full)::TEXT as name, address_full::TEXT as address, COALESCE(arrival_time::BIGINT, (SELECT date::BIGINT FROM tours WHERE id = tour_id))::BIGINT as timestamp FROM stops WHERE tour_id IN (SELECT id FROM tours WHERE driver_name = $1) AND stop_type = 'HOTEL' ORDER BY timestamp DESC`, [name])).rows;
+    const hotelsRes = (await pool.query(`SELECT name::TEXT, address::TEXT, room_number::TEXT, entry_code::TEXT, timestamp::BIGINT FROM hotels WHERE driver_name = $1 UNION ALL SELECT COALESCE(recipient, address_full)::TEXT as name, address_full::TEXT as address, ''::TEXT as room_number, ''::TEXT as entry_code, COALESCE(arrival_time::BIGINT, (SELECT date::BIGINT FROM tours WHERE id = tour_id))::BIGINT as timestamp FROM stops WHERE tour_id IN (SELECT id FROM tours WHERE driver_name = $1) AND stop_type = 'HOTEL' ORDER BY timestamp DESC`, [name])).rows;
     for (let t of toursRes) t.stops = (await pool.query('SELECT * FROM stops WHERE tour_id = $1 AND deleted_at IS NULL ORDER BY order_index ASC', [t.id])).rows;
     const currentTourObj = toursRes.find(t => t.is_current);
     const currentStopsJson = JSON.stringify(currentTourObj ? currentTourObj.stops : []);
@@ -1218,8 +1372,8 @@ app.get('/driver/:name', async (req, res) => {
                             <button onclick='editTour(${JSON.stringify(t).replace(/'/g, "&apos;")})'>✏</button>
                             <button onclick="deleteTour(${t.id})" style="background:#e74c3c; color:white;">🗑</button>
                         </div>
-                        <b>${t.name}</b> (${t.customer}) - ${new Date(Number(t.date)).toLocaleDateString()}
-                        ${t.stops.map(s => "<div class='stop-item'>" + (s.order_index + 1) + ". " + (s.stop_type === 'HOTEL' ? '🏨 ' : (s.stop_type === 'DEPOT' ? '🏠 ' : '')) + s.address + "</div>").join('')}
+                        <b>${escapeHtml(t.name)}</b> (${escapeHtml(t.customer || '')}) - ${new Date(Number(t.date)).toLocaleDateString()}
+                        ${t.stops.map(s => "<div class='stop-item'>" + (s.order_index + 1) + ". " + (s.stop_type === 'HOTEL' ? '🏨 ' : (s.stop_type === 'DEPOT' ? '🏠 ' : '')) + escapeHtml(s.address || s.address_full || '') + "</div>").join('')}
                     </div>
                 `).join('')}
             </div>
@@ -1238,11 +1392,11 @@ app.get('/driver/:name', async (req, res) => {
                 </div>
             </div>
         </div>
-        <div id="costs" class="tab-content"><table><tr><th>Dátum</th><th>Kategória</th><th>Összeg</th><th>Státusz</th></tr>${costs.map(c => `<tr><td>${new Date(Number(c.timestamp)).toLocaleDateString()}</td><td>${c.category}</td><td>${c.amount} ${c.currency}</td><td>${c.status}</td></tr>`).join('')}</table></div>
-        <div id="hotels" class="tab-content"><table><tr><th>Dátum</th><th>Név</th><th>Cím</th></tr>${hotelsRes.map(h => `<tr><td>${new Date(Number(h.timestamp)).toLocaleDateString()}</td><td>${h.name}</td><td>${h.address}</td></tr>`).join('')}</table></div>
+        <div id="costs" class="tab-content"><table><tr><th>Dátum</th><th>Kategória</th><th>Összeg</th><th>Státusz</th><th>Művelet</th></tr>${costs.map(c => `<tr data-cost-id="${c.id}" data-cost-uuid="${escapeHtml(c.uuid || '')}"><td>${new Date(Number(c.timestamp)).toLocaleDateString()}</td><td>${escapeHtml(c.category)}</td><td>${escapeHtml(c.amount)} ${escapeHtml(c.currency)}</td><td class="cost-status">${escapeHtml(c.status)}</td><td><button onclick="updateCostStatus('${escapeHtml(c.uuid || '')}', ${c.id}, 'Elfogadva')">Elfogadás</button> <button onclick="updateCostStatus('${escapeHtml(c.uuid || '')}', ${c.id}, 'Kifizetve')">Kifizetve</button></td></tr>`).join('')}</table></div>
+        <div id="hotels" class="tab-content"><table><tr><th>Dátum</th><th>Név</th><th>Cím</th><th>Szoba</th><th>Kód</th></tr>${hotelsRes.map(h => `<tr><td>${new Date(Number(h.timestamp)).toLocaleDateString()}</td><td>${escapeHtml(h.name)}</td><td>${escapeHtml(h.address)}</td><td>${escapeHtml(h.room_number || '')}</td><td>${escapeHtml(h.entry_code || '')}</td></tr>`).join('')}</table></div>
         <div id="chat" class="tab-content">
             <div id="chat-messages" style="height:400px; background:#111; padding:15px; overflow-y:auto; display:flex; flex-direction:column; margin-bottom:15px;">
-                ${chat.map(m => `<div class="msg ${m.sender === 'DISZPÉCSER' ? 'msg-boss' : 'msg-driver'}"><b>${m.sender}:</b><br>${m.message}</div>`).join('')}
+                ${chat.map(m => `<div class="msg ${m.sender === 'DISZPÉCSER' ? 'msg-boss' : 'msg-driver'}"><b>${escapeHtml(m.sender)}:</b><br>${escapeHtml(m.message)}</div>`).join('')}
             </div>
             <div style="display:flex; gap:10px;">
                 <input type="text" id="chat-input" placeholder="Üzenet írása..." onkeypress="if(event.key==='Enter') sendChat()">
@@ -1298,6 +1452,15 @@ app.get('/driver/:name', async (req, res) => {
         </div>
 
         <script>
+            function esc(value) {
+                return String(value ?? '').replace(/[&<>"']/g, ch => ({
+                    '&': '&amp;',
+                    '<': '&lt;',
+                    '>': '&gt;',
+                    '"': '&quot;',
+                    "'": '&#39;'
+                }[ch]));
+            }
             function openTab(e, t) {
                 localStorage.setItem('activeTab_${name}', t);
                 document.querySelectorAll('.tab-content').forEach(x => {
@@ -1319,6 +1482,9 @@ app.get('/driver/:name', async (req, res) => {
                             if (historyMap) historyMap.invalidateSize();
                             else initHistoryMap();
                         }, 100);
+                    }
+                    if (t === 'stats') {
+                        loadStats();
                     }
                 }
             }
@@ -1409,6 +1575,37 @@ app.get('/driver/:name', async (req, res) => {
                 return hours + ':' + mins.toString().padStart(2, '0');
             }
 
+            async function loadStats() {
+                try {
+                    const r = await fetch('/api/stats/' + encodeURIComponent('${name}'));
+                    if (!r.ok) throw new Error(await r.text());
+                    const s = await r.json();
+                    const box = document.getElementById('statsBox');
+                    if (!box) return;
+                    box.innerHTML =
+                        '<div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:15px;">' +
+                            statCard('Mai munkaido', formatDuration(s.workTodaySeconds)) +
+                            statCard('Mai vezetes', formatDuration(s.drivingTodaySeconds)) +
+                            statCard('Havi munkaido', formatDuration(s.workMonthSeconds)) +
+                            statCard('Havi vezetes', formatDuration(s.drivingMonthSeconds)) +
+                            statCard('Havi koltseg', Number(s.costMonthTotal || 0).toFixed(2)) +
+                            statCard('Koltseg tetelek', s.costMonthCount) +
+                            statCard('Havi turak', s.tourMonthCount) +
+                        '</div>';
+                } catch (e) {
+                    const box = document.getElementById('statsBox');
+                    if (box) box.innerHTML = '<p style="color:#e74c3c;">Nem sikerult betolteni a statisztikat.</p>';
+                    console.error('Stats error:', e);
+                }
+            }
+
+            function statCard(label, value) {
+                return '<div style="background:#222; padding:18px; border-radius:8px;">' +
+                    '<div style="font-size:12px; color:#aaa; text-transform:uppercase;">' + esc(label) + '</div>' +
+                    '<div style="font-size:24px; font-weight:bold; margin-top:8px;">' + esc(value) + '</div>' +
+                '</div>';
+            }
+
             function calculateAdjustedDuration(pureSec, doneSec) {
                 if (!pureSec) return 0;
                 let total = pureSec;
@@ -1466,7 +1663,7 @@ app.get('/driver/:name', async (req, res) => {
             // Sofőr marker (kék kör fehér szegéllyel)
             const driverMarker = L.circleMarker([driverLat, driverLng], {
                 color: '#3498db', radius: 10, fillOpacity: 1, weight: 3, fillColor: '#fff'
-            }).addTo(map).bindPopup(\`<b>${name}</b><br><span id="popup-speed">Sebesség: ${Math.round(update.speed || 0)} km/h</span>\`);
+            }).addTo(map).bindPopup('<b>' + '${name}' + '</b><br><span id="popup-speed">Sebesség: ' + Math.round(update.speed || 0) + ' km/h</span>');
 
             let routeLayer = null;
             let lastNextLat = ${update.next_lat || 0};
@@ -1563,7 +1760,7 @@ app.get('/driver/:name', async (req, res) => {
             if (d.latitude && d.longitude) {
                         const newPos = [d.latitude, d.longitude];
                         driverMarker.setLatLng(newPos);
-                        driverMarker.setPopupContent(\`<b>${name}</b><br>Sebesség: \` + Math.round(d.speed || 0) + ' km/h');
+                        driverMarker.setPopupContent('<b>' + '${name}' + '</b><br>Sebesség: ' + Math.round(d.speed || 0) + ' km/h');
 
                         // Útvonal frissítése ha mozog vagy a célpont változott
                         if (d.next_lat !== lastNextLat || d.next_lng !== lastNextLng || Math.abs(d.latitude - lastUpdateLat) > 0.0005) {
@@ -1765,20 +1962,24 @@ app.get('/driver/:name', async (req, res) => {
             }
 
             async function refreshDrivers() {
-                const r = await fetch('/api/all-drivers');
-                const drivers = await r.json();
-                document.getElementById('drivers-list').innerHTML = drivers.map(d => \`
-                    <tr>
-                        <td><b>\${d.name}</b></td>
-                        <td>\${d.email || ''}<br><small>\${d.phone || ''}</small></td>
-                        <td>\${d.license_plate || ''}</td>
-                        <td><code style="background:#444; padding:2px 5px;">\${d.activation_code || '---'}</code></td>
-                        <td><span style="color:\${d.is_active ? '#2ecc71' : '#e74c3c'}">\${d.is_active ? 'AKTÍV' : 'INAKTÍV'}</span></td>
-                        <td>
-                            <button onclick='editDriver(\${JSON.stringify(d).replace(/'/g, "&apos;")})'>✏</button>
-                            <button onclick="deleteDriver('\${d.uuid}')" style="background:#e74c3c; color:white; border:none; border-radius:4px; padding:5px 10px; cursor:pointer;">🗑</button>
-                        </td>
-                    </tr>\`).join('');
+                try {
+                    const r = await fetch('/api/all-drivers');
+                    const drivers = await r.json();
+                    const container = document.getElementById('drivers-list');
+                    if (!container) return;
+                    container.innerHTML = drivers.map(d =>
+                        '<tr>' +
+                            '<td><b>' + esc(d.name) + '</b></td>' +
+                            '<td>' + esc(d.email || '') + '<br><small>' + esc(d.phone || '') + '</small></td>' +
+                            '<td>' + esc(d.license_plate || '') + '</td>' +
+                            '<td><code style="background:#444; padding:2px 5px;">' + esc(d.activation_code || '---') + '</code></td>' +
+                            '<td><span style="color:' + (d.is_active ? '#2ecc71' : '#e74c3c') + '">' + (d.is_active ? 'AKTÍV' : 'INAKTÍV') + '</span></td>' +
+                            '<td>' +
+                                '<button onclick=\'editDriver(' + JSON.stringify(d).replace(/'/g, "&apos;") + ')\'>✏</button>' +
+                                '<button onclick="deleteDriver(\'' + d.uuid + '\')" style="background:#e74c3c; color:white; border:none; border-radius:4px; padding:5px 10px; cursor:pointer;">🗑</button>' +
+                            '</td>' +
+                        '</tr>').join('');
+                } catch(e) { console.error('refreshDrivers error:', e); }
             }
             refreshDrivers();
 
@@ -1870,16 +2071,15 @@ app.get('/driver/:name', async (req, res) => {
                     container.innerHTML = data.map(item => {
                         const t = item.tour;
                         const stops = item.stops;
-                        return \`
-                        <div class="tour-card">
-                            <div style="float:right; display:flex; gap:5px;">
-                                <select onchange="transferTour(\${t.id}, this.value)" style="width:auto;"><option value="">-- Áthelyezés --</option>\${allDNames.map(n => "<option value='" + n + "'>" + n + "</option>").join('')}</select>
-                                <button onclick='editTour(\${JSON.stringify(t).replace(/'/g, "&apos;")})'>✏</button>
-                                <button onclick="deleteTour(\${t.id})" style="background:#e74c3c; color:white;">🗑</button>
-                            </div>
-                            <b>\${t.name}</b> (\${t.customer}) - \${new Date(Number(t.date)).toLocaleDateString()}
-                            \${stops.map(s => "<div class='stop-item'>" + (s.order_index + 1) + ". " + (s.stop_type === 'HOTEL' ? '🏨 ' : (s.stop_type === 'DEPOT' ? '🏠 ' : '')) + s.address + "</div>").join('')}
-                        </div>\`;
+                        return '<div class="tour-card">' +
+                            '<div style="float:right; display:flex; gap:5px;">' +
+                                '<select onchange="transferTour(' + t.id + ', this.value)" style="width:auto;"><option value="">-- Áthelyezés --</option>' + allDNames.map(n => "<option value='" + n + "'>" + n + "</option>").join('') + '</select>' +
+                                '<button onclick=\'editTour(' + JSON.stringify(t).replace(/'/g, "&apos;") + ')\'>✏</button>' +
+                                '<button onclick="deleteTour(' + t.id + ')" style="background:#e74c3c; color:white;">🗑</button>' +
+                            '</div>' +
+                            '<b>' + esc(t.name) + '</b> (' + esc(t.customer || '') + ') - ' + new Date(Number(t.date)).toLocaleDateString() + ' ' +
+                            stops.map(s => "<div class='stop-item'>" + (s.order_index + 1) + ". " + (s.stop_type === 'HOTEL' ? '🏨 ' : (s.stop_type === 'DEPOT' ? '🏠 ' : '')) + esc(s.address || s.address_full || '') + "</div>").join('') +
+                        '</div>';
                     }).join('');
                 } catch (e) { console.error('Refresh tours error:', e); }
             }
@@ -1913,15 +2113,34 @@ app.get('/driver/:name', async (req, res) => {
                     const data = await r.json();
                     const container = document.getElementById('chat-messages');
                     if (!container) return;
-                    container.innerHTML = data.map(m => \`
-                        <div class="msg \${m.sender === 'DISZPÉCSER' ? 'msg-boss' : 'msg-driver'}">
-                            <b>\${m.sender}:</b><br>\${m.message}
-                        </div>\`).join('');
+                    container.innerHTML = data.map(m =>
+                        '<div class="msg ' + (m.sender === 'DISZPÉCSER' ? 'msg-boss' : 'msg-driver') + '">' +
+                            '<b>' + esc(m.sender) + ':</b><br>' + esc(m.message) +
+                        '</div>').join('');
                     container.scrollTop = container.scrollHeight;
                 } catch (e) { console.error('Refresh chat error:', e); }
             }
 
             setInterval(refreshChat, 3000);
+
+            async function updateCostStatus(uuid, id, status) {
+                try {
+                    const r = await fetch('/admin/update-cost-status', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({ uuid: uuid || null, id, status })
+                    });
+                    if (!r.ok) {
+                        showToast('Nem sikerult frissiteni a koltseg statuszat.');
+                        return;
+                    }
+                    const row = document.querySelector('tr[data-cost-id="' + id + '"]');
+                    if (row) row.querySelector('.cost-status').innerText = status;
+                    showToast('Koltseg statusz frissitve.');
+                } catch (e) {
+                    console.error('Cost status error:', e);
+                }
+            }
 
             function transferTour(tourId, newDriverName) { if (!newDriverName) return; if (confirm('Áthelyezed ' + newDriverName + ' részére?')) fetch('/admin/transfer-tour', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ tourId, newDriverName }) }).then(r => { if(r.ok) { showToast('Túra sikeresen áthelyezve!'); refreshTours(); } }); }
             function deleteTour(id) { if(confirm('Törlöd?')) fetch('/admin/delete-tour', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({id}) }).then(r => { if(r.ok) { showToast('Túra törölve!'); refreshTours(); } }); }
