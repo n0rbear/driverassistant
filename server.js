@@ -503,13 +503,52 @@ app.get('/api/get-chat/:driverName', async (req, res) => {
 });
 
 app.post('/api/sync-worktimes', async (req, res) => {
-    for (const wt of req.body) await pool.query(`INSERT INTO work_times (uuid, driver_name, type, start_time, end_time, mileage, end_mileage, license_plate, notes, date) VALUES (COALESCE($1::UUID, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8, $9, $10) ON CONFLICT (driver_name, start_time) DO UPDATE SET end_time = EXCLUDED.end_time, end_mileage = EXCLUDED.end_mileage, notes = EXCLUDED.notes`, [wt.uuid || null, wt.driverName, wt.type, wt.startTime, wt.endTime, wt.mileage, wt.endMileage, wt.licensePlate, wt.notes, wt.date]);
-    res.sendStatus(200);
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        for (const wt of req.body) {
+            await client.query(`INSERT INTO work_times (uuid, driver_name, type, start_time, end_time, mileage, end_mileage, license_plate, notes, date)
+                VALUES (COALESCE($1::UUID, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                ON CONFLICT (uuid) DO UPDATE SET
+                    driver_name = EXCLUDED.driver_name,
+                    type = EXCLUDED.type,
+                    start_time = EXCLUDED.start_time,
+                    end_time = EXCLUDED.end_time,
+                    mileage = EXCLUDED.mileage,
+                    end_mileage = EXCLUDED.end_mileage,
+                    license_plate = EXCLUDED.license_plate,
+                    notes = EXCLUDED.notes,
+                    date = EXCLUDED.date`,
+                [wt.uuid || null, wt.driverName, wt.type, wt.startTime, wt.endTime, wt.mileage, wt.endMileage, wt.licensePlate, wt.notes, wt.date]);
+        }
+        await client.query('COMMIT');
+        res.sendStatus(200);
+    } catch (e) {
+        await client.query('ROLLBACK');
+        console.error(`[SYNC-WORKTIMES-ERROR] ${e.message}`);
+        res.status(500).send(e.message);
+    } finally {
+        client.release();
+    }
 });
 
 app.post('/api/sync-costs', async (req, res) => {
-    for (const c of req.body) await pool.query('INSERT INTO costs (uuid, driver_name, amount, currency, category, notes, mileage, timestamp) VALUES (COALESCE($1::UUID, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8) ON CONFLICT (driver_name, timestamp, amount) DO UPDATE SET status = EXCLUDED.status, notes = EXCLUDED.notes', [c.uuid || null, c.driverName, c.amount, c.currency, c.category, c.notes, c.mileage, c.timestamp]);
-    res.sendStatus(200);
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        for (const c of req.body) {
+            await client.query('INSERT INTO costs (uuid, driver_name, amount, currency, category, notes, mileage, timestamp) VALUES (COALESCE($1::UUID, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8) ON CONFLICT (uuid) DO UPDATE SET amount = EXCLUDED.amount, status = EXCLUDED.status, notes = EXCLUDED.notes, mileage = EXCLUDED.mileage',
+                [c.uuid || null, c.driverName, c.amount, c.currency, c.category, c.notes, c.mileage, c.timestamp]);
+        }
+        await client.query('COMMIT');
+        res.sendStatus(200);
+    } catch (e) {
+        await client.query('ROLLBACK');
+        console.error(`[SYNC-COSTS-ERROR] ${e.message}`);
+        res.status(500).send(e.message);
+    } finally {
+        client.release();
+    }
 });
 
 app.post('/api/set-current-tour', async (req, res) => {
@@ -539,23 +578,56 @@ app.post('/api/activate-driver', async (req, res) => {
 
 app.post('/api/sync-profile', async (req, res) => {
     const d = req.body;
+    const client = await pool.connect();
     try {
-        const existing = await pool.query('SELECT activation_code FROM drivers WHERE name = $1', [d.name]);
-        let code = existing.rows.length > 0 ? existing.rows[0].activation_code : null;
-        if (!code) {
-            code = Math.random().toString(36).substring(2, 8).toUpperCase();
+        await client.query('BEGIN');
+
+        // Először próbáljuk meg UUID alapján azonosítani, ha az app küldi
+        let driverRes;
+        if (d.uuid) {
+            driverRes = await client.query('SELECT * FROM drivers WHERE uuid = $1', [d.uuid]);
+        } else {
+            // Ha nincs UUID, akkor név alapján keressük (visszafelé kompatibilitás)
+            driverRes = await client.query('SELECT * FROM drivers WHERE name = $1', [d.name]);
         }
 
-        await pool.query(
-            `INSERT INTO drivers (name, email, phone, whatsapp, telegram, license_plate, photo_url, activation_code, is_active)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, true)
-             ON CONFLICT (name) DO UPDATE SET
-             email = EXCLUDED.email, phone = EXCLUDED.phone, whatsapp = EXCLUDED.whatsapp,
-             telegram = EXCLUDED.telegram, license_plate = EXCLUDED.license_plate, photo_url = EXCLUDED.photo_url`,
-            [d.name, d.email, d.phone, d.whatsapp, d.telegram, d.licensePlate, d.photoUrl, code]
-        );
+        const driver = driverRes.rows[0];
+
+        if (driver) {
+            const oldName = driver.name;
+            await client.query(
+                `UPDATE drivers SET name=$1, email=$2, phone=$3, whatsapp=$4, telegram=$5, license_plate=$6, photo_url=$7, is_active=true
+                 WHERE uuid=$8`,
+                [d.name, d.email, d.phone, d.whatsapp, d.telegram, d.licensePlate, d.photoUrl, driver.uuid]
+            );
+
+            // Ha megváltozott a név, frissítsük az összes kapcsolódó táblát is
+            if (oldName !== d.name) {
+                console.log(`[RENAME] Cascading name change: ${oldName} -> ${d.name}`);
+                const tables = ['live_updates', 'costs', 'chat_messages', 'work_times', 'hotels', 'tours'];
+                for (const t of tables) {
+                    await client.query(`UPDATE ${t} SET driver_name = $1 WHERE driver_name = $2`, [d.name, oldName]);
+                }
+            }
+        } else {
+            // Új sofőr beszúrása (csak ha tényleg nem létezik)
+            const code = Math.random().toString(36).substring(2, 8).toUpperCase();
+            await client.query(
+                `INSERT INTO drivers (name, email, phone, whatsapp, telegram, license_plate, photo_url, activation_code, is_active)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, true)`,
+                [d.name, d.email, d.phone, d.whatsapp, d.telegram, d.licensePlate, d.photoUrl, code]
+            );
+        }
+
+        await client.query('COMMIT');
         res.sendStatus(200);
-    } catch (e) { res.status(500).send(e.message); }
+    } catch (e) {
+        await client.query('ROLLBACK');
+        console.error(`[SYNC-PROFILE-ERROR] ${e.message}`);
+        res.status(500).send(e.message);
+    } finally {
+        client.release();
+    }
 });
 
 app.get('/api/get-profile/:name', async (req, res) => {
@@ -568,21 +640,43 @@ app.get('/api/get-profile/:name', async (req, res) => {
 
 app.post('/admin/save-driver', async (req, res) => {
     const d = req.body;
+    const client = await pool.connect();
     try {
+        await client.query('BEGIN');
         if (d.uuid) {
-            await pool.query(
+            // Régi név lekérése a módosítás előtt
+            const oldRes = await client.query('SELECT name FROM drivers WHERE uuid = $1', [d.uuid]);
+            const oldName = oldRes.rows[0]?.name;
+
+            await client.query(
                 `UPDATE drivers SET name=$1, email=$2, phone=$3, whatsapp=$4, telegram=$5, license_plate=$6, photo_url=$7, is_active=$8, home_lat=$9, home_lng=$10, base_lat=$11, base_lng=$12 WHERE uuid=$13`,
                 [d.name, d.email, d.phone, d.whatsapp, d.telegram, d.license_plate, d.photo_url, d.is_active, d.home_lat, d.home_lng, d.base_lat, d.base_lng, d.uuid]
             );
+
+            // Ha megváltozott a név, frissítsük az összes kapcsolódó táblát is (cascade)
+            if (oldName && oldName !== d.name) {
+                console.log(`[ADMIN-RENAME] Cascading name change: ${oldName} -> ${d.name}`);
+                const tables = ['live_updates', 'costs', 'chat_messages', 'work_times', 'hotels', 'tours'];
+                for (const t of tables) {
+                    await client.query(`UPDATE ${t} SET driver_name = $1 WHERE driver_name = $2`, [d.name, oldName]);
+                }
+            }
         } else {
             const code = Math.random().toString(36).substring(2, 8).toUpperCase();
-            await pool.query(
+            await client.query(
                 `INSERT INTO drivers (name, email, phone, whatsapp, telegram, license_plate, photo_url, activation_code) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
                 [d.name, d.email, d.phone, d.whatsapp, d.telegram, d.license_plate, d.photo_url, code]
             );
         }
+        await client.query('COMMIT');
         res.json({ success: true });
-    } catch (e) { res.status(500).send(e.message); }
+    } catch (e) {
+        await client.query('ROLLBACK');
+        console.error(`[ADMIN-SAVE-ERROR] ${e.message}`);
+        res.status(500).send(e.message);
+    } finally {
+        client.release();
+    }
 });
 
 app.post('/admin/delete-driver', async (req, res) => {
@@ -716,7 +810,16 @@ app.post('/admin/delete-tour', async (req, res) => {
 app.get('/api/live-status/:name', async (req, res) => {
     try {
         const name = req.params.name;
-        const update = (await pool.query('SELECT * FROM live_updates WHERE driver_name = $1 ORDER BY timestamp DESC LIMIT 1', [name])).rows[0] || {};
+        const updateRes = await pool.query(`
+            SELECT lu.*, d.photo_url as driver_photo, COALESCE(d.license_plate, lu.license_plate) as license_plate
+            FROM live_updates lu
+            LEFT JOIN drivers d ON d.name = lu.driver_name
+            WHERE lu.driver_name = $1
+            ORDER BY lu.timestamp DESC
+            LIMIT 1
+        `, [name]);
+
+        const update = updateRes.rows[0] || {};
 
         const today = new Date().toISOString().split('T')[0];
         const work = (await pool.query('SELECT * FROM work_times WHERE driver_name = $1 AND date = $2', [name, today])).rows;
@@ -730,15 +833,43 @@ app.get('/api/live-status/:name', async (req, res) => {
 
 app.get('/api/fleet-status', async (req, res) => {
     try {
-        const drivers = await pool.query(`SELECT DISTINCT ON (driver_name) driver_name, driver_photo, status, license_plate, timestamp FROM (SELECT driver_name, driver_photo, status, license_plate, timestamp::BIGINT FROM live_updates UNION ALL SELECT driver_name, NULL as driver_photo, 'Túra feltöltve' as status, '' as license_plate, date::BIGINT as timestamp FROM tours WHERE deleted_at IS NULL) AS all_drivers ORDER BY driver_name, timestamp DESC`);
+        const drivers = await pool.query(`
+            SELECT DISTINCT ON (all_drivers.driver_name)
+                all_drivers.driver_name,
+                d.photo_url as driver_photo,
+                all_drivers.status,
+                COALESCE(d.license_plate, all_drivers.license_plate) as license_plate,
+                all_drivers.timestamp
+            FROM (
+                SELECT driver_name, status, license_plate, timestamp::BIGINT FROM live_updates
+                UNION ALL
+                SELECT driver_name, 'Túra feltöltve' as status, '' as license_plate, date::BIGINT as timestamp FROM tours WHERE deleted_at IS NULL
+            ) AS all_drivers
+            LEFT JOIN drivers d ON d.name = all_drivers.driver_name
+            ORDER BY all_drivers.driver_name, all_drivers.timestamp DESC
+        `);
         res.json(drivers.rows);
     } catch (e) { res.status(500).send(e.message); }
 });
 
 app.get('/', async (req, res) => {
     try {
-        const drivers = await pool.query(`SELECT DISTINCT ON (driver_name) driver_name, driver_photo, status, license_plate, timestamp FROM (SELECT driver_name, driver_photo, status, license_plate, timestamp::BIGINT FROM live_updates UNION ALL SELECT driver_name, NULL as driver_photo, 'Túra feltöltve' as status, '' as license_plate, date::BIGINT as timestamp FROM tours WHERE deleted_at IS NULL) AS all_drivers ORDER BY driver_name, timestamp DESC`);
-        let list = drivers.rows.map(d => `<div class="card" onclick="location.href='/driver/${encodeURIComponent(d.driver_name)}'"><img src="${d.driver_photo || ''}" style="width:50px;height:50px;border-radius:50%;float:right;background:#444"><h3>${d.driver_name}</h3><p>${d.status} ${d.license_plate ? '| ' + d.license_plate : ''}</p></div>`).join('');
+        const driversRes = await pool.query(`
+            SELECT DISTINCT ON (all_drivers.driver_name)
+                all_drivers.driver_name,
+                d.photo_url as driver_photo,
+                all_drivers.status,
+                COALESCE(d.license_plate, all_drivers.license_plate) as license_plate,
+                all_drivers.timestamp
+            FROM (
+                SELECT driver_name, status, license_plate, timestamp::BIGINT FROM live_updates
+                UNION ALL
+                SELECT driver_name, 'Túra feltöltve' as status, '' as license_plate, date::BIGINT as timestamp FROM tours WHERE deleted_at IS NULL
+            ) AS all_drivers
+            LEFT JOIN drivers d ON d.name = all_drivers.driver_name
+            ORDER BY all_drivers.driver_name, all_drivers.timestamp DESC
+        `);
+        let list = driversRes.rows.map(d => `<div class="card" onclick="location.href='/driver/${encodeURIComponent(d.driver_name)}'"><img src="${d.driver_photo || ''}" style="width:50px;height:50px;border-radius:50%;float:right;background:#444"><h3>${d.driver_name}</h3><p>${d.status} ${d.license_plate ? '| ' + d.license_plate : ''}</p></div>`).join('');
         res.send(`<html><head><title>Driver ERP</title><style>
             body { font-family: sans-serif; background: #1a1a1a; color: white; padding: 40px; }
             .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 20px; }
@@ -930,6 +1061,9 @@ app.get('/driver/:name', async (req, res) => {
     const name = req.params.name;
     const allD = (await pool.query('SELECT DISTINCT driver_name FROM (SELECT driver_name FROM live_updates UNION SELECT driver_name FROM tours) as d')).rows.map(r => r.driver_name).filter(n => n && n !== name);
     const update = (await pool.query('SELECT * FROM live_updates WHERE driver_name = $1 ORDER BY timestamp DESC LIMIT 1', [name])).rows[0] || { driver_name: name };
+    const driverRes = await pool.query('SELECT * FROM drivers WHERE name = $1', [name]);
+    const dInfo = driverRes.rows[0] || {};
+
     const costs = (await pool.query('SELECT * FROM costs WHERE driver_name = $1 ORDER BY timestamp DESC', [name])).rows;
     const chat = (await pool.query('SELECT * FROM chat_messages WHERE driver_name = $1 ORDER BY timestamp ASC', [name])).rows;
     const work = (await pool.query('SELECT DISTINCT ON (start_time) * FROM work_times WHERE driver_name = $1 ORDER BY start_time DESC, id DESC', [name])).rows;
@@ -972,7 +1106,7 @@ app.get('/driver/:name', async (req, res) => {
     </style></head>
     <body>
         <div id="toast-container"></div>
-        <header><button onclick="location.href='/'">⬅</button><img src="\${update.driver_photo || ''}" style="width:40px;height:40px;border-radius:50%;margin-left:15px;margin-right:15px;"><h2><span>\${name}</span> - ERP</h2></header>
+        <header><button onclick="location.href='/'">⬅</button><img src="${dInfo.photo_url || update.driver_photo || ''}" style="width:40px;height:40px;border-radius:50%;margin-left:15px;margin-right:15px;"><h2><span>${name}</span> - ERP</h2></header>
         <nav>
             <button data-tab="dashboard" onclick="openTab(event, 'dashboard')">DASHBOARD</button>
             <button data-tab="tours" onclick="openTab(event, 'tours')">TÚRÁK</button>
@@ -988,9 +1122,9 @@ app.get('/driver/:name', async (req, res) => {
             <div style="display:grid; grid-template-columns: 1fr 300px; gap: 20px;">
                 <div id="map"></div>
                 <div style="background:#222; padding:20px; border-radius:8px;">
-                    <h3>Státusz: <span id="live-status" style="color:#3498db">\${update.status}</span></h3>
-                    <p id="live-speed">🚗 Sebesség: \${Math.round(update.speed || 0)} km/h</p>
-                    <p id="live-license">🚚 Rendszám: \${update.license_plate || 'N/A'}</p>
+                    <h3>Státusz: <span id="live-status" style="color:#3498db">${update.status}</span></h3>
+                    <p id="live-speed">🚗 Sebesség: ${Math.round(update.speed || 0)} km/h</p>
+                    <p id="live-license">🚚 Rendszám: ${dInfo.license_plate || update.license_plate || 'N/A'}</p>
                     <hr style="border-color:#444">
 
                     <div id="live-tour-container" style="${update.current_tour ? '' : 'display:none'}">
@@ -1079,16 +1213,16 @@ app.get('/driver/:name', async (req, res) => {
             <div style="max-width:600px; background:#222; padding:30px; border-radius:12px;">
                 <h3>SOFŐR PROFIL</h3>
                 <div id="profile-display">
-                    <img id="p-photo" src="${update.driver_photo || ''}" style="width:100px; height:100px; border-radius:50%; margin-bottom:20px; background:#333;">
+                    <img id="p-photo" src="${dInfo.photo_url || update.driver_photo || ''}" style="width:100px; height:100px; border-radius:50%; margin-bottom:20px; background:#333;">
                     <div style="display:grid; grid-template-columns:1fr 1fr; gap:20px;">
                         <div><label>Név</label><input type="text" id="prof-name" value="${name}"></div>
-                        <div><label>Rendszám</label><input type="text" id="prof-plate" value="${update.license_plate || ''}"></div>
-                        <div><label>Email</label><input type="text" id="prof-email" value="${update.driver_email || ''}"></div>
-                        <div><label>Telefon</label><input type="text" id="prof-phone" value="${update.driver_phone || ''}"></div>
-                        <div><label>WhatsApp</label><input type="text" id="prof-whatsapp"></div>
-                        <div><label>Telegram</label><input type="text" id="prof-telegram"></div>
+                        <div><label>Rendszám</label><input type="text" id="prof-plate" value="${dInfo.license_plate || update.license_plate || ''}"></div>
+                        <div><label>Email</label><input type="text" id="prof-email" value="${dInfo.email || update.driver_email || ''}"></div>
+                        <div><label>Telefon</label><input type="text" id="prof-phone" value="${dInfo.phone || update.driver_phone || ''}"></div>
+                        <div><label>WhatsApp</label><input type="text" id="prof-whatsapp" value="${dInfo.whatsapp || ''}"></div>
+                        <div><label>Telegram</label><input type="text" id="prof-telegram" value="${dInfo.telegram || ''}"></div>
                     </div>
-                    <div style="margin-top:20px;"><label>Profilkép URL</label><input type="text" id="prof-photo-url" value="${update.driver_photo || ''}"></div>
+                    <div style="margin-top:20px;"><label>Profilkép URL</label><input type="text" id="prof-photo-url" value="${dInfo.photo_url || update.driver_photo || ''}"></div>
                     <button onclick="saveProfile()" style="margin-top:30px; background:#3498db; color:white; padding:12px; width:100%;">PROFIL MENTÉSE</button>
                 </div>
             </div>
