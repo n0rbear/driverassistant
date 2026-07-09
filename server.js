@@ -139,7 +139,7 @@ const StatusEngine = {
                         if (!stop.is_completed) {
                             const twoMinsAgo = now - (2 * 60 * 1000);
                             const recentUpdatesAtStop = await client.query('SELECT latitude, longitude FROM live_updates WHERE driver_name = $1 AND timestamp > $2 ORDER BY timestamp ASC', [driverName, twoMinsAgo]);
-                            const stayedNear = recentUpdatesAtStop.rows.length > 3 && recentUpdatesAtStop.rows.every(r => this.calculateDistance(r.latitude, r.longitude, stop.latitude, stop.longitude) < 300);
+                            const stayedNear = recentUpdatesAtStop.rows.length >= 2 && recentUpdatesAtStop.rows.every(r => this.calculateDistance(r.latitude, r.longitude, stop.latitude, stop.longitude) < 400);
                             if (stayedNear) {
                                 await client.query('UPDATE stops SET is_completed = true, arrival_time = $1, updated_at = $1 WHERE id = $2', [now, stop.id]);
                             }
@@ -152,15 +152,15 @@ const StatusEngine = {
         }
 
         // 3. Movement logic
-        if (d.speed > 10 && !isAtTourStop) {
-            if (!ongoing || ongoing.type === 'Pihenő') {
+        if (d.speed > 8 && !isAtTourStop) {
+            if (!ongoing || ongoing.type === 'Pihenő' || ongoing.type === 'Offline') {
                 await this.startWork(client, driverName, 'Vezetés', today, d.licensePlate, null, now);
                 calculatedStatus = 'Vezetés';
             }
-        } else if (d.speed < 1 && ongoing && ongoing.type === 'Vezetés' && !isAtTourStop && !isNearKnownPlace) {
+        } else if (d.speed < 1.5 && ongoing && ongoing.type === 'Vezetés' && !isAtTourStop && !isNearKnownPlace) {
             const threeMinsAgo = now - (3 * 60 * 1000);
             const recentUpdates = await client.query('SELECT speed FROM live_updates WHERE driver_name = $1 AND timestamp > $2', [driverName, threeMinsAgo]);
-            if (recentUpdates.rows.length > 5 && recentUpdates.rows.every(r => r.speed < 1.5)) {
+            if (recentUpdates.rows.length >= 3 && recentUpdates.rows.every(r => r.speed < 2.5)) {
                 await this.startWork(client, driverName, 'Pihenő', today, d.licensePlate, ongoing.mileage, now);
                 calculatedStatus = 'Pihenő';
             }
@@ -906,6 +906,7 @@ app.get('/driver/:name', async (req, res) => {
                 </div>
             </div>
         </div>
+        <div id="tourModal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.8); z-index:1000; padding:50px;">
             <div style="background:#222; padding:30px; border-radius:12px; max-width:800px; margin:auto; max-height:90vh; overflow-y:auto;">
                 <h2>Túra szerkesztése</h2><input type="hidden" id="tourId"><input type="hidden" id="tourUuid">
                 <div style="display:grid; grid-template-columns:1fr 1fr; gap:15px; margin-bottom:20px;">
