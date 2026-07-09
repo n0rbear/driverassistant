@@ -595,12 +595,12 @@ app.post('/api/upload-photo', async (req, res) => {
     try {
         const { driverName, imageBase64 } = req.body;
         if (!imageBase64) return res.status(400).send('No image data');
-        const fileName = \`photo_\${driverName.replace(/\s+/g, '_')}_\${Date.now()}.jpg\`;
-        const filePath = \`uploads/\${fileName}\`;
+        const fileName = `photo_${driverName.replace(/\s+/g, '_')}_${Date.now()}.jpg`;
+        const filePath = `uploads/${fileName}`;
         const buffer = Buffer.from(imageBase64, 'base64');
         fs.writeFileSync(filePath, buffer);
 
-        const photoUrl = \`/uploads/\${fileName}\`;
+        const photoUrl = `/uploads/${fileName}`;
         await pool.query('UPDATE drivers SET photo_url = $1 WHERE name = $2', [photoUrl, driverName]);
 
         res.json({ photoUrl });
@@ -708,16 +708,16 @@ app.get('/api/live-status/:name', async (req, res) => {
 
 app.get('/api/fleet-status', async (req, res) => {
     try {
-        const drivers = await pool.query(\`SELECT DISTINCT ON (driver_name) driver_name, driver_photo, status, license_plate, timestamp FROM (SELECT driver_name, driver_photo, status, license_plate, timestamp::BIGINT FROM live_updates UNION ALL SELECT driver_name, NULL as driver_photo, 'Túra feltöltve' as status, '' as license_plate, date::BIGINT as timestamp FROM tours WHERE deleted_at IS NULL) AS all_drivers ORDER BY driver_name, timestamp DESC\`);
+        const drivers = await pool.query(`SELECT DISTINCT ON (driver_name) driver_name, driver_photo, status, license_plate, timestamp FROM (SELECT driver_name, driver_photo, status, license_plate, timestamp::BIGINT FROM live_updates UNION ALL SELECT driver_name, NULL as driver_photo, 'Túra feltöltve' as status, '' as license_plate, date::BIGINT as timestamp FROM tours WHERE deleted_at IS NULL) AS all_drivers ORDER BY driver_name, timestamp DESC`);
         res.json(drivers.rows);
     } catch (e) { res.status(500).send(e.message); }
 });
 
 app.get('/', async (req, res) => {
     try {
-        const drivers = await pool.query(\`SELECT DISTINCT ON (driver_name) driver_name, driver_photo, status, license_plate, timestamp FROM (SELECT driver_name, driver_photo, status, license_plate, timestamp::BIGINT FROM live_updates UNION ALL SELECT driver_name, NULL as driver_photo, 'Túra feltöltve' as status, '' as license_plate, date::BIGINT as timestamp FROM tours WHERE deleted_at IS NULL) AS all_drivers ORDER BY driver_name, timestamp DESC\`);
-        let list = drivers.rows.map(d => \`<div class="card" onclick="location.href='/driver/\${encodeURIComponent(d.driver_name)}'"><img src="\${d.driver_photo || ''}" style="width:50px;height:50px;border-radius:50%;float:right;background:#444"><h3>\${d.driver_name}</h3><p>\${d.status} \${d.license_plate ? '| ' + d.license_plate : ''}</p></div>\`).join('');
-        res.send(\`<html><head><title>Driver ERP</title><style>
+        const drivers = await pool.query(`SELECT DISTINCT ON (driver_name) driver_name, driver_photo, status, license_plate, timestamp FROM (SELECT driver_name, driver_photo, status, license_plate, timestamp::BIGINT FROM live_updates UNION ALL SELECT driver_name, NULL as driver_photo, 'Túra feltöltve' as status, '' as license_plate, date::BIGINT as timestamp FROM tours WHERE deleted_at IS NULL) AS all_drivers ORDER BY driver_name, timestamp DESC`);
+        let list = drivers.rows.map(d => `<div class="card" onclick="location.href='/driver/${encodeURIComponent(d.driver_name)}'"><img src="${d.driver_photo || ''}" style="width:50px;height:50px;border-radius:50%;float:right;background:#444"><h3>${d.driver_name}</h3><p>${d.status} ${d.license_plate ? '| ' + d.license_plate : ''}</p></div>`).join('');
+        res.send(`<html><head><title>Driver ERP</title><style>
             body { font-family: sans-serif; background: #1a1a1a; color: white; padding: 40px; }
             .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 20px; }
             .card { background: #333; padding: 20px; border-radius: 12px; cursor: pointer; border-left: 8px solid #3498db; transition: 0.2s; }
@@ -741,7 +741,7 @@ app.get('/', async (req, res) => {
             </div>
 
             <div id="fleet-section" class="section active">
-                <div class="grid" id="driver-grid">\${list}</div>
+                <div class="grid" id="driver-grid">${list}</div>
             </div>
 
             <div id="admin-section" class="section">
@@ -797,30 +797,30 @@ app.get('/', async (req, res) => {
                         const r = await fetch('/api/fleet-status');
                         if (!r.ok) return;
                         const drivers = await r.json();
-                        document.getElementById('driver-grid').innerHTML = drivers.map(d => \\\`
-                            <div class="card" onclick="location.href='/driver/\\\${encodeURIComponent(d.driver_name)}'">
-                                <img src="\\\${d.driver_photo || ''}" style="width:50px;height:50px;border-radius:50%;float:right;background:#444">
-                                <h3>\\\${d.driver_name}</h3>
-                                <p>\\\${d.status} \\\${d.license_plate ? '| ' + d.license_plate : ''}</p>
-                            </div>\\\`).join('');
+                        document.getElementById('driver-grid').innerHTML = drivers.map(d => `
+                            <div class="card" onclick="location.href='/driver/${encodeURIComponent(d.driver_name)}'">
+                                <img src="${d.driver_photo || ''}" style="width:50px;height:50px;border-radius:50%;float:right;background:#444">
+                                <h3>${d.driver_name}</h3>
+                                <p>${d.status} ${d.license_plate ? '| ' + d.license_plate : ''}</p>
+                            </div>`).join('');
                     } catch (e) { console.error('Fleet refresh error:', e); }
                 }
 
                 async function refreshDrivers() {
                     const r = await fetch('/api/all-drivers');
                     const drivers = await r.json();
-                    document.getElementById('drivers-list').innerHTML = drivers.map(d => \\\`
+                    document.getElementById('drivers-list').innerHTML = drivers.map(d => `
                         <tr>
-                            <td><b>\\\${d.name}</b></td>
-                            <td>\\\${d.email || ''}<br><small>\\\${d.phone || ''}</small></td>
-                            <td>\\\${d.license_plate || ''}</td>
-                            <td><code style="background:#444; padding:2px 5px;">\\\${d.activation_code || '---'}</code></td>
-                            <td><span style="color:\\\${d.is_active ? '#2ecc71' : '#e74c3c'}">\\\${d.is_active ? 'AKTÍV' : 'INAKTÍV'}</span></td>
+                            <td><b>${d.name}</b></td>
+                            <td>${d.email || ''}<br><small>${d.phone || ''}</small></td>
+                            <td>${d.license_plate || ''}</td>
+                            <td><code style="background:#444; padding:2px 5px;">${d.activation_code || '---'}</code></td>
+                            <td><span style="color:${d.is_active ? '#2ecc71' : '#e74c3c'}">${d.is_active ? 'AKTÍV' : 'INAKTÍV'}</span></td>
                             <td>
-                                <button onclick='editDriver(\\\${JSON.stringify(d).replace(/'/g, "&apos;")})'>✏</button>
-                                <button onclick="deleteDriver('\\\${d.uuid}')" style="background:#e74c3c; color:white; border:none; border-radius:4px; padding:5px 10px; cursor:pointer;">🗑</button>
+                                <button onclick='editDriver(${JSON.stringify(d).replace(/'/g, "&apos;")})'>✏</button>
+                                <button onclick="deleteDriver('${d.uuid}')" style="background:#e74c3c; color:white; border:none; border-radius:4px; padding:5px 10px; cursor:pointer;">🗑</button>
                             </td>
-                        </tr>\\\`).join('');
+                        </tr>`).join('');
                 }
 
                 function editDriver(d) {
@@ -900,7 +900,7 @@ app.get('/', async (req, res) => {
 
                 setInterval(refreshFleet, 5000);
             </script>
-        </body></html>\`);
+        </body></html>`);
     } catch (e) { res.status(500).send(e.message); }
 });
 
@@ -912,7 +912,7 @@ app.get('/driver/:name', async (req, res) => {
     const chat = (await pool.query('SELECT * FROM chat_messages WHERE driver_name = $1 ORDER BY timestamp ASC', [name])).rows;
     const work = (await pool.query('SELECT DISTINCT ON (start_time) * FROM work_times WHERE driver_name = $1 ORDER BY start_time DESC, id DESC', [name])).rows;
     const toursRes = (await pool.query('SELECT * FROM tours WHERE driver_name = $1 AND deleted_at IS NULL ORDER BY date DESC', [name])).rows;
-    const hotelsRes = (await pool.query(\`SELECT name::TEXT, address::TEXT, timestamp::BIGINT FROM hotels WHERE driver_name = $1 UNION ALL SELECT COALESCE(recipient, address_full)::TEXT as name, address_full::TEXT as address, COALESCE(arrival_time::BIGINT, (SELECT date::BIGINT FROM tours WHERE id = tour_id))::BIGINT as timestamp FROM stops WHERE tour_id IN (SELECT id FROM tours WHERE driver_name = $1) AND stop_type = 'HOTEL' ORDER BY timestamp DESC\`, [name])).rows;
+    const hotelsRes = (await pool.query(`SELECT name::TEXT, address::TEXT, timestamp::BIGINT FROM hotels WHERE driver_name = $1 UNION ALL SELECT COALESCE(recipient, address_full)::TEXT as name, address_full::TEXT as address, COALESCE(arrival_time::BIGINT, (SELECT date::BIGINT FROM tours WHERE id = tour_id))::BIGINT as timestamp FROM stops WHERE tour_id IN (SELECT id FROM tours WHERE driver_name = $1) AND stop_type = 'HOTEL' ORDER BY timestamp DESC`, [name])).rows;
     for (let t of toursRes) t.stops = (await pool.query('SELECT * FROM stops WHERE tour_id = $1 AND deleted_at IS NULL ORDER BY order_index ASC', [t.id])).rows;
     const currentTourObj = toursRes.find(t => t.is_current);
     const currentStopsJson = JSON.stringify(currentTourObj ? currentTourObj.stops : []);
@@ -921,7 +921,7 @@ app.get('/driver/:name', async (req, res) => {
         .filter(w => w.type === 'Vezetés' && w.date === new Date().toISOString().split('T')[0])
         .reduce((sum, w) => sum + (Number(w.end_time || Date.now()) - Number(w.start_time)) / 1000, 0);
 
-    const html = \`<html><head><title>ERP - \${name}</title>
+    const html = `<html><head><title>ERP - ${name}</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -971,59 +971,59 @@ app.get('/driver/:name', async (req, res) => {
                     <p id="live-license">🚚 Rendszám: \${update.license_plate || 'N/A'}</p>
                     <hr style="border-color:#444">
 
-                    <div id="live-tour-container" style="\${update.current_tour ? '' : 'display:none'}">
+                    <div id="live-tour-container" style="${update.current_tour ? '' : 'display:none'}">
                         <div style="background:#333; padding:15px; border-radius:8px; margin-top:10px;">
-                            <h4 style="margin:0; color:#2ecc71;">📦 Aktuális túra: <span id="live-tour-name">\${update.current_tour || ''}</span></h4>
+                            <h4 style="margin:0; color:#2ecc71;">📦 Aktuális túra: <span id="live-tour-name">${update.current_tour || ''}</span></h4>
                             <div style="display:flex; justify-content:space-between; margin-top:10px;">
                                 <div style="text-align:center; flex:1;">
                                     <div style="font-size:11px; color:#aaa; text-transform:uppercase;">Következőig</div>
-                                    <div id="live-next-dist" style="font-size:18px; font-weight:bold; color:#3498db;">\${update.next_stop_dist ? update.next_stop_dist.toFixed(1) + ' km' : 'N/A'}</div>
+                                    <div id="live-next-dist" style="font-size:18px; font-weight:bold; color:#3498db;">${update.next_stop_dist ? update.next_stop_dist.toFixed(1) + ' km' : 'N/A'}</div>
                                     <div style="font-size:11px; color:#3498db;" id="nextStopDurationDisplay"></div>
                                 </div>
                                 <div style="width:1px; background:#444;"></div>
                                 <div style="text-align:center; flex:1;">
                                     <div style="font-size:11px; color:#aaa; text-transform:uppercase;">Túra összesen</div>
-                                    <div id="live-tour-dist" style="font-size:18px; font-weight:bold; color:#2ecc71;">\${update.tour_remaining_dist ? update.tour_remaining_dist.toFixed(1) + ' km' : 'N/A'}</div>
+                                    <div id="live-tour-dist" style="font-size:18px; font-weight:bold; color:#2ecc71;">${update.tour_remaining_dist ? update.tour_remaining_dist.toFixed(1) + ' km' : 'N/A'}</div>
                                     <div style="font-size:11px; color:#2ecc71;" id="tourDurationDisplay"></div>
                                 </div>
                             </div>
-                            <div id="live-break-container" style="margin-top:10px; font-size:11px; color:#e74c3c; text-align:center; border-top:1px solid #444; padding-top:5px; \${update.next_break_in_seconds ? '' : 'display:none'}">
+                            <div id="live-break-container" style="margin-top:10px; font-size:11px; color:#e74c3c; text-align:center; border-top:1px solid #444; padding-top:5px; ${update.next_break_in_seconds ? '' : 'display:none'}">
                                 ⚠️ Következő pihenő kb. <span id="nextBreakDisplay"></span> múlva
                             </div>
                         </div>
                     </div>
-                    <p id="no-tour-msg" style="color:#777; \${update.current_tour ? 'display:none' : ''}">Nincs aktív túra</p>
+                    <p id="no-tour-msg" style="color:#777; ${update.current_tour ? 'display:none' : ''}">Nincs aktív túra</p>
 
-                    <div id="live-next-stop-container" style="background:#34495e; padding:15px; border-radius:8px; margin-top:10px; \${update.next_stop ? '' : 'display:none'}">
+                    <div id="live-next-stop-container" style="background:#34495e; padding:15px; border-radius:8px; margin-top:10px; ${update.next_stop ? '' : 'display:none'}">
                         <h4 style="margin:0; color:#3498db;">📍 Következő cím:</h4>
                         <div id="live-next-stop-details">
-                            \${update.next_stop ? (update.next_stop.includes(' | ') ? \`
-                                <b style="display:block; margin-top:5px; color:#fff;">\\\${update.next_stop.split(' | ')[0]}</b>
-                                <p style="margin:2px 0; font-size:13px; color:#ccc;">\\\${update.next_stop.split(' | ')[1]}</p>
-                            \` : \`<p style="margin:5px 0; font-size:14px;">\\\${update.next_stop}</p>\`) : ''}
+                            ${update.next_stop ? (update.next_stop.includes(' | ') ? `
+                                <b style="display:block; margin-top:5px; color:#fff;">${update.next_stop.split(' | ')[0]}</b>
+                                <p style="margin:2px 0; font-size:13px; color:#ccc;">${update.next_stop.split(' | ')[1]}</p>
+                            ` : `<p style="margin:5px 0; font-size:14px;">${update.next_stop}</p>`) : ''}
                         </div>
                     </div>
 
-                    \${update.depot_name ? \`
-                        <p style="margin-top:20px; font-size:12px; color:#999;">🏠 Depó: \\\${update.depot_name}</p>
-                    \` : ''}
+                    ${update.depot_name ? `
+                        <p style="margin-top:20px; font-size:12px; color:#999;">🏠 Depó: ${update.depot_name}</p>
+                    ` : ''}
                 </div>
             </div>
         </div>
         <div id="tours" class="tab-content">
             <button onclick="editTour()" style="background:#2ecc71; color:white; padding:10px; margin-bottom:20px;">+ Új túra</button>
             <div id="tours-list">
-                \${toursRes.map(t => \`
+                ${toursRes.map(t => `
                     <div class="tour-card">
                         <div style="float:right; display:flex; gap:5px;">
-                            <select onchange="transferTour(\\\${t.id}, this.value)" style="width:auto;"><option value="">-- Áthelyezés --</option>\\\${allD.map(n => "<option value='" + n + "'>" + n + "</option>").join('')}</select>
-                            <button onclick='editTour(\\\${JSON.stringify(t).replace(/'/g, "&apos;")})'>✏</button>
-                            <button onclick="deleteTour(\\\${t.id})" style="background:#e74c3c; color:white;">🗑</button>
+                            <select onchange="transferTour(${t.id}, this.value)" style="width:auto;"><option value="">-- Áthelyezés --</option>${allD.map(n => "<option value='" + n + "'>" + n + "</option>").join('')}</select>
+                            <button onclick='editTour(${JSON.stringify(t).replace(/'/g, "&apos;")})'>✏</button>
+                            <button onclick="deleteTour(${t.id})" style="background:#e74c3c; color:white;">🗑</button>
                         </div>
-                        <b>\\\${t.name}</b> (\\\${t.customer}) - \\\${new Date(Number(t.date)).toLocaleDateString()}
-                        \\\${t.stops.map(s => "<div class='stop-item'>" + (s.order_index + 1) + ". " + (s.stop_type === 'HOTEL' ? '🏨 ' : (s.stop_type === 'DEPOT' ? '🏠 ' : '')) + s.address + "</div>").join('')}
+                        <b>${t.name}</b> (${t.customer}) - ${new Date(Number(t.date)).toLocaleDateString()}
+                        ${t.stops.map(s => "<div class='stop-item'>" + (s.order_index + 1) + ". " + (s.stop_type === 'HOTEL' ? '🏨 ' : (s.stop_type === 'DEPOT' ? '🏠 ' : '')) + s.address + "</div>").join('')}
                     </div>
-                \`).join('')}
+                `).join('')}
             </div>
         </div>
         <div id="history" class="tab-content">
@@ -1040,11 +1040,11 @@ app.get('/driver/:name', async (req, res) => {
                 </div>
             </div>
         </div>
-        <div id="costs" class="tab-content"><table><tr><th>Dátum</th><th>Kategória</th><th>Összeg</th><th>Státusz</th></tr>\${costs.map(c => \`<tr><td>\\\${new Date(Number(c.timestamp)).toLocaleDateString()}</td><td>\\\${c.category}</td><td>\\\${c.amount} \\\${c.currency}</td><td>\\\${c.status}</td></tr>\`).join('')}</table></div>
-        <div id="hotels" class="tab-content"><table><tr><th>Dátum</th><th>Név</th><th>Cím</th></tr>\${hotelsRes.map(h => \`<tr><td>\\\${new Date(Number(h.timestamp)).toLocaleDateString()}</td><td>\\\${h.name}</td><td>\\\${h.address}</td></tr>\`).join('')}</table></div>
+        <div id="costs" class="tab-content"><table><tr><th>Dátum</th><th>Kategória</th><th>Összeg</th><th>Státusz</th></tr>${costs.map(c => `<tr><td>${new Date(Number(c.timestamp)).toLocaleDateString()}</td><td>${c.category}</td><td>${c.amount} ${c.currency}</td><td>${c.status}</td></tr>`).join('')}</table></div>
+        <div id="hotels" class="tab-content"><table><tr><th>Dátum</th><th>Név</th><th>Cím</th></tr>${hotelsRes.map(h => `<tr><td>${new Date(Number(h.timestamp)).toLocaleDateString()}</td><td>${h.name}</td><td>${h.address}</td></tr>`).join('')}</table></div>
         <div id="chat" class="tab-content">
             <div id="chat-messages" style="height:400px; background:#111; padding:15px; overflow-y:auto; display:flex; flex-direction:column; margin-bottom:15px;">
-                \${chat.map(m => \`<div class="msg \\\${m.sender === 'DISZPÉCSER' ? 'msg-boss' : 'msg-driver'}"><b>\\\${m.sender}:</b><br>\\\${m.message}</div>\`).join('')}
+                ${chat.map(m => `<div class="msg ${m.sender === 'DISZPÉCSER' ? 'msg-boss' : 'msg-driver'}"><b>${m.sender}:</b><br>${m.message}</div>`).join('')}
             </div>
             <div style="display:flex; gap:10px;">
                 <input type="text" id="chat-input" placeholder="Üzenet írása..." onkeypress="if(event.key==='Enter') sendChat()">
@@ -1057,16 +1057,16 @@ app.get('/driver/:name', async (req, res) => {
             <div style="max-width:600px; background:#222; padding:30px; border-radius:12px;">
                 <h3>SOFŐR PROFIL</h3>
                 <div id="profile-display">
-                    <img id="p-photo" src="\${update.driver_photo || ''}" style="width:100px; height:100px; border-radius:50%; margin-bottom:20px; background:#333;">
+                    <img id="p-photo" src="${update.driver_photo || ''}" style="width:100px; height:100px; border-radius:50%; margin-bottom:20px; background:#333;">
                     <div style="display:grid; grid-template-columns:1fr 1fr; gap:20px;">
-                        <div><label>Név</label><input type="text" id="prof-name" value="\${name}"></div>
-                        <div><label>Rendszám</label><input type="text" id="prof-plate" value="\${update.license_plate || ''}"></div>
-                        <div><label>Email</label><input type="text" id="prof-email" value="\${update.driver_email || ''}"></div>
-                        <div><label>Telefon</label><input type="text" id="prof-phone" value="\${update.driver_phone || ''}"></div>
+                        <div><label>Név</label><input type="text" id="prof-name" value="${name}"></div>
+                        <div><label>Rendszám</label><input type="text" id="prof-plate" value="${update.license_plate || ''}"></div>
+                        <div><label>Email</label><input type="text" id="prof-email" value="${update.driver_email || ''}"></div>
+                        <div><label>Telefon</label><input type="text" id="prof-phone" value="${update.driver_phone || ''}"></div>
                         <div><label>WhatsApp</label><input type="text" id="prof-whatsapp"></div>
                         <div><label>Telegram</label><input type="text" id="prof-telegram"></div>
                     </div>
-                    <div style="margin-top:20px;"><label>Profilkép URL</label><input type="text" id="prof-photo-url" value="\${update.driver_photo || ''}"></div>
+                    <div style="margin-top:20px;"><label>Profilkép URL</label><input type="text" id="prof-photo-url" value="${update.driver_photo || ''}"></div>
                     <button onclick="saveProfile()" style="margin-top:30px; background:#3498db; color:white; padding:12px; width:100%;">PROFIL MENTÉSE</button>
                 </div>
             </div>
@@ -1094,7 +1094,7 @@ app.get('/driver/:name', async (req, res) => {
 
         <script>
             function openTab(e, t) {
-                localStorage.setItem('activeTab_\${name}', t);
+                localStorage.setItem('activeTab_${name}', t);
                 document.querySelectorAll('.tab-content').forEach(x => {
                     x.style.display = 'none';
                     x.classList.remove('active');
@@ -1136,7 +1136,7 @@ app.get('/driver/:name', async (req, res) => {
                 if (!date) return;
                 initHistoryMap();
                 try {
-                    const r = await fetch('/api/get-history/' + encodeURIComponent('\\\${name}') + '/' + date);
+                    const r = await fetch('/api/get-history/' + encodeURIComponent('${name}') + '/' + date);
                     const data = await r.json();
                     if (!data || data.length === 0) {
                         showToast('Nincs adat ehhez a naphoz.');
@@ -1188,10 +1188,10 @@ app.get('/driver/:name', async (req, res) => {
             document.getElementById('history-date').value = new Date().toISOString().split('T')[0];
 
             // Kezdő tab betöltése
-            const savedTab = localStorage.getItem('activeTab_\\\${name}') || 'dashboard';
+            const savedTab = localStorage.getItem('activeTab_${name}') || 'dashboard';
 
             // Térkép inicializálása
-            let DRIVING_DONE_TODAY = \${drivingTodaySec};
+            let DRIVING_DONE_TODAY = ${drivingTodaySec};
 
             function formatDuration(seconds) {
                 if (!seconds || seconds <= 0) return 'N/A';
@@ -1224,10 +1224,10 @@ app.get('/driver/:name', async (req, res) => {
             }
 
             // Update displays
-            let nextDur = \${update.next_stop_duration || 0};
-            let tourDur = \${update.tour_remaining_duration || 0};
-            let nextBreak = \${update.next_break_in_seconds || 0};
-            let isAdjusted = \${update.include_rests ?? true};
+            let nextDur = ${update.next_stop_duration || 0};
+            let tourDur = ${update.tour_remaining_duration || 0};
+            let nextBreak = ${update.next_break_in_seconds || 0};
+            let isAdjusted = ${update.include_rests ?? true};
 
             function updateTimeDisplays() {
                 try {
@@ -1251,8 +1251,8 @@ app.get('/driver/:name', async (req, res) => {
             }
             updateTimeDisplays();
 
-            const driverLat = \${update.latitude || 47.4979};
-            const driverLng = \${update.longitude || 19.0402};
+            const driverLat = ${update.latitude || 47.4979};
+            const driverLng = ${update.longitude || 19.0402};
             const map = L.map('map', { zoomControl: true }).setView([driverLat, driverLng], 13);
             L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
                 attribution: '&copy; OpenStreetMap'
@@ -1261,11 +1261,11 @@ app.get('/driver/:name', async (req, res) => {
             // Sofőr marker (kék kör fehér szegéllyel)
             const driverMarker = L.circleMarker([driverLat, driverLng], {
                 color: '#3498db', radius: 10, fillOpacity: 1, weight: 3, fillColor: '#fff'
-            }).addTo(map).bindPopup('<b>\\\${name}</b><br><span id="popup-speed">Sebesség: \\\${Math.round(update.speed || 0)} km/h</span>');
+            }).addTo(map).bindPopup(`<b>${name}</b><br><span id="popup-speed">Sebesség: ${Math.round(update.speed || 0)} km/h</span>`);
 
             let routeLayer = null;
-            let lastNextLat = \${update.next_lat || 0};
-            let lastNextLng = \${update.next_lng || 0};
+            let lastNextLat = ${update.next_lat || 0};
+            let lastNextLng = ${update.next_lng || 0};
 
             async function drawRoute(currentLat, currentLng, stops, depotLat, depotLng) {
                 const incompleteStops = (stops || []).filter(s => !s.is_completed && s.latitude && s.longitude);
@@ -1296,9 +1296,9 @@ app.get('/driver/:name', async (req, res) => {
             }
 
             // Kezdeti útvonal
-            const rawStops = \${currentStopsJson};
-            const tourDepotLat = \${currentTourObj ? currentTourObj.depot_lat || 0 : 0};
-            const tourDepotLng = \${currentTourObj ? currentTourObj.depot_lng || 0 : 0};
+            const rawStops = ${currentStopsJson};
+            const tourDepotLat = ${currentTourObj ? currentTourObj.depot_lat || 0 : 0};
+            const tourDepotLng = ${currentTourObj ? currentTourObj.depot_lng || 0 : 0};
 
             if (rawStops && rawStops.length > 0) {
                 drawRoute(driverLat, driverLng, rawStops, tourDepotLat, tourDepotLng);
@@ -1306,7 +1306,7 @@ app.get('/driver/:name', async (req, res) => {
 
             async function refreshLiveStatus() {
                 try {
-                    const r = await fetch('/api/live-status/' + encodeURIComponent('\\\${name}'));
+                    const r = await fetch('/api/live-status/' + encodeURIComponent('${name}'));
                     if (!r.ok) return;
                     const d = await r.json();
                     if (!d.timestamp) return;
@@ -1358,7 +1358,7 @@ app.get('/driver/:name', async (req, res) => {
             if (d.latitude && d.longitude) {
                         const newPos = [d.latitude, d.longitude];
                         driverMarker.setLatLng(newPos);
-                        driverMarker.setPopupContent('<b>\\\${name}</b><br>Sebesség: ' + Math.round(d.speed || 0) + ' km/h');
+                        driverMarker.setPopupContent(`<b>${name}</b><br>Sebesség: ` + Math.round(d.speed || 0) + ' km/h');
 
                         // Útvonal frissítése ha mozog vagy a célpont változott
                         if (d.next_lat !== lastNextLat || d.next_lng !== lastNextLng || Math.abs(d.latitude - lastUpdateLat) > 0.0005) {
@@ -1367,7 +1367,7 @@ app.get('/driver/:name', async (req, res) => {
                             lastUpdateLat = d.latitude;
                             lastUpdateLng = d.longitude;
                             refreshTours();
-                            fetch('/api/get-tours/' + encodeURIComponent('\\\${name}'))
+                            fetch('/api/get-tours/' + encodeURIComponent('${name}'))
                                 .then(r => r.json())
                                 .then(data => {
                                     const tourData = data.find(item => item.tour.is_current) || (data.length > 0 ? data[0] : null);
@@ -1394,7 +1394,7 @@ app.get('/driver/:name', async (req, res) => {
 
             // Ha a dashboardon vagyunk, 5 másodpercenként oldalfrissítés (felhasználói kérésre)
             setInterval(() => {
-                if (localStorage.getItem('activeTab_\\\${name}') === 'dashboard') {
+                if (localStorage.getItem('activeTab_${name}') === 'dashboard') {
                     // location.reload(); // Ezt egyelőre kommentben hagyom, mert a refreshLiveStatus-nak kéne működnie
                 }
             }, 5000);
@@ -1431,7 +1431,7 @@ app.get('/driver/:name', async (req, res) => {
             }
 
             // Térkép igazítása
-            if ((rawStops && rawStops.length > 0) || \${update.depot_lat ? 'true' : 'false'}) {
+            if ((rawStops && rawStops.length > 0) || ${update.depot_lat ? 'true' : 'false'}) {
                 const center = [driverLat, driverLng];
                 let maxDLat = 0;
                 let maxDLng = 0;
@@ -1445,9 +1445,9 @@ app.get('/driver/:name', async (req, res) => {
                     });
                 }
 
-                if (\${update.depot_lat ? 'true' : 'false'}) {
-                    maxDLat = Math.max(maxDLat, Math.abs(\${update.depot_lat || 0} - driverLat));
-                    maxDLng = Math.max(maxDLng, Math.abs(\${update.depot_lng || 0} - driverLng));
+                if (${update.depot_lat ? 'true' : 'false'}) {
+                    maxDLat = Math.max(maxDLat, Math.abs(${update.depot_lat || 0} - driverLat));
+                    maxDLng = Math.max(maxDLng, Math.abs(${update.depot_lng || 0} - driverLng));
                 }
 
                 const fitBounds = [
@@ -1458,7 +1458,7 @@ app.get('/driver/:name', async (req, res) => {
             }
 
             // Útvonal tervezése a teljes hátralévő túrára
-            const currentTourData = \${JSON.stringify(currentTourObj || (toursRes.length > 0 ? toursRes[0] : null))};
+            const currentTourData = ${JSON.stringify(currentTourObj || (toursRes.length > 0 ? toursRes[0] : null))};
             const incompleteStops = (rawStops || []).filter(s => !s.is_completed && s.latitude && s.longitude);
             let waypointStr = driverLng + ',' + driverLat;
 
@@ -1466,8 +1466,8 @@ app.get('/driver/:name', async (req, res) => {
                 waypointStr += ';' + s.longitude + ',' + s.latitude;
             });
 
-            const initialDepotLat = (currentTourData && currentTourData.depot_lat) ? currentTourData.depot_lat : \${update.depot_lat || 0};
-            const initialDepotLng = (currentTourData && currentTourData.depot_lng) ? currentTourData.depot_lng : \${update.depot_lng || 0};
+            const initialDepotLat = (currentTourData && currentTourData.depot_lat) ? currentTourData.depot_lat : ${update.depot_lat || 0};
+            const initialDepotLng = (currentTourData && currentTourData.depot_lng) ? currentTourData.depot_lng : ${update.depot_lng || 0};
 
             if (initialDepotLat != null && initialDepotLat !== 0) {
                 waypointStr += ';' + initialDepotLng + ',' + initialDepotLat;
@@ -1486,7 +1486,7 @@ app.get('/driver/:name', async (req, res) => {
             // Kényszerített újrarajzolás a méretezési hiba ellen
             setTimeout(() => {
                 map.invalidateSize();
-                if ((rawStops && rawStops.length > 0) || \${update.depot_lat ? 'true' : 'false'}) {
+                if ((rawStops && rawStops.length > 0) || ${update.depot_lat ? 'true' : 'false'}) {
                      try { map.fitBounds(map.getBounds(), { padding: [50, 50] }); } catch(e) {}
                 }
             }, 800);
@@ -1504,7 +1504,7 @@ app.get('/driver/:name', async (req, res) => {
             // Profile & Driver Admin JS
             async function loadProfile() {
                 try {
-                    const r = await fetch('/api/get-profile/' + encodeURIComponent('\\\${name}'));
+                    const r = await fetch('/api/get-profile/' + encodeURIComponent('${name}'));
                     if (r.ok) {
                         const d = await r.json();
                         document.getElementById('prof-whatsapp').value = d.whatsapp || '';
@@ -1531,18 +1531,18 @@ app.get('/driver/:name', async (req, res) => {
             async function refreshDrivers() {
                 const r = await fetch('/api/all-drivers');
                 const drivers = await r.json();
-                document.getElementById('drivers-list').innerHTML = drivers.map(d => \\\`
+                document.getElementById('drivers-list').innerHTML = drivers.map(d => `
                     <tr>
-                        <td><b>\\\${d.name}</b></td>
-                        <td>\\\${d.email || ''}<br><small>\\\${d.phone || ''}</small></td>
-                        <td>\\\${d.license_plate || ''}</td>
-                        <td><code style="background:#444; padding:2px 5px;">\\\${d.activation_code || '---'}</code></td>
-                        <td><span style="color:\\\${d.is_active ? '#2ecc71' : '#e74c3c'}">\\\${d.is_active ? 'AKTÍV' : 'INAKTÍV'}</span></td>
+                        <td><b>\${d.name}</b></td>
+                        <td>\${d.email || ''}<br><small>\${d.phone || ''}</small></td>
+                        <td>\${d.license_plate || ''}</td>
+                        <td><code style="background:#444; padding:2px 5px;">\${d.activation_code || '---'}</code></td>
+                        <td><span style="color:\${d.is_active ? '#2ecc71' : '#e74c3c'}">\${d.is_active ? 'AKTÍV' : 'INAKTÍV'}</span></td>
                         <td>
-                            <button onclick='editDriver(\\\${JSON.stringify(d).replace(/'/g, "&apos;")})'>✏</button>
-                            <button onclick="deleteDriver('\\\${d.uuid}')" style="background:#e74c3c; color:white;">🗑</button>
+                            <button onclick='editDriver(\${JSON.stringify(d).replace(/'/g, "&apos;")})'>✏</button>
+                            <button onclick="deleteDriver('\${d.uuid}')" style="background:#e74c3c; color:white; border:none; border-radius:4px; padding:5px 10px; cursor:pointer;">🗑</button>
                         </td>
-                    </tr>\\\`).join('');
+                    </tr>`).join('');
             }
             refreshDrivers();
 
@@ -1623,27 +1623,27 @@ app.get('/driver/:name', async (req, res) => {
 
             async function refreshTours() {
                 try {
-                    const r = await fetch('/api/get-tours/' + encodeURIComponent('\\\${name}'));
+                    const r = await fetch('/api/get-tours/' + encodeURIComponent('${name}'));
                     if (!r.ok) return;
                     const data = await r.json();
                     const container = document.getElementById('tours-list');
                     if (!container) return;
 
-                    const allDNames = \${JSON.stringify(allD)};
+                    const allDNames = ${JSON.stringify(allD)};
 
                     container.innerHTML = data.map(item => {
                         const t = item.tour;
                         const stops = item.stops;
-                        return \\\`
+                        return `
                         <div class="tour-card">
                             <div style="float:right; display:flex; gap:5px;">
-                                <select onchange="transferTour(\\\${t.id}, this.value)" style="width:auto;"><option value="">-- Áthelyezés --</option>\\\${allDNames.map(n => "<option value='" + n + "'>" + n + "</option>").join('')}</select>
-                                <button onclick='editTour(\\\${JSON.stringify(t).replace(/'/g, "&apos;")})'>✏</button>
-                                <button onclick="deleteTour(\\\${t.id})" style="background:#e74c3c; color:white;">🗑</button>
+                                <select onchange="transferTour(\${t.id}, this.value)" style="width:auto;"><option value="">-- Áthelyezés --</option>\${allDNames.map(n => "<option value='" + n + "'>" + n + "</option>").join('')}</select>
+                                <button onclick='editTour(\${JSON.stringify(t).replace(/'/g, "&apos;")})'>✏</button>
+                                <button onclick="deleteTour(\${t.id})" style="background:#e74c3c; color:white;">🗑</button>
                             </div>
-                            <b>\\\${t.name}</b> (\\\${t.customer}) - \\\${new Date(Number(t.date)).toLocaleDateString()}
-                            \\\${stops.map(s => "<div class='stop-item'>" + (s.order_index + 1) + ". " + (s.stop_type === 'HOTEL' ? '🏨 ' : (s.stop_type === 'DEPOT' ? '🏠 ' : '')) + s.address + "</div>").join('')}
-                        </div>\\\`;
+                            <b>\${t.name}</b> (\${t.customer}) - \${new Date(Number(t.date)).toLocaleDateString()}
+                            \${stops.map(s => "<div class='stop-item'>" + (s.order_index + 1) + ". " + (s.stop_type === 'HOTEL' ? '🏨 ' : (s.stop_type === 'DEPOT' ? '🏠 ' : '')) + s.address + "</div>").join('')}
+                        </div>`;
                     }).join('');
                 } catch (e) { console.error('Refresh tours error:', e); }
             }
@@ -1657,7 +1657,7 @@ app.get('/driver/:name', async (req, res) => {
                         method: 'POST',
                         headers: {'Content-Type': 'application/json'},
                         body: JSON.stringify({
-                            driverName: '\\\${name}',
+                            driverName: '${name}',
                             sender: 'DISZPÉCSER',
                             message: msg,
                             timestamp: Date.now()
@@ -1672,15 +1672,15 @@ app.get('/driver/:name', async (req, res) => {
 
             async function refreshChat() {
                 try {
-                    const r = await fetch('/api/get-chat/' + encodeURIComponent('\\\${name}'));
+                    const r = await fetch('/api/get-chat/' + encodeURIComponent('${name}'));
                     if (!r.ok) return;
                     const data = await r.json();
                     const container = document.getElementById('chat-messages');
                     if (!container) return;
-                    container.innerHTML = data.map(m => \\\`
-                        <div class="msg \\\${m.sender === 'DISZPÉCSER' ? 'msg-boss' : 'msg-driver'}">
-                            <b>\\\${m.sender}:</b><br>\\\${m.message}
-                        </div>\\\`).join('');
+                    container.innerHTML = data.map(m => `
+                        <div class="msg \${m.sender === 'DISZPÉCSER' ? 'msg-boss' : 'msg-driver'}">
+                            <b>\${m.sender}:</b><br>\${m.message}
+                        </div>`).join('');
                     container.scrollTop = container.scrollHeight;
                 } catch (e) { console.error('Refresh chat error:', e); }
             }
@@ -1792,7 +1792,7 @@ app.get('/driver/:name', async (req, res) => {
                 const data = {
                     id: tourId === "" ? null : parseInt(tourId),
                     uuid: uId === "" ? null : uId,
-                    driver_name: '\\\${name}', name: document.getElementById('tName').value, customer: document.getElementById('tCustomer').value,
+                    driver_name: '${name}', name: document.getElementById('tName').value, customer: document.getElementById('tCustomer').value,
                     date: tourDate, is_current: document.getElementById('tIsCurrent').checked, notes: document.getElementById('tNotes').value,
                     depot_name: document.getElementById('tDepotName').value, depot_company: document.getElementById('tDepotCompany').value,
                     depot_street: document.getElementById('tDepotStreet').value, depot_house_number: document.getElementById('tDepotHouse').value,
@@ -1805,7 +1805,7 @@ app.get('/driver/:name', async (req, res) => {
                 if(res.ok) { showToast('Túra mentve!'); closeModal(); refreshTours(); } else { alert('Hiba!'); btn.innerText = oldText; btn.disabled = false; }
             }
         </script>
-    </body></html>\`;
+    </body></html>`;
     res.send(html);
 });
 
