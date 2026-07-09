@@ -11,8 +11,13 @@ const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejec
 
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN || '';
 const MAX_UPLOAD_BYTES = Number(process.env.MAX_UPLOAD_BYTES || 5 * 1024 * 1024);
+const SHORT_REST_GRACE_MS = 3 * 60 * 1000;
+const IS_DEPLOYED = Boolean(process.env.RENDER || process.env.RENDER_SERVICE_ID || process.env.NODE_ENV === 'production');
 const requireAdmin = (req, res, next) => {
-    if (!ADMIN_TOKEN) return next();
+    if (!ADMIN_TOKEN) {
+        if (IS_DEPLOYED) return res.status(503).json({ error: 'ADMIN_TOKEN is not configured.' });
+        return next();
+    }
     const header = req.headers.authorization || '';
     const token = header.startsWith('Bearer ') ? header.slice(7) : (req.headers['x-admin-token'] || req.query.adminToken);
     if (token === ADMIN_TOKEN) return next();
@@ -135,7 +140,7 @@ const StatusEngine = {
                     const dist = this.calculateDistance(d.latitude, d.longitude, p.lat, p.lng);
                     if (dist < 200) {
                         isNearKnownPlace = true;
-                        if (d.speed < 1 && ongoing && ongoing.type === 'Vezetés') {
+                        if (d.speed < 1 && ongoing && ongoing.type === 'VezetĂ©s') {
                             await client.query('UPDATE work_times SET end_time = $1 WHERE id = $2', [now, ongoing.id]);
                             calculatedStatus = 'Offline';
                         }
@@ -151,9 +156,9 @@ const StatusEngine = {
                 if (dist < 200) {
                     isAtTourStop = true;
                     if (d.speed < 2) {
-                        if (!ongoing || ongoing.type === 'Vezetés') {
-                            await this.startWork(client, driverName, 'Rakodás', today, d.licensePlate, ongoing?.mileage, now);
-                            calculatedStatus = 'Rakodás';
+                        if (!ongoing || ongoing.type === 'VezetĂ©s') {
+                            await this.startWork(client, driverName, 'RakodĂˇs', today, d.licensePlate, ongoing?.mileage, now);
+                            calculatedStatus = 'RakodĂˇs';
                         }
                         if (!stop.is_completed) {
                             const tenMinsAgo = now - (10 * 60 * 1000);
@@ -163,7 +168,7 @@ const StatusEngine = {
                                 await client.query('UPDATE stops SET is_completed = true, arrival_time = $1, updated_at = $1 WHERE id = $2', [now, stop.id]);
                             }
                         }
-                        calculatedStatus = 'Rakodás';
+                        calculatedStatus = 'RakodĂˇs';
                         break;
                     }
                 }
@@ -172,30 +177,27 @@ const StatusEngine = {
 
         // 3. Movement logic
         if (d.speed > 8) {
-            if (!ongoing || ongoing.type !== 'Vezetés') {
-                await this.startWork(client, driverName, 'Vezetés', today, d.licensePlate, null, now);
-                calculatedStatus = 'Vezetés';
+            if (ongoing && String(ongoing.type || '').startsWith('Pihen') && (now - Number(ongoing.start_time)) < SHORT_REST_GRACE_MS) {
+                await this.discardShortRest(client, driverName, ongoing);
+                calculatedStatus = 'VezetĂ©s';
+            } else if (!ongoing || ongoing.type !== 'VezetĂ©s') {
+                await this.startWork(client, driverName, 'VezetĂ©s', today, d.licensePlate, null, now);
+                calculatedStatus = 'VezetĂ©s';
             }
-        } else if (d.speed < 1.5 && ongoing && ongoing.type === 'Vezetés' && !isAtTourStop && !isNearKnownPlace) {
-            const tenMinsAgo = now - (10 * 60 * 1000);
-            const recentUpdates = await client.query('SELECT timestamp, speed FROM live_updates WHERE driver_name = $1 AND timestamp > $2', [driverName, tenMinsAgo]);
-            const slowUpdates = recentUpdates.rows.filter(r => r.speed < 2.5);
-            const isResting = slowUpdates.some(r => (now - Number(r.timestamp)) > 170000); // Legalább 2.8 perc lassú mozgás
-            if (isResting) {
-                await this.startWork(client, driverName, 'Pihenő', today, d.licensePlate, ongoing.mileage, now);
-                calculatedStatus = 'Pihenő';
-            }
+        } else if (d.speed < 1.5 && ongoing && ongoing.type === 'VezetĂ©s' && !isAtTourStop && !isNearKnownPlace) {
+            await this.startWork(client, driverName, 'PihenĹ‘', today, d.licensePlate, ongoing.mileage, now);
+            calculatedStatus = 'PihenĹ‘';
         }
 
         // 4. OSRM Calculations (Moved from App)
         if (currentTour) {
             try {
-                // Csak azokat a megállókat vegyük bele, amik még nincsenek kész
+                // Csak azokat a megĂˇllĂłkat vegyĂĽk bele, amik mĂ©g nincsenek kĂ©sz
                 const waypoints = stops
                     .filter(s => !s.is_completed && s.latitude && s.longitude)
                     .map(s => `${s.longitude},${s.latitude}`);
 
-                // Ha van depó (túrához rendelt, app által küldött vagy sofőrhöz rendelt bázis), azt MINDIG adjuk hozzá a végéhez
+                // Ha van depĂł (tĂşrĂˇhoz rendelt, app Ăˇltal kĂĽldĂ¶tt vagy sofĹ‘rhĂ¶z rendelt bĂˇzis), azt MINDIG adjuk hozzĂˇ a vĂ©gĂ©hez
                 const finalDepotLat = currentTour.depot_lat || d.depotLat || dInfo?.base_lat;
                 const finalDepotLng = currentTour.depot_lng || d.depotLng || dInfo?.base_lng;
 
@@ -212,18 +214,18 @@ const StatusEngine = {
                          tourRemainingDist = r.routes[0].distance / 1000;
                          tourRemainingDur = Math.round(r.routes[0].duration);
 
-                         // A következő célpont távolsága (lehet megálló vagy depó)
+                         // A kĂ¶vetkezĹ‘ cĂ©lpont tĂˇvolsĂˇga (lehet megĂˇllĂł vagy depĂł)
                          if (r.routes[0].legs && r.routes[0].legs[0]) {
                              nextStopDist = r.routes[0].legs[0].distance / 1000;
                              nextStopDur = Math.round(r.routes[0].legs[0].duration);
                          }
-                         console.log(`[OSRM] ${driverName} -> Összesen: ${tourRemainingDist.toFixed(1)}km, Következőig: ${nextStopDist?.toFixed(1)}km`);
+                         console.log(`[OSRM] ${driverName} -> Ă–sszesen: ${tourRemainingDist.toFixed(1)}km, KĂ¶vetkezĹ‘ig: ${nextStopDist?.toFixed(1)}km`);
                     }
 
                     if (nextStop) {
                         nextStopInfo = `${nextStop.contact_name || nextStop.recipient} | ${nextStop.address}`;
                     } else if (finalDepotLat) {
-                        nextStopInfo = `Vissza a depóba | ${currentTour.depot_name || d.depotName || 'Telephely'}`;
+                        nextStopInfo = `Vissza a depĂłba | ${currentTour.depot_name || d.depotName || 'Telephely'}`;
                     }
                 }
             } catch (e) {
@@ -239,7 +241,7 @@ const StatusEngine = {
             tourRemainingDur,
             nextStopInfo,
             currentTourName: currentTour?.name,
-            depotName: currentTour?.depot_name || d.depotName || (dInfo?.base_lat ? 'Alapértelmezett Depó' : null),
+            depotName: currentTour?.depot_name || d.depotName || (dInfo?.base_lat ? 'AlapĂ©rtelmezett DepĂł' : null),
             depotLat: currentTour?.depot_lat || d.depotLat || dInfo?.base_lat,
             depotLng: currentTour?.depot_lng || d.depotLng || dInfo?.base_lng,
             nextLat: nextStop ? nextStop.latitude : (currentTour?.depot_lat || d.depotLat || dInfo?.base_lat || d.nextLat),
@@ -253,6 +255,17 @@ const StatusEngine = {
         // Insert new
         await client.query('INSERT INTO work_times (uuid, driver_name, type, start_time, date, license_plate, mileage) VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6)',
             [driverName, type, now, date, plate || 'N/A', mileage || 0]);
+    },
+
+    async discardShortRest(client, driverName, rest) {
+        const previousDrivingRes = await client.query(
+            'SELECT id FROM work_times WHERE driver_name = $1 AND type LIKE $2 AND end_time = $3 ORDER BY start_time DESC LIMIT 1',
+            [driverName, 'Vezet%', rest.start_time]
+        );
+        if (previousDrivingRes.rows[0]) {
+            await client.query('UPDATE work_times SET end_time = NULL WHERE id = $1', [previousDrivingRes.rows[0].id]);
+        }
+        await client.query('DELETE FROM work_times WHERE id = $1', [rest.id]);
     }
 };
 
@@ -261,7 +274,7 @@ const StatusEngine = {
 // ==========================================
 const ImportEngine = {
     async processTour(client, driverName, tourData, stopsData) {
-        // UUID alapú keresés, hogy elkerüljük a kliens/szerver ID ütközést
+        // UUID alapĂş keresĂ©s, hogy elkerĂĽljĂĽk a kliens/szerver ID ĂĽtkĂ¶zĂ©st
         const existingRes = await client.query('SELECT id FROM tours WHERE uuid = $1', [tourData.uuid]);
         let tourId = existingRes.rows.length > 0 ? existingRes.rows[0].id : null;
 
@@ -373,7 +386,7 @@ const initDb = async () => {
             UNIQUE(company_uuid, role, module)
         )`,
         `CREATE TABLE IF NOT EXISTS live_updates (id SERIAL PRIMARY KEY, uuid UUID DEFAULT gen_random_uuid() UNIQUE, driver_name TEXT, driver_photo TEXT, driver_phone TEXT, driver_email TEXT, license_plate TEXT, latitude DOUBLE PRECISION, longitude DOUBLE PRECISION, speed FLOAT, status TEXT, current_tour TEXT, next_stop TEXT, next_lat DOUBLE PRECISION, next_lng DOUBLE PRECISION, next_stop_dist FLOAT, next_stop_duration BIGINT, tour_remaining_dist FLOAT, tour_remaining_duration BIGINT, depot_name TEXT, depot_lat DOUBLE PRECISION, depot_lng DOUBLE PRECISION, timestamp BIGINT, UNIQUE(uuid))`,
-        `CREATE TABLE IF NOT EXISTS costs (id SERIAL PRIMARY KEY, uuid UUID DEFAULT gen_random_uuid() UNIQUE, driver_name TEXT, amount DECIMAL, currency TEXT, category TEXT, notes TEXT, mileage INT, status TEXT DEFAULT 'Rögzítve', timestamp BIGINT, UNIQUE(uuid))`,
+        `CREATE TABLE IF NOT EXISTS costs (id SERIAL PRIMARY KEY, uuid UUID DEFAULT gen_random_uuid() UNIQUE, driver_name TEXT, amount DECIMAL, currency TEXT, category TEXT, notes TEXT, mileage INT, status TEXT DEFAULT 'RĂ¶gzĂ­tve', timestamp BIGINT, UNIQUE(uuid))`,
         `CREATE TABLE IF NOT EXISTS chat_messages (id SERIAL PRIMARY KEY, uuid UUID DEFAULT gen_random_uuid() UNIQUE, driver_name TEXT, sender TEXT, message TEXT, timestamp BIGINT, UNIQUE(uuid))`,
         `CREATE TABLE IF NOT EXISTS work_times (id SERIAL PRIMARY KEY, uuid UUID DEFAULT gen_random_uuid() UNIQUE, driver_name TEXT, type TEXT, start_time BIGINT, end_time BIGINT, mileage INT, end_mileage INT, license_plate TEXT, notes TEXT, date TEXT, UNIQUE(uuid))`,
         `CREATE TABLE IF NOT EXISTS hotels (id SERIAL PRIMARY KEY, uuid UUID DEFAULT gen_random_uuid() UNIQUE, driver_name TEXT, name TEXT, address TEXT, timestamp BIGINT, UNIQUE(uuid))`,
@@ -638,7 +651,7 @@ app.post('/api/sync-costs', async (req, res) => {
         await client.query('BEGIN');
         for (const c of req.body) {
             await client.query(`INSERT INTO costs (uuid, driver_name, amount, currency, category, notes, mileage, photo_path, status, timestamp)
-                VALUES (COALESCE($1::UUID, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8, COALESCE($9, 'RĂ¶gzĂ­tve'), $10)
+                VALUES (COALESCE($1::UUID, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8, COALESCE($9, 'RÄ‚Â¶gzÄ‚Â­tve'), $10)
                 ON CONFLICT (uuid) DO UPDATE SET
                     driver_name = EXCLUDED.driver_name,
                     amount = EXCLUDED.amount,
@@ -682,7 +695,7 @@ app.get('/api/cost-status/:driverName', async (req, res) => {
 
 app.post('/admin/update-cost-status', requireAdmin, async (req, res) => {
     const { uuid, id, status } = req.body;
-    const allowed = new Set(['RĂ¶gzĂ­tve', 'BekĂĽldve', 'Elfogadva', 'Kifizetve', 'Rogzitve', 'Bekuldve']);
+    const allowed = new Set(['RÄ‚Â¶gzÄ‚Â­tve', 'BekÄ‚Ä˝ldve', 'Elfogadva', 'Kifizetve', 'Rogzitve', 'Bekuldve']);
     if (!status || (!uuid && !id)) return res.sendStatus(400);
     if (!allowed.has(status)) return res.status(400).send('Invalid status');
     try {
@@ -881,7 +894,7 @@ app.post('/api/activate-driver', async (req, res) => {
     const { code } = req.body;
     try {
         const result = await pool.query('SELECT * FROM drivers WHERE activation_code = $1 AND is_active = true', [code]);
-        if (result.rows.length === 0) return res.status(404).send('Érvénytelen vagy inaktív aktiváló kód.');
+        if (result.rows.length === 0) return res.status(404).send('Ă‰rvĂ©nytelen vagy inaktĂ­v aktivĂˇlĂł kĂłd.');
         res.json(result.rows[0]);
     } catch (e) { res.status(500).send(e.message); }
 });
@@ -892,12 +905,12 @@ app.post('/api/sync-profile', async (req, res) => {
     try {
         await client.query('BEGIN');
 
-        // Először próbáljuk meg UUID alapján azonosítani, ha az app küldi
+        // ElĹ‘szĂ¶r prĂłbĂˇljuk meg UUID alapjĂˇn azonosĂ­tani, ha az app kĂĽldi
         let driverRes;
         if (d.uuid) {
             driverRes = await client.query('SELECT * FROM drivers WHERE uuid = $1', [d.uuid]);
         } else {
-            // Ha nincs UUID, akkor név alapján keressük (visszafelé kompatibilitás)
+            // Ha nincs UUID, akkor nĂ©v alapjĂˇn keressĂĽk (visszafelĂ© kompatibilitĂˇs)
             driverRes = await client.query('SELECT * FROM drivers WHERE name = $1', [d.name]);
         }
 
@@ -911,7 +924,7 @@ app.post('/api/sync-profile', async (req, res) => {
                 [d.name, d.email, d.phone, d.whatsapp, d.telegram, d.licensePlate, d.photoUrl, driver.uuid]
             );
 
-            // Ha megváltozott a név, frissítsük az összes kapcsolódó táblát is
+            // Ha megvĂˇltozott a nĂ©v, frissĂ­tsĂĽk az Ă¶sszes kapcsolĂłdĂł tĂˇblĂˇt is
             if (oldName !== d.name) {
                 console.log(`[RENAME] Cascading name change: ${oldName} -> ${d.name}`);
                 const tables = ['live_updates', 'costs', 'chat_messages', 'work_times', 'hotels', 'tours'];
@@ -920,7 +933,7 @@ app.post('/api/sync-profile', async (req, res) => {
                 }
             }
         } else {
-            // Új sofőr beszúrása (csak ha tényleg nem létezik)
+            // Ăšj sofĹ‘r beszĂşrĂˇsa (csak ha tĂ©nyleg nem lĂ©tezik)
             const code = Math.random().toString(36).substring(2, 8).toUpperCase();
             await client.query(
                 `INSERT INTO drivers (name, email, phone, whatsapp, telegram, license_plate, photo_url, activation_code, is_active)
@@ -954,7 +967,7 @@ app.post('/admin/save-driver', requireAdmin, async (req, res) => {
     try {
         await client.query('BEGIN');
         if (d.uuid) {
-            // Régi név lekérése a módosítás előtt
+            // RĂ©gi nĂ©v lekĂ©rĂ©se a mĂłdosĂ­tĂˇs elĹ‘tt
             const oldRes = await client.query('SELECT name FROM drivers WHERE uuid = $1', [d.uuid]);
             const oldName = oldRes.rows[0]?.name;
 
@@ -963,7 +976,7 @@ app.post('/admin/save-driver', requireAdmin, async (req, res) => {
                 [d.name, d.email, d.phone, d.whatsapp, d.telegram, d.license_plate, d.photo_url, d.is_active, d.home_lat, d.home_lng, d.base_lat, d.base_lng, d.uuid]
             );
 
-            // Ha megváltozott a név, frissítsük az összes kapcsolódó táblát is (cascade)
+            // Ha megvĂˇltozott a nĂ©v, frissĂ­tsĂĽk az Ă¶sszes kapcsolĂłdĂł tĂˇblĂˇt is (cascade)
             if (oldName && oldName !== d.name) {
                 console.log(`[ADMIN-RENAME] Cascading name change: ${oldName} -> ${d.name}`);
                 const tables = ['live_updates', 'costs', 'chat_messages', 'work_times', 'hotels', 'tours'];
@@ -1157,7 +1170,7 @@ app.get('/api/live-status/:name', async (req, res) => {
         const today = new Date().toISOString().split('T')[0];
         const work = (await pool.query('SELECT * FROM work_times WHERE driver_name = $1 AND date = $2', [name, today])).rows;
         const drivingTodaySec = work
-            .filter(w => w.type === 'Vezetés')
+            .filter(w => w.type === 'VezetĂ©s')
             .reduce((sum, w) => sum + (Number(w.end_time || Date.now()) - Number(w.start_time)) / 1000, 0);
 
         res.json({ ...update, drivingTodaySec });
@@ -1176,7 +1189,7 @@ app.get('/api/fleet-status', async (req, res) => {
             FROM (
                 SELECT driver_name, status, license_plate, timestamp::BIGINT FROM live_updates
                 UNION ALL
-                SELECT driver_name, 'Túra feltöltve' as status, '' as license_plate, date::BIGINT as timestamp FROM tours WHERE deleted_at IS NULL
+                SELECT driver_name, 'TĂşra feltĂ¶ltve' as status, '' as license_plate, date::BIGINT as timestamp FROM tours WHERE deleted_at IS NULL
             ) AS all_drivers
             LEFT JOIN drivers d ON d.name = all_drivers.driver_name
             ORDER BY all_drivers.driver_name, all_drivers.timestamp DESC
@@ -1203,9 +1216,9 @@ app.get('/api/stats/:driverName', async (req, res) => {
             today,
             month,
             workTodaySeconds: Math.round(sumSeconds(work, null, true)),
-            drivingTodaySeconds: Math.round(sumSeconds(work, 'VezetĂ©s', true)),
+            drivingTodaySeconds: Math.round(sumSeconds(work, 'VezetÄ‚Â©s', true)),
             workMonthSeconds: Math.round(sumSeconds(work, null, false)),
-            drivingMonthSeconds: Math.round(sumSeconds(work, 'VezetĂ©s', false)),
+            drivingMonthSeconds: Math.round(sumSeconds(work, 'VezetÄ‚Â©s', false)),
             costMonthTotal: Number(costs.total || 0),
             costMonthCount: Number(costs.count || 0),
             tourMonthCount: Number(tours.count || 0)
@@ -1227,7 +1240,7 @@ app.get('/', async (req, res) => {
             FROM (
                 SELECT driver_name, status, license_plate, timestamp::BIGINT FROM live_updates
                 UNION ALL
-                SELECT driver_name, 'Túra feltöltve' as status, '' as license_plate, date::BIGINT as timestamp FROM tours WHERE deleted_at IS NULL
+                SELECT driver_name, 'TĂşra feltĂ¶ltve' as status, '' as license_plate, date::BIGINT as timestamp FROM tours WHERE deleted_at IS NULL
             ) AS all_drivers
             LEFT JOIN drivers d ON d.name = all_drivers.driver_name
             ORDER BY all_drivers.driver_name, all_drivers.timestamp DESC
@@ -1252,8 +1265,8 @@ app.get('/', async (req, res) => {
         <body>
             <div id="toast-container"></div>
             <div style="display: flex; justify-content: space-between; align-items: center;">
-                <h1>🚛 Flotta kiválasztása</h1>
-                <button class="btn-admin" id="admin-toggle" onclick="toggleAdmin()">⚙️ SOFŐRÖK KEZELÉSE</button>
+                <h1>đźš› Flotta kivĂˇlasztĂˇsa</h1>
+                <button class="btn-admin" id="admin-toggle" onclick="toggleAdmin()">âš™ď¸Ź SOFĹRĂ–K KEZELĂ‰SE</button>
             </div>
 
             <div id="fleet-section" class="section active">
@@ -1262,46 +1275,46 @@ app.get('/', async (req, res) => {
 
             <div id="admin-section" class="section">
                 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
-                    <h3>SOFŐRÖK LISTÁJA</h3>
+                    <h3>SOFĹRĂ–K LISTĂJA</h3>
                     <div style="display:flex; gap:10px;">
-                        <input type="text" id="importCode" placeholder="Aktiváló kód" style="width:150px;">
-                        <button onclick="importDriver()" style="background:#3498db; color:white; padding:10px; border:none; border-radius:4px; cursor:pointer;">Importálás</button>
-                        <button onclick="editDriver()" style="background:#2ecc71; color:white; padding:10px 20px; border:none; border-radius:4px; cursor:pointer;">+ Új sofőr</button>
+                        <input type="text" id="importCode" placeholder="AktivĂˇlĂł kĂłd" style="width:150px;">
+                        <button onclick="importDriver()" style="background:#3498db; color:white; padding:10px; border:none; border-radius:4px; cursor:pointer;">ImportĂˇlĂˇs</button>
+                        <button onclick="editDriver()" style="background:#2ecc71; color:white; padding:10px 20px; border:none; border-radius:4px; cursor:pointer;">+ Ăšj sofĹ‘r</button>
                     </div>
                 </div>
                 <table>
-                    <thead><tr><th>Név</th><th>Email / Telefon</th><th>Rendszám</th><th>Aktiváló kód</th><th>Állapot</th><th>Művelet</th></tr></thead>
+                    <thead><tr><th>NĂ©v</th><th>Email / Telefon</th><th>RendszĂˇm</th><th>AktivĂˇlĂł kĂłd</th><th>Ăllapot</th><th>MĹ±velet</th></tr></thead>
                     <tbody id="drivers-list"></tbody>
                 </table>
             </div>
 
             <div id="driverModal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.8); z-index:1001; padding:50px;">
                 <div style="background:#222; padding:30px; border-radius:12px; max-width:600px; margin:auto;">
-                    <h2>Sofőr szerkesztése</h2>
+                    <h2>SofĹ‘r szerkesztĂ©se</h2>
                     <input type="hidden" id="dUuid">
                     <div style="text-align: center; margin-bottom: 20px;">
                         <div style="position: relative; display: inline-block;">
                             <img id="dPhotoPreview" src="" style="width:100px; height:100px; border-radius:50%; background:#333; object-fit: cover; border: 2px solid #444;">
-                            <label for="admin-photo-upload" style="position: absolute; bottom: 0; right: 0; background: #3498db; color: white; width: 30px; height: 30px; border-radius: 50%; display: flex; align-items: center; justify-content: center; cursor: pointer; border: 2px solid #222;">📷</label>
+                            <label for="admin-photo-upload" style="position: absolute; bottom: 0; right: 0; background: #3498db; color: white; width: 30px; height: 30px; border-radius: 50%; display: flex; align-items: center; justify-content: center; cursor: pointer; border: 2px solid #222;">đź“·</label>
                             <input type="file" id="admin-photo-upload" style="display: none;" onchange="uploadAdminPhoto(this)" accept="image/*">
                         </div>
                     </div>
                     <div style="display:grid; grid-template-columns:1fr 1fr; gap:15px; margin-bottom:20px;">
-                        <div><label style="display:block; font-size:11px; color:#aaa;">Név</label><input type="text" id="dName" style="width:100%"></div>
-                        <div><label style="display:block; font-size:11px; color:#aaa;">Rendszám</label><input type="text" id="dPlate" style="width:100%"></div>
+                        <div><label style="display:block; font-size:11px; color:#aaa;">NĂ©v</label><input type="text" id="dName" style="width:100%"></div>
+                        <div><label style="display:block; font-size:11px; color:#aaa;">RendszĂˇm</label><input type="text" id="dPlate" style="width:100%"></div>
                         <div><label style="display:block; font-size:11px; color:#aaa;">Email</label><input type="text" id="dEmail" style="width:100%"></div>
                         <div><label style="display:block; font-size:11px; color:#aaa;">Telefon</label><input type="text" id="dPhone" style="width:100%"></div>
                         <div><label style="display:block; font-size:11px; color:#aaa;">WhatsApp</label><input type="text" id="dWhatsapp" style="width:100%"></div>
                         <div><label style="display:block; font-size:11px; color:#aaa;">Telegram</label><input type="text" id="dTelegram" style="width:100%"></div>
                     </div>
-                    <div><label style="display:block; font-size:11px; color:#aaa;">Profilkép URL</label><input type="text" id="dPhoto" style="width:100%"></div>
+                    <div><label style="display:block; font-size:11px; color:#aaa;">ProfilkĂ©p URL</label><input type="text" id="dPhoto" style="width:100%"></div>
                     <div style="margin-top:15px;">
                         <input type="checkbox" id="dActive" checked style="width:20px; height:20px; display:inline-block; vertical-align:middle;">
-                        <label style="display:inline-block; margin-left:10px;">Aktív felhasználó</label>
+                        <label style="display:inline-block; margin-left:10px;">AktĂ­v felhasznĂˇlĂł</label>
                     </div>
                     <div style="margin-top:30px; display:flex; gap:10px; justify-content:flex-end;">
-                        <button onclick="document.getElementById('driverModal').style.display='none'">Mégse</button>
-                        <button onclick="saveDriver()" style="background:#3498db; color:white; padding:10px 30px; border:none; border-radius:4px; cursor:pointer;">Mentés</button>
+                        <button onclick="document.getElementById('driverModal').style.display='none'">MĂ©gse</button>
+                        <button onclick="saveDriver()" style="background:#3498db; color:white; padding:10px 30px; border:none; border-radius:4px; cursor:pointer;">MentĂ©s</button>
                     </div>
                 </div>
             </div>
@@ -1319,7 +1332,7 @@ app.get('/', async (req, res) => {
                 function toggleAdmin() {
                     const isAdmin = document.getElementById('admin-section').classList.toggle('active');
                     document.getElementById('fleet-section').classList.toggle('active', !isAdmin);
-                    document.getElementById('admin-toggle').innerText = isAdmin ? '⬅️ VISSZA A FLOTTÁHOZ' : '⚙️ SOFŐRÖK KEZELÉSE';
+                    document.getElementById('admin-toggle').innerText = isAdmin ? 'â¬…ď¸Ź VISSZA A FLOTTĂHOZ' : 'âš™ď¸Ź SOFĹRĂ–K KEZELĂ‰SE';
                     if (isAdmin) refreshDrivers();
                 }
 
@@ -1350,10 +1363,10 @@ app.get('/', async (req, res) => {
                             '<td>' + esc(d.email || '') + '<br><small>' + esc(d.phone || '') + '</small></td>' +
                             '<td>' + esc(d.license_plate || '') + '</td>' +
                             '<td><code style="background:#444; padding:2px 5px;">' + esc(d.activation_code || '---') + '</code></td>' +
-                            '<td><span style="color:' + (d.is_active ? '#2ecc71' : '#e74c3c') + '">' + (d.is_active ? 'AKTÍV' : 'INAKTÍV') + '</span></td>' +
+                            '<td><span style="color:' + (d.is_active ? '#2ecc71' : '#e74c3c') + '">' + (d.is_active ? 'AKTĂŤV' : 'INAKTĂŤV') + '</span></td>' +
                             '<td>' +
-                                '<button data-driver="' + encodeURIComponent(JSON.stringify(d)) + '" onclick="editDriver(JSON.parse(decodeURIComponent(this.dataset.driver)))">✏</button>' +
-                                '<button data-uuid="' + esc(d.uuid) + '" onclick="deleteDriver(this.dataset.uuid)" style="background:#e74c3c; color:white; border:none; border-radius:4px; padding:5px 10px; cursor:pointer;">🗑</button>' +
+                                '<button data-driver="' + encodeURIComponent(JSON.stringify(d)) + '" onclick="editDriver(JSON.parse(decodeURIComponent(this.dataset.driver)))">âśŹ</button>' +
+                                '<button data-uuid="' + esc(d.uuid) + '" onclick="deleteDriver(this.dataset.uuid)" style="background:#e74c3c; color:white; border:none; border-radius:4px; padding:5px 10px; cursor:pointer;">đź—‘</button>' +
                             '</td>' +
                         '</tr>').join('');
                 }
@@ -1391,7 +1404,7 @@ app.get('/', async (req, res) => {
                             const data = await res.json();
                             document.getElementById('dPhotoPreview').src = data.photoUrl;
                             document.getElementById('dPhoto').value = data.photoUrl;
-                            showToast('Kép feltöltve!');
+                            showToast('KĂ©p feltĂ¶ltve!');
                         }
                     };
                     reader.readAsDataURL(file);
@@ -1411,21 +1424,21 @@ app.get('/', async (req, res) => {
                     };
                     const r = await fetch('/admin/save-driver', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) });
                     if(r.ok) {
-                        showToast('Sofőr adatai mentve!');
+                        showToast('SofĹ‘r adatai mentve!');
                         document.getElementById('driverModal').style.display = 'none';
                         refreshDrivers();
                     }
                 }
 
                 async function deleteDriver(uuid) {
-                    if (!confirm('Biztosan törölni szeretnéd ezt a sofőrt? Minden adata elvész!')) return;
+                    if (!confirm('Biztosan tĂ¶rĂ¶lni szeretnĂ©d ezt a sofĹ‘rt? Minden adata elvĂ©sz!')) return;
                     const r = await fetch('/admin/delete-driver', {
                         method: 'POST',
                         headers: {'Content-Type': 'application/json'},
                         body: JSON.stringify({ uuid })
                     });
                     if (r.ok) {
-                        showToast('Sofőr törölve.');
+                        showToast('SofĹ‘r tĂ¶rĂ¶lve.');
                         refreshDrivers();
                     }
                 }
@@ -1441,11 +1454,11 @@ app.get('/', async (req, res) => {
                         });
                         if (r.ok) {
                             const driver = await r.json();
-                            showToast('Sofőr importálva: ' + driver.name);
+                            showToast('SofĹ‘r importĂˇlva: ' + driver.name);
                             document.getElementById('importCode').value = '';
                             refreshDrivers();
                         } else {
-                            alert('Érvénytelen kód vagy a sofőr már importálva van.');
+                            alert('Ă‰rvĂ©nytelen kĂłd vagy a sofĹ‘r mĂˇr importĂˇlva van.');
                         }
                     } catch (e) { console.error('Import error:', e); }
                 }
@@ -1482,7 +1495,7 @@ app.get('/driver/:name', async (req, res) => {
     const currentStopsJson = JSON.stringify(currentTourObj ? currentTourObj.stops : []);
 
     const drivingTodaySec = work
-        .filter(w => w.type === 'Vezetés' && w.date === new Date().toISOString().split('T')[0])
+        .filter(w => w.type === 'VezetĂ©s' && w.date === new Date().toISOString().split('T')[0])
         .reduce((sum, w) => sum + (Number(w.end_time || Date.now()) - Number(w.start_time)) / 1000, 0);
 
     const html = `<html><head><title>ERP - ${name}</title>
@@ -1514,52 +1527,52 @@ app.get('/driver/:name', async (req, res) => {
     </style></head>
     <body>
         <div id="toast-container"></div>
-        <header><button onclick="location.href='/'">⬅</button><img src="${dInfo.photo_url || update.driver_photo || ''}" style="width:40px;height:40px;border-radius:50%;margin-left:15px;margin-right:15px;object-fit:cover;background:#333;"><h2><span>${name}</span> - ERP</h2></header>
+        <header><button onclick="location.href='/'">â¬…</button><img src="${dInfo.photo_url || update.driver_photo || ''}" style="width:40px;height:40px;border-radius:50%;margin-left:15px;margin-right:15px;object-fit:cover;background:#333;"><h2><span>${name}</span> - ERP</h2></header>
         <nav>
             <button data-tab="dashboard" onclick="openTab(event, 'dashboard')">DASHBOARD</button>
-            <button data-tab="tours" onclick="openTab(event, 'tours')">TÚRÁK</button>
-            <button data-tab="history" onclick="openTab(event, 'history')">TÖRTÉNET</button>
-            <button data-tab="costs" onclick="openTab(event, 'costs')">KÖLTSÉGEK</button>
+            <button data-tab="tours" onclick="openTab(event, 'tours')">TĂšRĂK</button>
+            <button data-tab="history" onclick="openTab(event, 'history')">TĂ–RTĂ‰NET</button>
+            <button data-tab="costs" onclick="openTab(event, 'costs')">KĂ–LTSĂ‰GEK</button>
             <button data-tab="hotels" onclick="openTab(event, 'hotels')">HOTELEK</button>
             <button data-tab="chat" onclick="openTab(event, 'chat')">CHAT</button>
             <button data-tab="stats" onclick="openTab(event, 'stats')">STATISZTIKA</button>
-            <button data-tab="report" onclick="openTab(event, 'report')">MENETLEVÉL</button>
+            <button data-tab="report" onclick="openTab(event, 'report')">MENETLEVĂ‰L</button>
             <button data-tab="profile" onclick="openTab(event, 'profile')">PROFIL</button>
         </nav>
         <div id="dashboard" class="tab-content active" style="display:block;">
             <div style="display:grid; grid-template-columns: 1fr 300px; gap: 20px;">
                 <div id="map"></div>
                 <div style="background:#222; padding:20px; border-radius:8px;">
-                    <h3>Státusz: <span id="live-status" style="color:#3498db">${update.status}</span></h3>
-                    <p id="live-speed">🚗 Sebesség: ${Math.round(update.speed || 0)} km/h</p>
-                    <p id="live-license">🚚 Rendszám: ${dInfo.license_plate || update.license_plate || 'N/A'}</p>
+                    <h3>StĂˇtusz: <span id="live-status" style="color:#3498db">${update.status}</span></h3>
+                    <p id="live-speed">đźš— SebessĂ©g: ${Math.round(update.speed || 0)} km/h</p>
+                    <p id="live-license">đźšš RendszĂˇm: ${dInfo.license_plate || update.license_plate || 'N/A'}</p>
                     <hr style="border-color:#444">
 
                     <div id="live-tour-container" style="${update.current_tour ? '' : 'display:none'}">
                         <div style="background:#333; padding:15px; border-radius:8px; margin-top:10px;">
-                            <h4 style="margin:0; color:#2ecc71;">📦 Aktuális túra: <span id="live-tour-name">${update.current_tour || ''}</span></h4>
+                            <h4 style="margin:0; color:#2ecc71;">đź“¦ AktuĂˇlis tĂşra: <span id="live-tour-name">${update.current_tour || ''}</span></h4>
                             <div style="display:flex; justify-content:space-between; margin-top:10px;">
                                 <div style="text-align:center; flex:1;">
-                                    <div style="font-size:11px; color:#aaa; text-transform:uppercase;">Következőig</div>
+                                    <div style="font-size:11px; color:#aaa; text-transform:uppercase;">KĂ¶vetkezĹ‘ig</div>
                                     <div id="live-next-dist" style="font-size:18px; font-weight:bold; color:#3498db;">${update.next_stop_dist ? update.next_stop_dist.toFixed(1) + ' km' : 'N/A'}</div>
                                     <div style="font-size:11px; color:#3498db;" id="nextStopDurationDisplay"></div>
                                 </div>
                                 <div style="width:1px; background:#444;"></div>
                                 <div style="text-align:center; flex:1;">
-                                    <div style="font-size:11px; color:#aaa; text-transform:uppercase;">Túra összesen</div>
+                                    <div style="font-size:11px; color:#aaa; text-transform:uppercase;">TĂşra Ă¶sszesen</div>
                                     <div id="live-tour-dist" style="font-size:18px; font-weight:bold; color:#2ecc71;">${update.tour_remaining_dist ? update.tour_remaining_dist.toFixed(1) + ' km' : 'N/A'}</div>
                                     <div style="font-size:11px; color:#2ecc71;" id="tourDurationDisplay"></div>
                                 </div>
                             </div>
                             <div id="live-break-container" style="margin-top:10px; font-size:11px; color:#e74c3c; text-align:center; border-top:1px solid #444; padding-top:5px; ${update.next_break_in_seconds ? '' : 'display:none'}">
-                                ⚠️ Következő pihenő kb. <span id="nextBreakDisplay"></span> múlva
+                                âš ď¸Ź KĂ¶vetkezĹ‘ pihenĹ‘ kb. <span id="nextBreakDisplay"></span> mĂşlva
                             </div>
                         </div>
                     </div>
-                    <p id="no-tour-msg" style="color:#777; ${update.current_tour ? 'display:none' : ''}">Nincs aktív túra</p>
+                    <p id="no-tour-msg" style="color:#777; ${update.current_tour ? 'display:none' : ''}">Nincs aktĂ­v tĂşra</p>
 
                     <div id="live-next-stop-container" style="background:#34495e; padding:15px; border-radius:8px; margin-top:10px; ${update.next_stop ? '' : 'display:none'}">
-                        <h4 style="margin:0; color:#3498db;">📍 Következő cím:</h4>
+                        <h4 style="margin:0; color:#3498db;">đź“Ť KĂ¶vetkezĹ‘ cĂ­m:</h4>
                         <div id="live-next-stop-details">
                             ${update.next_stop ? (update.next_stop.includes(' | ') ? `
                                 <b style="display:block; margin-top:5px; color:#fff;">${update.next_stop.split(' | ')[0]}</b>
@@ -1569,97 +1582,97 @@ app.get('/driver/:name', async (req, res) => {
                     </div>
 
                     ${update.depot_name ? `
-                        <p style="margin-top:20px; font-size:12px; color:#999;">🏠 Depó: ${update.depot_name}</p>
+                        <p style="margin-top:20px; font-size:12px; color:#999;">đźŹ  DepĂł: ${update.depot_name}</p>
                     ` : ''}
                 </div>
             </div>
         </div>
         <div id="tours" class="tab-content">
-            <button onclick="editTour()" style="background:#2ecc71; color:white; padding:10px; margin-bottom:20px;">+ Új túra</button>
+            <button onclick="editTour()" style="background:#2ecc71; color:white; padding:10px; margin-bottom:20px;">+ Ăšj tĂşra</button>
             <div id="tours-list">
                 ${toursRes.map(t => `
                     <div class="tour-card">
                         <div style="float:right; display:flex; gap:5px;">
-                            <select onchange="transferTour(${t.id}, this.value)" style="width:auto;"><option value="">-- Áthelyezés --</option>${allD.map(n => "<option value='" + n + "'>" + n + "</option>").join('')}</select>
-                            <button onclick="editTour(JSON.parse(decodeURIComponent('${encodeURIComponent(JSON.stringify(t))}')))">✏</button>
-                            <button onclick="deleteTour(${t.id})" style="background:#e74c3c; color:white;">🗑</button>
+                            <select onchange="transferTour(${t.id}, this.value)" style="width:auto;"><option value="">-- ĂthelyezĂ©s --</option>${allD.map(n => "<option value='" + n + "'>" + n + "</option>").join('')}</select>
+                            <button onclick="editTour(JSON.parse(decodeURIComponent('${encodeURIComponent(JSON.stringify(t))}')))">âśŹ</button>
+                            <button onclick="deleteTour(${t.id})" style="background:#e74c3c; color:white;">đź—‘</button>
                         </div>
                         <b>${escapeHtml(t.name)}</b> (${escapeHtml(t.customer || '')}) - ${new Date(Number(t.date)).toLocaleDateString()}
-                        ${t.stops.map(s => "<div class='stop-item'>" + (s.order_index + 1) + ". " + (s.stop_type === 'HOTEL' ? '🏨 ' : (s.stop_type === 'DEPOT' ? '🏠 ' : '')) + escapeHtml(s.address || s.address_full || '') + "</div>").join('')}
+                        ${t.stops.map(s => "<div class='stop-item'>" + (s.order_index + 1) + ". " + (s.stop_type === 'HOTEL' ? 'đźŹ¨ ' : (s.stop_type === 'DEPOT' ? 'đźŹ  ' : '')) + escapeHtml(s.address || s.address_full || '') + "</div>").join('')}
                     </div>
                 `).join('')}
             </div>
         </div>
         <div id="history" class="tab-content">
             <div style="display:flex; gap:10px; margin-bottom:20px; align-items:center;">
-                <label style="color:white; font-size:14px;">Dátum választása:</label>
+                <label style="color:white; font-size:14px;">DĂˇtum vĂˇlasztĂˇsa:</label>
                 <input type="date" id="history-date" style="width:200px;" onchange="loadHistory()">
-                <button onclick="loadHistory()" style="background:#3498db; color:white; padding:8px 20px;">BETÖLTÉS</button>
+                <button onclick="loadHistory()" style="background:#3498db; color:white; padding:8px 20px;">BETĂ–LTĂ‰S</button>
             </div>
             <div style="display:grid; grid-template-columns: 1fr; gap:20px;">
                 <div id="history-map" style="height:400px; border-radius:8px;"></div>
                 <div style="background:#222; padding:15px; border-radius:8px;">
-                    <h3>Sebesség grafikon (km/h)</h3>
+                    <h3>SebessĂ©g grafikon (km/h)</h3>
                     <canvas id="speedChart"></canvas>
                 </div>
             </div>
         </div>
-        <div id="costs" class="tab-content"><table><tr><th>Dátum</th><th>Kategória</th><th>Összeg</th><th>Státusz</th><th>Művelet</th></tr>${costs.map(c => `<tr data-cost-id="${c.id}" data-cost-uuid="${escapeHtml(c.uuid || '')}"><td>${new Date(Number(c.timestamp)).toLocaleDateString()}</td><td>${escapeHtml(c.category)}</td><td>${escapeHtml(c.amount)} ${escapeHtml(c.currency)}</td><td class="cost-status">${escapeHtml(c.status)}</td><td><button onclick="updateCostStatus('${escapeHtml(c.uuid || '')}', ${c.id}, 'Elfogadva')">Elfogadás</button> <button onclick="updateCostStatus('${escapeHtml(c.uuid || '')}', ${c.id}, 'Kifizetve')">Kifizetve</button></td></tr>`).join('')}</table></div>
-        <div id="hotels" class="tab-content"><table><tr><th>Dátum</th><th>Név</th><th>Cím</th><th>Szoba</th><th>Kód</th></tr>${hotelsRes.map(h => `<tr><td>${new Date(Number(h.timestamp)).toLocaleDateString()}</td><td>${escapeHtml(h.name)}</td><td>${escapeHtml(h.address)}</td><td>${escapeHtml(h.room_number || '')}</td><td>${escapeHtml(h.entry_code || '')}</td></tr>`).join('')}</table></div>
+        <div id="costs" class="tab-content"><table><tr><th>DĂˇtum</th><th>KategĂłria</th><th>Ă–sszeg</th><th>StĂˇtusz</th><th>MĹ±velet</th></tr>${costs.map(c => `<tr data-cost-id="${c.id}" data-cost-uuid="${escapeHtml(c.uuid || '')}"><td>${new Date(Number(c.timestamp)).toLocaleDateString()}</td><td>${escapeHtml(c.category)}</td><td>${escapeHtml(c.amount)} ${escapeHtml(c.currency)}</td><td class="cost-status">${escapeHtml(c.status)}</td><td><button onclick="updateCostStatus('${escapeHtml(c.uuid || '')}', ${c.id}, 'Elfogadva')">ElfogadĂˇs</button> <button onclick="updateCostStatus('${escapeHtml(c.uuid || '')}', ${c.id}, 'Kifizetve')">Kifizetve</button></td></tr>`).join('')}</table></div>
+        <div id="hotels" class="tab-content"><table><tr><th>DĂˇtum</th><th>NĂ©v</th><th>CĂ­m</th><th>Szoba</th><th>KĂłd</th></tr>${hotelsRes.map(h => `<tr><td>${new Date(Number(h.timestamp)).toLocaleDateString()}</td><td>${escapeHtml(h.name)}</td><td>${escapeHtml(h.address)}</td><td>${escapeHtml(h.room_number || '')}</td><td>${escapeHtml(h.entry_code || '')}</td></tr>`).join('')}</table></div>
         <div id="chat" class="tab-content">
             <div id="chat-messages" style="height:400px; background:#111; padding:15px; overflow-y:auto; display:flex; flex-direction:column; margin-bottom:15px;">
-                ${chat.map(m => `<div class="msg ${m.sender === 'DISZPÉCSER' ? 'msg-boss' : 'msg-driver'}"><b>${escapeHtml(m.sender)}:</b><br>${escapeHtml(m.message)}</div>`).join('')}
+                ${chat.map(m => `<div class="msg ${m.sender === 'DISZPĂ‰CSER' ? 'msg-boss' : 'msg-driver'}"><b>${escapeHtml(m.sender)}:</b><br>${escapeHtml(m.message)}</div>`).join('')}
             </div>
             <div style="display:flex; gap:10px;">
-                <input type="text" id="chat-input" placeholder="Üzenet írása..." onkeypress="if(event.key==='Enter') sendChat()">
-                <button onclick="sendChat()" style="width:100px; background:#F57F17; color:black; font-weight:bold;">KÜLDÉS</button>
+                <input type="text" id="chat-input" placeholder="Ăśzenet Ă­rĂˇsa..." onkeypress="if(event.key==='Enter') sendChat()">
+                <button onclick="sendChat()" style="width:100px; background:#F57F17; color:black; font-weight:bold;">KĂśLDĂ‰S</button>
             </div>
         </div>
         <div id="stats" class="tab-content"><div id="statsBox"></div></div>
         <div id="report" class="tab-content"><h3>Tagesfahrblatt</h3><div id="timelineContainer"></div></div>
         <div id="profile" class="tab-content">
             <div style="max-width:600px; background:#222; padding:30px; border-radius:12px;">
-                <h3>SOFŐR PROFIL</h3>
+                <h3>SOFĹR PROFIL</h3>
                 <input type="hidden" id="prof-uuid" value="${dInfo.uuid || ''}">
                 <div id="profile-display">
                     <div style="text-align: center; margin-bottom: 20px;">
                         <div style="position: relative; display: inline-block;">
                             <img id="p-photo" src="${dInfo.photo_url || update.driver_photo || ''}" style="width:120px; height:120px; border-radius:50%; background:#333; object-fit: cover; border: 2px solid #444;">
-                            <label for="prof-photo-upload" style="position: absolute; bottom: 0; right: 0; background: #3498db; color: white; width: 35px; height: 35px; border-radius: 50%; display: flex; align-items: center; justify-content: center; cursor: pointer; border: 2px solid #222; font-size: 18px;">📷</label>
+                            <label for="prof-photo-upload" style="position: absolute; bottom: 0; right: 0; background: #3498db; color: white; width: 35px; height: 35px; border-radius: 50%; display: flex; align-items: center; justify-content: center; cursor: pointer; border: 2px solid #222; font-size: 18px;">đź“·</label>
                             <input type="file" id="prof-photo-upload" style="display: none;" onchange="uploadWebPhoto(this)" accept="image/*">
                         </div>
                     </div>
                     <div style="display:grid; grid-template-columns:1fr 1fr; gap:20px;">
-                        <div><label>Név</label><input type="text" id="prof-name" value="${name}"></div>
-                        <div><label>Rendszám</label><input type="text" id="prof-plate" value="${dInfo.license_plate || update.license_plate || ''}"></div>
+                        <div><label>NĂ©v</label><input type="text" id="prof-name" value="${name}"></div>
+                        <div><label>RendszĂˇm</label><input type="text" id="prof-plate" value="${dInfo.license_plate || update.license_plate || ''}"></div>
                         <div><label>Email</label><input type="text" id="prof-email" value="${dInfo.email || update.driver_email || ''}"></div>
                         <div><label>Telefon</label><input type="text" id="prof-phone" value="${dInfo.phone || update.driver_phone || ''}"></div>
                         <div><label>WhatsApp</label><input type="text" id="prof-whatsapp" value="${dInfo.whatsapp || ''}"></div>
                         <div><label>Telegram</label><input type="text" id="prof-telegram" value="${dInfo.telegram || ''}"></div>
                     </div>
-                    <div style="margin-top:20px;"><label>Profilkép URL</label><input type="text" id="prof-photo-url" value="${dInfo.photo_url || update.driver_photo || ''}"></div>
-                    <button onclick="saveProfile()" style="margin-top:30px; background:#3498db; color:white; padding:12px; width:100%;">PROFIL MENTÉSE</button>
+                    <div style="margin-top:20px;"><label>ProfilkĂ©p URL</label><input type="text" id="prof-photo-url" value="${dInfo.photo_url || update.driver_photo || ''}"></div>
+                    <button onclick="saveProfile()" style="margin-top:30px; background:#3498db; color:white; padding:12px; width:100%;">PROFIL MENTĂ‰SE</button>
                 </div>
             </div>
         </div>
         <div id="tourModal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.8); z-index:1000; padding:50px;">
             <div style="background:#222; padding:30px; border-radius:12px; max-width:800px; margin:auto; max-height:90vh; overflow-y:auto;">
-                <h2>Túra szerkesztése</h2><input type="hidden" id="tourId"><input type="hidden" id="tourUuid">
+                <h2>TĂşra szerkesztĂ©se</h2><input type="hidden" id="tourId"><input type="hidden" id="tourUuid">
                 <div style="display:grid; grid-template-columns:1fr 1fr; gap:15px; margin-bottom:20px;">
-                    <div><label>Túra neve</label><input type="text" id="tName"></div><div><label>Megrendelő</label><input type="text" id="tCustomer"></div>
-                    <div><label>Dátum</label><input type="date" id="tDate"></div>
+                    <div><label>TĂşra neve</label><input type="text" id="tName"></div><div><label>MegrendelĹ‘</label><input type="text" id="tCustomer"></div>
+                    <div><label>DĂˇtum</label><input type="date" id="tDate"></div>
                     <div style="display:flex; align-items:center; gap:10px; margin-top:20px;">
                         <input type="checkbox" id="tIsCurrent" style="width:20px; height:20px;">
-                        <label for="tIsCurrent" style="font-size:14px; color:white;">Aktuális túra (Appban ez jelenik meg)</label>
+                        <label for="tIsCurrent" style="font-size:14px; color:white;">AktuĂˇlis tĂşra (Appban ez jelenik meg)</label>
                     </div>
                 </div>
-                <label>Megjegyzések</label><textarea id="tNotes" style="height:60px; margin-bottom:20px;"></textarea>
-                <h3>Depó</h3>
-                <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;"><input type="text" id="tDepotName" placeholder="Név"><input type="text" id="tDepotCompany" placeholder="Cég"></div>
-                <div style="display:grid; grid-template-columns:2fr 1fr; gap:10px; margin-top:10px;"><input type="text" id="tDepotStreet" placeholder="Utca"><input type="text" id="tDepotHouse" placeholder="Házszám"></div>
-                <div style="display:grid; grid-template-columns:1fr 2fr; gap:10px; margin-top:10px;"><input type="text" id="tDepotPostal" placeholder="Irsz"><input type="text" id="tDepotCity" placeholder="Város"></div>
-                <h3>Megállók</h3><div id="modalStops"></div><button onclick="addStopRow()">+ Megálló</button>
-                <div style="margin-top:30px; display:flex; gap:10px; justify-content:flex-end;"><button onclick="closeModal()">Mégse</button><button onclick="saveTour()" style="background:#3498db; color:white; padding:10px 30px;">Mentés</button></div>
+                <label>MegjegyzĂ©sek</label><textarea id="tNotes" style="height:60px; margin-bottom:20px;"></textarea>
+                <h3>DepĂł</h3>
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;"><input type="text" id="tDepotName" placeholder="NĂ©v"><input type="text" id="tDepotCompany" placeholder="CĂ©g"></div>
+                <div style="display:grid; grid-template-columns:2fr 1fr; gap:10px; margin-top:10px;"><input type="text" id="tDepotStreet" placeholder="Utca"><input type="text" id="tDepotHouse" placeholder="HĂˇzszĂˇm"></div>
+                <div style="display:grid; grid-template-columns:1fr 2fr; gap:10px; margin-top:10px;"><input type="text" id="tDepotPostal" placeholder="Irsz"><input type="text" id="tDepotCity" placeholder="VĂˇros"></div>
+                <h3>MegĂˇllĂłk</h3><div id="modalStops"></div><button onclick="addStopRow()">+ MegĂˇllĂł</button>
+                <div style="margin-top:30px; display:flex; gap:10px; justify-content:flex-end;"><button onclick="closeModal()">MĂ©gse</button><button onclick="saveTour()" style="background:#3498db; color:white; padding:10px 30px;">MentĂ©s</button></div>
             </div>
         </div>
 
@@ -1747,7 +1760,7 @@ app.get('/driver/:name', async (req, res) => {
                         data: {
                             labels: labels,
                             datasets: [{
-                                label: 'Sebesség',
+                                label: 'SebessĂ©g',
                                 data: speeds,
                                 borderColor: '#3498db',
                                 backgroundColor: 'rgba(52, 152, 219, 0.2)',
@@ -1765,15 +1778,15 @@ app.get('/driver/:name', async (req, res) => {
                         }
                     });
 
-                } catch (e) { console.error('History error:', e); showToast('Hiba a betöltés során.'); }
+                } catch (e) { console.error('History error:', e); showToast('Hiba a betĂ¶ltĂ©s sorĂˇn.'); }
             }
 
             document.getElementById('history-date').value = new Date().toISOString().split('T')[0];
 
-            // Kezdő tab betöltése
+            // KezdĹ‘ tab betĂ¶ltĂ©se
             const savedTab = localStorage.getItem('activeTab_${name}') || 'dashboard';
 
-            // Térkép inicializálása
+            // TĂ©rkĂ©p inicializĂˇlĂˇsa
             let DRIVING_DONE_TODAY = ${drivingTodaySec};
 
             function formatDuration(seconds) {
@@ -1872,10 +1885,10 @@ app.get('/driver/:name', async (req, res) => {
                 attribution: '&copy; OpenStreetMap'
             }).addTo(map);
 
-            // Sofőr marker (kék kör fehér szegéllyel)
+            // SofĹ‘r marker (kĂ©k kĂ¶r fehĂ©r szegĂ©llyel)
             const driverMarker = L.circleMarker([driverLat, driverLng], {
                 color: '#3498db', radius: 10, fillOpacity: 1, weight: 3, fillColor: '#fff'
-            }).addTo(map).bindPopup('<b>' + '${name}' + '</b><br><span id="popup-speed">Sebesség: ' + Math.round(update.speed || 0) + ' km/h</span>');
+            }).addTo(map).bindPopup('<b>' + '${name}' + '</b><br><span id="popup-speed">SebessĂ©g: ' + Math.round(update.speed || 0) + ' km/h</span>');
 
             let routeLayer = null;
             let lastNextLat = ${update.next_lat || 0};
@@ -1909,7 +1922,7 @@ app.get('/driver/:name', async (req, res) => {
                 }
             }
 
-            // Kezdeti útvonal
+            // Kezdeti Ăştvonal
             const rawStops = ${currentStopsJson};
             const tourDepotLat = ${currentTourObj ? currentTourObj.depot_lat || 0 : 0};
             const tourDepotLng = ${currentTourObj ? currentTourObj.depot_lng || 0 : 0};
@@ -1927,10 +1940,10 @@ app.get('/driver/:name', async (req, res) => {
 
                     // Update UI text
                     document.getElementById('live-status').innerText = d.status || 'N/A';
-                    document.getElementById('live-speed').innerText = '🚗 Sebesség: ' + Math.round(d.speed || 0) + ' km/h';
-                    document.getElementById('live-license').innerText = '🚚 Rendszám: ' + (d.license_plate || 'N/A');
+                    document.getElementById('live-speed').innerText = 'đźš— SebessĂ©g: ' + Math.round(d.speed || 0) + ' km/h';
+                    document.getElementById('live-license').innerText = 'đźšš RendszĂˇm: ' + (d.license_plate || 'N/A');
                     const popupSpeed = document.getElementById('popup-speed');
-                    if (popupSpeed) popupSpeed.innerText = 'Sebesség: ' + Math.round(d.speed || 0) + ' km/h';
+                    if (popupSpeed) popupSpeed.innerText = 'SebessĂ©g: ' + Math.round(d.speed || 0) + ' km/h';
 
                     if (d.current_tour) {
                         document.getElementById('live-tour-container').style.display = 'block';
@@ -1972,9 +1985,9 @@ app.get('/driver/:name', async (req, res) => {
             if (d.latitude && d.longitude) {
                         const newPos = [d.latitude, d.longitude];
                         driverMarker.setLatLng(newPos);
-                        driverMarker.setPopupContent('<b>' + '${name}' + '</b><br>Sebesség: ' + Math.round(d.speed || 0) + ' km/h');
+                        driverMarker.setPopupContent('<b>' + '${name}' + '</b><br>SebessĂ©g: ' + Math.round(d.speed || 0) + ' km/h');
 
-                        // Útvonal frissítése ha mozog vagy a célpont változott
+                        // Ăštvonal frissĂ­tĂ©se ha mozog vagy a cĂ©lpont vĂˇltozott
                         if (d.next_lat !== lastNextLat || d.next_lng !== lastNextLng || Math.abs(d.latitude - lastUpdateLat) > 0.0005) {
                             lastNextLat = d.next_lat;
                             lastNextLng = d.next_lng;
@@ -1995,7 +2008,7 @@ app.get('/driver/:name', async (req, res) => {
                 } catch (e) { console.error('Refresh error:', e); }
             }
 
-            // Inicializálás
+            // InicializĂˇlĂˇs
             let lastUpdateLat = driverLat;
             let lastUpdateLng = driverLng;
 
@@ -2006,14 +2019,14 @@ app.get('/driver/:name', async (req, res) => {
 
             setInterval(refreshLiveStatus, 5000);
 
-            // Ha a dashboardon vagyunk, 5 másodpercenként oldalfrissítés (felhasználói kérésre)
+            // Ha a dashboardon vagyunk, 5 mĂˇsodpercenkĂ©nt oldalfrissĂ­tĂ©s (felhasznĂˇlĂłi kĂ©rĂ©sre)
             setInterval(() => {
                 if (localStorage.getItem('activeTab_${name}') === 'dashboard') {
-                    // location.reload(); // Ezt egyelőre kommentben hagyom, mert a refreshLiveStatus-nak kéne működnie
+                    // location.reload(); // Ezt egyelĹ‘re kommentben hagyom, mert a refreshLiveStatus-nak kĂ©ne mĹ±kĂ¶dnie
                 }
             }, 5000);
 
-            // Túra állomások
+            // TĂşra ĂˇllomĂˇsok
             const bounds = L.latLngBounds([driverLat, driverLng]);
 
             if (rawStops) {
@@ -2032,19 +2045,19 @@ app.get('/driver/:name', async (req, res) => {
                 });
             }
 
-            // Depó marker
+            // DepĂł marker
             if (update.depot_lat != null && update.depot_lat !== 0) {
                 const depotIcon = L.divIcon({
                     className: 'custom-div-icon',
-                    html: "<div style='background-color:#2ecc71; color:white; border-radius:50%; width:24px; height:24px; display:flex; align-items:center; justify-content:center; font-size:12px; border:2px solid white;'>🏠</div>",
+                    html: "<div style='background-color:#2ecc71; color:white; border-radius:50%; width:24px; height:24px; display:flex; align-items:center; justify-content:center; font-size:12px; border:2px solid white;'>đźŹ </div>",
                     iconSize: [24, 24],
                     iconAnchor: [12, 12]
                 });
-                L.marker([update.depot_lat, update.depot_lng], { icon: depotIcon }).addTo(map).bindPopup('🏠 Depó: ' + (update.depot_name || 'Bázis'));
+                L.marker([update.depot_lat, update.depot_lng], { icon: depotIcon }).addTo(map).bindPopup('đźŹ  DepĂł: ' + (update.depot_name || 'BĂˇzis'));
                 bounds.extend([update.depot_lat, update.depot_lng]);
             }
 
-            // Térkép igazítása
+            // TĂ©rkĂ©p igazĂ­tĂˇsa
             if ((rawStops && rawStops.length > 0) || ${update.depot_lat ? 'true' : 'false'}) {
                 const center = [driverLat, driverLng];
                 let maxDLat = 0;
@@ -2071,7 +2084,7 @@ app.get('/driver/:name', async (req, res) => {
                 map.fitBounds(fitBounds, { padding: [50, 50], maxZoom: 15 });
             }
 
-            // Útvonal tervezése a teljes hátralévő túrára
+            // Ăštvonal tervezĂ©se a teljes hĂˇtralĂ©vĹ‘ tĂşrĂˇra
             const currentTourData = ${JSON.stringify(currentTourObj || (toursRes.length > 0 ? toursRes[0] : null))};
             const incompleteStops = (rawStops || []).filter(s => !s.is_completed && s.latitude && s.longitude);
             let waypointStr = driverLng + ',' + driverLat;
@@ -2097,7 +2110,7 @@ app.get('/driver/:name', async (req, res) => {
                     });
             }
 
-            // Kényszerített újrarajzolás a méretezési hiba ellen
+            // KĂ©nyszerĂ­tett ĂşjrarajzolĂˇs a mĂ©retezĂ©si hiba ellen
             setTimeout(() => {
                 map.invalidateSize();
                 if ((rawStops && rawStops.length > 0) || ${update.depot_lat ? 'true' : 'false'}) {
@@ -2105,14 +2118,14 @@ app.get('/driver/:name', async (req, res) => {
                 }
             }, 800);
 
-            // Periodikus térkép frissítés a szétesés ellen
+            // Periodikus tĂ©rkĂ©p frissĂ­tĂ©s a szĂ©tesĂ©s ellen
             setInterval(() => {
                 if (document.getElementById('dashboard').style.display !== 'none') {
                     map.invalidateSize();
                 }
             }, 10000);
 
-            // Végül nyissuk meg az elmentett fület
+            // VĂ©gĂĽl nyissuk meg az elmentett fĂĽlet
             openTab(null, savedTab);
 
             // Profile & Driver Admin JS
@@ -2141,7 +2154,7 @@ app.get('/driver/:name', async (req, res) => {
                 };
                 const r = await fetch('/api/sync-profile', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) });
                 if(r.ok) {
-                    showToast('Profil mentve és szinkronizálva!');
+                    showToast('Profil mentve Ă©s szinkronizĂˇlva!');
                     if (data.name !== '${name}') {
                         setTimeout(() => location.href = '/driver/' + encodeURIComponent(data.name), 1000);
                     }
@@ -2167,7 +2180,7 @@ app.get('/driver/:name', async (req, res) => {
                         const data = await res.json();
                         document.getElementById('p-photo').src = data.photoUrl;
                         document.getElementById('prof-photo-url').value = data.photoUrl;
-                        showToast('Kép sikeresen feltöltve!');
+                        showToast('KĂ©p sikeresen feltĂ¶ltve!');
                     }
                 };
                 reader.readAsDataURL(file);
@@ -2185,10 +2198,10 @@ app.get('/driver/:name', async (req, res) => {
                             '<td>' + esc(d.email || '') + '<br><small>' + esc(d.phone || '') + '</small></td>' +
                             '<td>' + esc(d.license_plate || '') + '</td>' +
                             '<td><code style="background:#444; padding:2px 5px;">' + esc(d.activation_code || '---') + '</code></td>' +
-                            '<td><span style="color:' + (d.is_active ? '#2ecc71' : '#e74c3c') + '">' + (d.is_active ? 'AKTÍV' : 'INAKTÍV') + '</span></td>' +
+                            '<td><span style="color:' + (d.is_active ? '#2ecc71' : '#e74c3c') + '">' + (d.is_active ? 'AKTĂŤV' : 'INAKTĂŤV') + '</span></td>' +
                             '<td>' +
-                                '<button data-driver="' + encodeURIComponent(JSON.stringify(d)) + '" onclick="editDriver(JSON.parse(decodeURIComponent(this.dataset.driver)))">✏</button>' +
-                                '<button data-uuid="' + esc(d.uuid) + '" onclick="deleteDriver(this.dataset.uuid)" style="background:#e74c3c; color:white; border:none; border-radius:4px; padding:5px 10px; cursor:pointer;">🗑</button>' +
+                                '<button data-driver="' + encodeURIComponent(JSON.stringify(d)) + '" onclick="editDriver(JSON.parse(decodeURIComponent(this.dataset.driver)))">âśŹ</button>' +
+                                '<button data-uuid="' + esc(d.uuid) + '" onclick="deleteDriver(this.dataset.uuid)" style="background:#e74c3c; color:white; border:none; border-radius:4px; padding:5px 10px; cursor:pointer;">đź—‘</button>' +
                             '</td>' +
                         '</tr>').join('');
                 } catch(e) { console.error('refreshDrivers error:', e); }
@@ -2196,14 +2209,14 @@ app.get('/driver/:name', async (req, res) => {
             refreshDrivers();
 
             async function deleteDriver(uuid) {
-                if (!confirm('Biztosan törölni szeretnéd ezt a sofőrt? Minden adata elvész!')) return;
+                if (!confirm('Biztosan tĂ¶rĂ¶lni szeretnĂ©d ezt a sofĹ‘rt? Minden adata elvĂ©sz!')) return;
                 const r = await fetch('/admin/delete-driver', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({ uuid })
                 });
                 if (r.ok) {
-                    showToast('Sofőr törölve.');
+                    showToast('SofĹ‘r tĂ¶rĂ¶lve.');
                     refreshDrivers();
                 }
             }
@@ -2235,7 +2248,7 @@ app.get('/driver/:name', async (req, res) => {
                 };
                 const r = await fetch('/admin/save-driver', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) });
                 if(r.ok) {
-                    showToast('Sofőr adatai mentve!');
+                    showToast('SofĹ‘r adatai mentve!');
                     document.getElementById('driverModal').style.display = 'none';
                     refreshDrivers();
                 }
@@ -2252,11 +2265,11 @@ app.get('/driver/:name', async (req, res) => {
                     });
                     if (r.ok) {
                         const driver = await r.json();
-                        showToast('Sofőr importálva: ' + driver.name);
+                        showToast('SofĹ‘r importĂˇlva: ' + driver.name);
                         document.getElementById('importCode').value = '';
                         refreshDrivers();
                     } else {
-                        alert('Érvénytelen kód vagy a sofőr már importálva van.');
+                        alert('Ă‰rvĂ©nytelen kĂłd vagy a sofĹ‘r mĂˇr importĂˇlva van.');
                     }
                 } catch (e) { console.error('Import error:', e); }
             }
@@ -2285,12 +2298,12 @@ app.get('/driver/:name', async (req, res) => {
                         const stops = item.stops;
                         return '<div class="tour-card">' +
                             '<div style="float:right; display:flex; gap:5px;">' +
-                                '<select onchange="transferTour(' + t.id + ', this.value)" style="width:auto;"><option value="">-- Áthelyezés --</option>' + allDNames.map(n => "<option value='" + n + "'>" + n + "</option>").join('') + '</select>' +
-                                '<button data-tour="' + encodeURIComponent(JSON.stringify(t)) + '" onclick="editTour(JSON.parse(decodeURIComponent(this.dataset.tour)))">✏</button>' +
-                                '<button onclick="deleteTour(' + t.id + ')" style="background:#e74c3c; color:white;">🗑</button>' +
+                                '<select onchange="transferTour(' + t.id + ', this.value)" style="width:auto;"><option value="">-- ĂthelyezĂ©s --</option>' + allDNames.map(n => "<option value='" + n + "'>" + n + "</option>").join('') + '</select>' +
+                                '<button data-tour="' + encodeURIComponent(JSON.stringify(t)) + '" onclick="editTour(JSON.parse(decodeURIComponent(this.dataset.tour)))">âśŹ</button>' +
+                                '<button onclick="deleteTour(' + t.id + ')" style="background:#e74c3c; color:white;">đź—‘</button>' +
                             '</div>' +
                             '<b>' + esc(t.name) + '</b> (' + esc(t.customer || '') + ') - ' + new Date(Number(t.date)).toLocaleDateString() + ' ' +
-                            stops.map(s => "<div class='stop-item'>" + (s.order_index + 1) + ". " + (s.stop_type === 'HOTEL' ? '🏨 ' : (s.stop_type === 'DEPOT' ? '🏠 ' : '')) + esc(s.address || s.address_full || '') + "</div>").join('') +
+                            stops.map(s => "<div class='stop-item'>" + (s.order_index + 1) + ". " + (s.stop_type === 'HOTEL' ? 'đźŹ¨ ' : (s.stop_type === 'DEPOT' ? 'đźŹ  ' : '')) + esc(s.address || s.address_full || '') + "</div>").join('') +
                         '</div>';
                     }).join('');
                 } catch (e) { console.error('Refresh tours error:', e); }
@@ -2306,7 +2319,7 @@ app.get('/driver/:name', async (req, res) => {
                         headers: {'Content-Type': 'application/json'},
                         body: JSON.stringify({
                             driverName: '${name}',
-                            sender: 'DISZPÉCSER',
+                            sender: 'DISZPĂ‰CSER',
                             message: msg,
                             timestamp: Date.now()
                         })
@@ -2326,7 +2339,7 @@ app.get('/driver/:name', async (req, res) => {
                     const container = document.getElementById('chat-messages');
                     if (!container) return;
                     container.innerHTML = data.map(m =>
-                        '<div class="msg ' + (m.sender === 'DISZPÉCSER' ? 'msg-boss' : 'msg-driver') + '">' +
+                        '<div class="msg ' + (m.sender === 'DISZPĂ‰CSER' ? 'msg-boss' : 'msg-driver') + '">' +
                             '<b>' + esc(m.sender) + ':</b><br>' + esc(m.message) +
                         '</div>').join('');
                     container.scrollTop = container.scrollHeight;
@@ -2354,8 +2367,8 @@ app.get('/driver/:name', async (req, res) => {
                 }
             }
 
-            function transferTour(tourId, newDriverName) { if (!newDriverName) return; if (confirm('Áthelyezed ' + newDriverName + ' részére?')) fetch('/admin/transfer-tour', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ tourId, newDriverName }) }).then(r => { if(r.ok) { showToast('Túra sikeresen áthelyezve!'); refreshTours(); } }); }
-            function deleteTour(id) { if(confirm('Törlöd?')) fetch('/admin/delete-tour', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({id}) }).then(r => { if(r.ok) { showToast('Túra törölve!'); refreshTours(); } }); }
+            function transferTour(tourId, newDriverName) { if (!newDriverName) return; if (confirm('Ăthelyezed ' + newDriverName + ' rĂ©szĂ©re?')) fetch('/admin/transfer-tour', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ tourId, newDriverName }) }).then(r => { if(r.ok) { showToast('TĂşra sikeresen Ăˇthelyezve!'); refreshTours(); } }); }
+            function deleteTour(id) { if(confirm('TĂ¶rlĂ¶d?')) fetch('/admin/delete-tour', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({id}) }).then(r => { if(r.ok) { showToast('TĂşra tĂ¶rĂ¶lve!'); refreshTours(); } }); }
             function closeModal() { document.getElementById('tourModal').style.display = 'none'; }
             function editTour(t) {
                 document.getElementById('tourId').value = t ? t.id : '';
@@ -2372,7 +2385,7 @@ app.get('/driver/:name', async (req, res) => {
                 document.getElementById('tDepotPostal').value = t ? (t.depot_postal_code || '') : '';
                 document.getElementById('tDepotCity').value = t ? (t.depot_city || '') : '';
 
-                // Koordináták megőrzése
+                // KoordinĂˇtĂˇk megĹ‘rzĂ©se
                 const modal = document.getElementById('tourModal');
                 modal.dataset.lat = t ? (t.depot_lat || '') : '';
                 modal.dataset.lng = t ? (t.depot_lng || '') : '';
@@ -2390,18 +2403,18 @@ app.get('/driver/:name', async (req, res) => {
                 d.innerHTML = '<button onclick="this.parentElement.remove()" style="position:absolute; right:10px; top:10px; background:#e74c3c; border:none; color:white; padding:5px 10px; border-radius:4px; cursor:pointer;">X</button>' +
                     '<input type="hidden" class="stop-uuid" value="' + (uuid || '') + '">' +
                     '<div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">' +
-                        '<div><label>Címzett</label><input type="text" class="stop-recipient" value="' + (items[0].recipient || '') + '"></div>' +
-                        '<div><label>Cég</label><input type="text" class="stop-company" value="' + (s ? (s.company || '') : '') + '"></div>' +
+                        '<div><label>CĂ­mzett</label><input type="text" class="stop-recipient" value="' + (items[0].recipient || '') + '"></div>' +
+                        '<div><label>CĂ©g</label><input type="text" class="stop-company" value="' + (s ? (s.company || '') : '') + '"></div>' +
                     '</div>' +
                     '<div style="display:grid; grid-template-columns:2fr 1fr; gap:10px; margin-top:5px;">' +
                         '<div><label>Utca</label><input type="text" class="stop-street" value="' + (s ? (s.street || '') : '') + '"></div>' +
-                        '<div><label>Házszám</label><input type="text" class="stop-house" value="' + (s ? (s.house_number || '') : '') + '"></div>' +
+                        '<div><label>HĂˇzszĂˇm</label><input type="text" class="stop-house" value="' + (s ? (s.house_number || '') : '') + '"></div>' +
                     '</div>' +
                     '<div style="display:grid; grid-template-columns:1fr 2fr; gap:10px; margin-top:5px;">' +
                         '<div><label>Irsz</label><input type="text" class="stop-postal" value="' + (s ? (s.postal_code || '') : '') + '"></div>' +
-                        '<div><label>Város</label><input type="text" class="stop-city" value="' + (s ? (s.city || '') : '') + '"></div>' +
+                        '<div><label>VĂˇros</label><input type="text" class="stop-city" value="' + (s ? (s.city || '') : '') + '"></div>' +
                     '</div>' +
-                    '<div style="margin-top:10px;"><label>Típus</label><select class="stop-type"><option value="DELIVERY" ' + (items[0].stop_type==='DELIVERY'?'selected':'') + '>DELIVERY</option><option value="PICKUP" ' + (items[0].stop_type==='PICKUP'?'selected':'') + '>PICKUP</option><option value="HOTEL" ' + (items[0].stop_type==='HOTEL'?'selected':'') + '>HOTEL</option></select></div>';
+                    '<div style="margin-top:10px;"><label>TĂ­pus</label><select class="stop-type"><option value="DELIVERY" ' + (items[0].stop_type==='DELIVERY'?'selected':'') + '>DELIVERY</option><option value="PICKUP" ' + (items[0].stop_type==='PICKUP'?'selected':'') + '>PICKUP</option><option value="HOTEL" ' + (items[0].stop_type==='HOTEL'?'selected':'') + '>HOTEL</option></select></div>';
                 document.getElementById('modalStops').appendChild(d);
             }
             async function geocode(street, house, postal, city) {
@@ -2417,11 +2430,11 @@ app.get('/driver/:name', async (req, res) => {
             async function saveTour() {
                 const btn = event.target;
                 const oldText = btn.innerText;
-                btn.innerText = 'Mentés... (Geocoding)';
+                btn.innerText = 'MentĂ©s... (Geocoding)';
                 btn.disabled = true;
 
                 const modal = document.getElementById('tourModal');
-                // Depó koordináták ha hiányzik
+                // DepĂł koordinĂˇtĂˇk ha hiĂˇnyzik
                 if (!modal.dataset.lat || modal.dataset.lat === "") {
                     const c = await geocode(document.getElementById('tDepotStreet').value, document.getElementById('tDepotHouse').value, document.getElementById('tDepotPostal').value, document.getElementById('tDepotCity').value);
                     if (c) { modal.dataset.lat = c.lat; modal.dataset.lng = c.lon; }
@@ -2469,7 +2482,7 @@ app.get('/driver/:name', async (req, res) => {
                     stops
                 };
                 const res = await fetch('/admin/save-tour', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) });
-                if(res.ok) { showToast('Túra mentve!'); closeModal(); refreshTours(); } else { alert('Hiba!'); btn.innerText = oldText; btn.disabled = false; }
+                if(res.ok) { showToast('TĂşra mentve!'); closeModal(); refreshTours(); } else { alert('Hiba!'); btn.innerText = oldText; btn.disabled = false; }
             }
         </script>
     </body></html>`;
