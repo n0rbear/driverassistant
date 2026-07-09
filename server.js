@@ -329,8 +329,16 @@ const initDb = async () => {
     console.log('[STARTUP] initDb started');
     await pool.query('CREATE EXTENSION IF NOT EXISTS "pgcrypto"');
     const queries = [
+        `CREATE TABLE IF NOT EXISTS companies (
+            uuid UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+            name TEXT UNIQUE NOT NULL,
+            slug TEXT UNIQUE NOT NULL,
+            is_demo BOOLEAN DEFAULT FALSE,
+            created_at BIGINT DEFAULT (EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT
+        )`,
         `CREATE TABLE IF NOT EXISTS drivers (
             uuid UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+            company_uuid UUID,
             name TEXT UNIQUE,
             email TEXT,
             phone TEXT,
@@ -345,6 +353,24 @@ const initDb = async () => {
             base_lng DOUBLE PRECISION,
             activation_code TEXT UNIQUE,
             created_at BIGINT DEFAULT (EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT
+        )`,
+        `CREATE TABLE IF NOT EXISTS web_users (
+            uuid UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+            company_uuid UUID,
+            name TEXT NOT NULL,
+            email TEXT UNIQUE NOT NULL,
+            role TEXT NOT NULL,
+            is_active BOOLEAN DEFAULT TRUE,
+            created_at BIGINT DEFAULT (EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT
+        )`,
+        `CREATE TABLE IF NOT EXISTS role_permissions (
+            id SERIAL PRIMARY KEY,
+            company_uuid UUID,
+            role TEXT NOT NULL,
+            module TEXT NOT NULL,
+            can_view BOOLEAN DEFAULT TRUE,
+            can_edit BOOLEAN DEFAULT FALSE,
+            UNIQUE(company_uuid, role, module)
         )`,
         `CREATE TABLE IF NOT EXISTS live_updates (id SERIAL PRIMARY KEY, uuid UUID DEFAULT gen_random_uuid() UNIQUE, driver_name TEXT, driver_photo TEXT, driver_phone TEXT, driver_email TEXT, license_plate TEXT, latitude DOUBLE PRECISION, longitude DOUBLE PRECISION, speed FLOAT, status TEXT, current_tour TEXT, next_stop TEXT, next_lat DOUBLE PRECISION, next_lng DOUBLE PRECISION, next_stop_dist FLOAT, next_stop_duration BIGINT, tour_remaining_dist FLOAT, tour_remaining_duration BIGINT, depot_name TEXT, depot_lat DOUBLE PRECISION, depot_lng DOUBLE PRECISION, timestamp BIGINT, UNIQUE(uuid))`,
         `CREATE TABLE IF NOT EXISTS costs (id SERIAL PRIMARY KEY, uuid UUID DEFAULT gen_random_uuid() UNIQUE, driver_name TEXT, amount DECIMAL, currency TEXT, category TEXT, notes TEXT, mileage INT, status TEXT DEFAULT 'Rögzítve', timestamp BIGINT, UNIQUE(uuid))`,
@@ -385,12 +411,27 @@ const initDb = async () => {
         ['live_updates', 'tour_remaining_duration', 'BIGINT'],
         ['live_updates', 'include_rests', 'BOOLEAN DEFAULT TRUE'],
         ['live_updates', 'next_break_in_seconds', 'BIGINT'],
+        ['live_updates', 'company_uuid', 'UUID'],
+        ['live_updates', 'driver_uuid', 'UUID'],
+        ['costs', 'company_uuid', 'UUID'],
+        ['costs', 'driver_uuid', 'UUID'],
         ['costs', 'photo_path', 'TEXT'],
+        ['chat_messages', 'company_uuid', 'UUID'],
+        ['chat_messages', 'driver_uuid', 'UUID'],
+        ['work_times', 'company_uuid', 'UUID'],
+        ['work_times', 'driver_uuid', 'UUID'],
+        ['hotels', 'company_uuid', 'UUID'],
+        ['hotels', 'driver_uuid', 'UUID'],
         ['hotels', 'room_number', 'TEXT'],
         ['hotels', 'entry_code', 'TEXT'],
         ['hotels', 'phone_number', 'TEXT'],
         ['hotels', 'email', 'TEXT'],
         ['hotels', 'notes', 'TEXT'],
+        ['tours', 'company_uuid', 'UUID'],
+        ['tours', 'driver_uuid', 'UUID'],
+        ['stops', 'company_uuid', 'UUID'],
+        ['stops', 'driver_uuid', 'UUID'],
+        ['drivers', 'company_uuid', 'UUID'],
         ['drivers', 'photo_url', 'TEXT'],
         ['drivers', 'home_lat', 'DOUBLE PRECISION'],
         ['drivers', 'home_lng', 'DOUBLE PRECISION'],
@@ -403,6 +444,43 @@ const initDb = async () => {
         if (check.rows.length === 0) {
             if (t === 'stops' && c === 'items') console.log('[SCHEMA] adding items column');
             await pool.query(`ALTER TABLE ${t} ADD COLUMN ${c} ${type}`);
+        }
+    }
+
+    await pool.query(`
+        INSERT INTO companies (name, slug, is_demo)
+        VALUES ('Demo Company', 'demo-company', true)
+        ON CONFLICT (slug) DO NOTHING
+    `);
+    const defaultCompany = (await pool.query("SELECT uuid FROM companies WHERE slug = 'demo-company' LIMIT 1")).rows[0];
+    if (defaultCompany) {
+        const companyUuid = defaultCompany.uuid;
+        await pool.query('UPDATE drivers SET company_uuid = $1 WHERE company_uuid IS NULL', [companyUuid]);
+        const driverLinkedTables = ['live_updates', 'costs', 'chat_messages', 'work_times', 'hotels', 'tours'];
+        for (const table of driverLinkedTables) {
+            await pool.query(`UPDATE ${table} SET company_uuid = $1 WHERE company_uuid IS NULL`, [companyUuid]);
+            await pool.query(`UPDATE ${table} t SET driver_uuid = d.uuid FROM drivers d WHERE t.driver_uuid IS NULL AND t.driver_name = d.name`);
+        }
+        await pool.query(`UPDATE stops s SET company_uuid = t.company_uuid, driver_uuid = t.driver_uuid FROM tours t WHERE s.tour_id = t.id AND (s.company_uuid IS NULL OR s.driver_uuid IS NULL)`);
+        const permissionRows = [
+            ['CEO', 'tours', true, true],
+            ['CEO', 'live_status', true, false],
+            ['CEO', 'fuel', true, false],
+            ['CEO', 'costs', true, true],
+            ['CEO', 'chat', false, false],
+            ['CEO', 'reports', true, false],
+            ['DISPATCHER', 'tours', true, true],
+            ['DISPATCHER', 'live_status', true, false],
+            ['DISPATCHER', 'fuel', false, false],
+            ['DISPATCHER', 'costs', false, false],
+            ['DISPATCHER', 'chat', true, true],
+            ['DISPATCHER', 'reports', true, false]
+        ];
+        for (const [role, module, canView, canEdit] of permissionRows) {
+            await pool.query(`INSERT INTO role_permissions (company_uuid, role, module, can_view, can_edit)
+                VALUES ($1, $2, $3, $4, $5)
+                ON CONFLICT (company_uuid, role, module) DO UPDATE SET can_view = EXCLUDED.can_view, can_edit = EXCLUDED.can_edit`,
+                [companyUuid, role, module, canView, canEdit]);
         }
     }
 
@@ -643,6 +721,140 @@ app.post('/api/sync-hotels', async (req, res) => {
     } catch (e) {
         await client.query('ROLLBACK');
         console.error(`[SYNC-HOTELS-ERROR] ${e.message}`);
+        res.status(500).send(e.message);
+    } finally {
+        client.release();
+    }
+});
+
+app.post('/admin/dev-reset-database', requireAdmin, async (req, res) => {
+    if (req.body?.confirm !== 'RESET_DEV_DATABASE') {
+        return res.status(400).json({ error: 'Missing confirm: RESET_DEV_DATABASE' });
+    }
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        const tables = [
+            'live_updates',
+            'chat_messages',
+            'costs',
+            'hotels',
+            'work_times',
+            'stops',
+            'tours',
+            'role_permissions',
+            'web_users',
+            'drivers',
+            'companies'
+        ];
+        for (const table of tables) {
+            await client.query(`DELETE FROM ${table}`);
+        }
+        await client.query('COMMIT');
+        res.json({ success: true, cleared: tables });
+    } catch (e) {
+        await client.query('ROLLBACK');
+        res.status(500).send(e.message);
+    } finally {
+        client.release();
+    }
+});
+
+app.post('/admin/dev-seed-demo', requireAdmin, async (req, res) => {
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        const now = Date.now();
+        const companies = [
+            { name: 'Demo Logistics GmbH', slug: 'demo-logistics' },
+            { name: 'Cargo Pilot Kft.', slug: 'cargo-pilot' }
+        ];
+        const result = { companies: [], users: [], drivers: [], tours: [] };
+
+        for (const company of companies) {
+            const companyRow = (await client.query(
+                `INSERT INTO companies (name, slug, is_demo)
+                 VALUES ($1, $2, true)
+                 ON CONFLICT (slug) DO UPDATE SET name = EXCLUDED.name
+                 RETURNING uuid, name, slug`,
+                [company.name, company.slug]
+            )).rows[0];
+            result.companies.push(companyRow);
+
+            const permissions = [
+                ['CEO', 'tours', true, true],
+                ['CEO', 'live_status', true, false],
+                ['CEO', 'fuel', true, false],
+                ['CEO', 'costs', true, true],
+                ['CEO', 'chat', false, false],
+                ['CEO', 'reports', true, false],
+                ['DISPATCHER', 'tours', true, true],
+                ['DISPATCHER', 'live_status', true, false],
+                ['DISPATCHER', 'fuel', false, false],
+                ['DISPATCHER', 'costs', false, false],
+                ['DISPATCHER', 'chat', true, true],
+                ['DISPATCHER', 'reports', true, false]
+            ];
+            for (const [role, module, canView, canEdit] of permissions) {
+                await client.query(`INSERT INTO role_permissions (company_uuid, role, module, can_view, can_edit)
+                    VALUES ($1, $2, $3, $4, $5)
+                    ON CONFLICT (company_uuid, role, module) DO UPDATE SET can_view = EXCLUDED.can_view, can_edit = EXCLUDED.can_edit`,
+                    [companyRow.uuid, role, module, canView, canEdit]);
+            }
+
+            const users = [
+                { name: `${company.name} CEO`, email: `ceo@${company.slug}.test`, role: 'CEO' },
+                { name: `${company.name} Dispatcher`, email: `dispatch@${company.slug}.test`, role: 'DISPATCHER' }
+            ];
+            for (const user of users) {
+                const userRow = (await client.query(`INSERT INTO web_users (company_uuid, name, email, role, is_active)
+                    VALUES ($1, $2, $3, $4, true)
+                    ON CONFLICT (email) DO UPDATE SET name = EXCLUDED.name, role = EXCLUDED.role, company_uuid = EXCLUDED.company_uuid
+                    RETURNING uuid, name, email, role`,
+                    [companyRow.uuid, user.name, user.email, user.role])).rows[0];
+                result.users.push(userRow);
+            }
+
+            const drivers = [
+                { name: `${company.slug}-driver-1`, email: `driver1@${company.slug}.test`, plate: 'DEMO-101', code: `${company.slug.slice(0, 3).toUpperCase()}101` },
+                { name: `${company.slug}-driver-2`, email: `driver2@${company.slug}.test`, plate: 'DEMO-202', code: `${company.slug.slice(0, 3).toUpperCase()}202` }
+            ];
+            for (const driver of drivers) {
+                const driverRow = (await client.query(`INSERT INTO drivers (company_uuid, name, email, phone, license_plate, is_active, activation_code)
+                    VALUES ($1, $2, $3, '+490000000', $4, true, $5)
+                    ON CONFLICT (name) DO UPDATE SET company_uuid = EXCLUDED.company_uuid, email = EXCLUDED.email, license_plate = EXCLUDED.license_plate, activation_code = EXCLUDED.activation_code
+                    RETURNING uuid, name, license_plate`,
+                    [companyRow.uuid, driver.name, driver.email, driver.plate, driver.code])).rows[0];
+                result.drivers.push(driverRow);
+
+                const tourRow = (await client.query(`INSERT INTO tours (company_uuid, driver_uuid, driver_name, name, customer, date, notes, is_closed, is_current, updated_at)
+                    VALUES ($1, $2, $3, $4, $5, $6, 'Demo tour', false, true, $7)
+                    RETURNING id, uuid, name`,
+                    [companyRow.uuid, driverRow.uuid, driverRow.name, `Demo Tour ${driverRow.name}`, company.name, now, now])).rows[0];
+                result.tours.push(tourRow);
+
+                await client.query(`INSERT INTO stops (company_uuid, driver_uuid, tour_id, address, recipient, street, house_number, postal_code, city, address_full, contact_name, phone_number, email, time_window, notes, order_index, latitude, longitude, is_completed, stop_type, updated_at)
+                    VALUES ($1, $2, $3, 'Arthur-Junghans-Str 1, 78713 Schramberg', 'Demo Recipient', 'Arthur-Junghans-Str', '1', '78713', 'Schramberg', 'Arthur-Junghans-Str 1, 78713 Schramberg', '', '', '', '08:00-12:00', '', 0, 48.2238915, 8.384806, false, 'DELIVERY', $4)`,
+                    [companyRow.uuid, driverRow.uuid, tourRow.id, now]);
+
+                await client.query(`INSERT INTO costs (company_uuid, driver_uuid, driver_name, amount, currency, category, notes, mileage, status, timestamp)
+                    VALUES ($1, $2, $3, 75.50, 'EUR', 'Tankolas', 'Demo fuel receipt', 12345, 'Bekuldve', $4)`,
+                    [companyRow.uuid, driverRow.uuid, driverRow.name, now]);
+
+                await client.query(`INSERT INTO chat_messages (company_uuid, driver_uuid, driver_name, sender, message, timestamp)
+                    VALUES ($1, $2, $3, 'DISPATCHER', 'Demo uzenet a sofornek.', $4)`,
+                    [companyRow.uuid, driverRow.uuid, driverRow.name, now]);
+
+                await client.query(`INSERT INTO live_updates (company_uuid, driver_uuid, driver_name, license_plate, latitude, longitude, speed, status, current_tour, timestamp)
+                    VALUES ($1, $2, $3, $4, 48.2280912, 8.3869585, 0, 'Offline', $5, $6)`,
+                    [companyRow.uuid, driverRow.uuid, driverRow.name, driverRow.license_plate, tourRow.name, now]);
+            }
+        }
+
+        await client.query('COMMIT');
+        res.json({ success: true, ...result });
+    } catch (e) {
+        await client.query('ROLLBACK');
         res.status(500).send(e.message);
     } finally {
         client.release();
@@ -1140,8 +1352,8 @@ app.get('/', async (req, res) => {
                             '<td><code style="background:#444; padding:2px 5px;">' + esc(d.activation_code || '---') + '</code></td>' +
                             '<td><span style="color:' + (d.is_active ? '#2ecc71' : '#e74c3c') + '">' + (d.is_active ? 'AKTÍV' : 'INAKTÍV') + '</span></td>' +
                             '<td>' +
-                                '<button onclick=\'editDriver(' + JSON.stringify(d).replace(/'/g, "&apos;") + ')\'>✏</button>' +
-                                '<button onclick="deleteDriver(\'' + d.uuid + '\')" style="background:#e74c3c; color:white; border:none; border-radius:4px; padding:5px 10px; cursor:pointer;">🗑</button>' +
+                                '<button onclick="editDriver(JSON.parse(decodeURIComponent(\'' + encodeURIComponent(JSON.stringify(d)) + '\')))">✏</button>' +
+                                '<button data-uuid="' + esc(d.uuid) + '" onclick="deleteDriver(this.dataset.uuid)" style="background:#e74c3c; color:white; border:none; border-radius:4px; padding:5px 10px; cursor:pointer;">🗑</button>' +
                             '</td>' +
                         '</tr>').join('');
                 }
@@ -1369,7 +1581,7 @@ app.get('/driver/:name', async (req, res) => {
                     <div class="tour-card">
                         <div style="float:right; display:flex; gap:5px;">
                             <select onchange="transferTour(${t.id}, this.value)" style="width:auto;"><option value="">-- Áthelyezés --</option>${allD.map(n => "<option value='" + n + "'>" + n + "</option>").join('')}</select>
-                            <button onclick='editTour(${JSON.stringify(t).replace(/'/g, "&apos;")})'>✏</button>
+                            <button onclick="editTour(JSON.parse(decodeURIComponent('${encodeURIComponent(JSON.stringify(t))}')))">✏</button>
                             <button onclick="deleteTour(${t.id})" style="background:#e74c3c; color:white;">🗑</button>
                         </div>
                         <b>${escapeHtml(t.name)}</b> (${escapeHtml(t.customer || '')}) - ${new Date(Number(t.date)).toLocaleDateString()}
@@ -1975,8 +2187,8 @@ app.get('/driver/:name', async (req, res) => {
                             '<td><code style="background:#444; padding:2px 5px;">' + esc(d.activation_code || '---') + '</code></td>' +
                             '<td><span style="color:' + (d.is_active ? '#2ecc71' : '#e74c3c') + '">' + (d.is_active ? 'AKTÍV' : 'INAKTÍV') + '</span></td>' +
                             '<td>' +
-                                '<button onclick=\'editDriver(' + JSON.stringify(d).replace(/'/g, "&apos;") + ')\'>✏</button>' +
-                                '<button onclick="deleteDriver(\'' + d.uuid + '\')" style="background:#e74c3c; color:white; border:none; border-radius:4px; padding:5px 10px; cursor:pointer;">🗑</button>' +
+                                '<button onclick="editDriver(JSON.parse(decodeURIComponent(\'' + encodeURIComponent(JSON.stringify(d)) + '\')))">✏</button>' +
+                                '<button data-uuid="' + esc(d.uuid) + '" onclick="deleteDriver(this.dataset.uuid)" style="background:#e74c3c; color:white; border:none; border-radius:4px; padding:5px 10px; cursor:pointer;">🗑</button>' +
                             '</td>' +
                         '</tr>').join('');
                 } catch(e) { console.error('refreshDrivers error:', e); }
@@ -2074,7 +2286,7 @@ app.get('/driver/:name', async (req, res) => {
                         return '<div class="tour-card">' +
                             '<div style="float:right; display:flex; gap:5px;">' +
                                 '<select onchange="transferTour(' + t.id + ', this.value)" style="width:auto;"><option value="">-- Áthelyezés --</option>' + allDNames.map(n => "<option value='" + n + "'>" + n + "</option>").join('') + '</select>' +
-                                '<button onclick=\'editTour(' + JSON.stringify(t).replace(/'/g, "&apos;") + ')\'>✏</button>' +
+                                '<button onclick="editTour(JSON.parse(decodeURIComponent(\'' + encodeURIComponent(JSON.stringify(t)) + '\')))">✏</button>' +
                                 '<button onclick="deleteTour(' + t.id + ')" style="background:#e74c3c; color:white;">🗑</button>' +
                             '</div>' +
                             '<b>' + esc(t.name) + '</b> (' + esc(t.customer || '') + ') - ' + new Date(Number(t.date)).toLocaleDateString() + ' ' +
