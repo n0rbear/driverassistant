@@ -361,6 +361,7 @@ const initDb = async () => {
         ['stops', 'company', 'TEXT'],
         ['stops', 'state', 'TEXT'],
         ['stops', 'country', 'TEXT'],
+        ['live_updates', 'driver_photo', 'TEXT'],
         ['live_updates', 'depot_name', 'TEXT'],
         ['live_updates', 'depot_lat', 'DOUBLE PRECISION'],
         ['live_updates', 'depot_lng', 'DOUBLE PRECISION'],
@@ -368,6 +369,7 @@ const initDb = async () => {
         ['live_updates', 'tour_remaining_duration', 'BIGINT'],
         ['live_updates', 'include_rests', 'BOOLEAN DEFAULT TRUE'],
         ['live_updates', 'next_break_in_seconds', 'BIGINT'],
+        ['drivers', 'photo_url', 'TEXT'],
         ['drivers', 'home_lat', 'DOUBLE PRECISION'],
         ['drivers', 'home_lng', 'DOUBLE PRECISION'],
         ['drivers', 'base_lat', 'DOUBLE PRECISION'],
@@ -594,17 +596,37 @@ app.post('/admin/delete-driver', async (req, res) => {
 app.post('/api/upload-photo', async (req, res) => {
     try {
         const { driverName, imageBase64 } = req.body;
-        if (!imageBase64) return res.status(400).send('No image data');
-        const fileName = `photo_${driverName.replace(/\s+/g, '_')}_${Date.now()}.jpg`;
+        if (!imageBase64) {
+            console.warn('[UPLOAD] No image data received');
+            return res.status(400).send('No image data');
+        }
+        if (!driverName) {
+            console.warn('[UPLOAD] No driver name received');
+            return res.status(400).send('No driver name');
+        }
+
+        console.log(`[UPLOAD] Receiving photo for ${driverName}, size: ${imageBase64.length} chars`);
+
+        const fileName = `photo_${driverName.replace(/[^a-z0-9]/gi, '_')}_${Date.now()}.jpg`;
         const filePath = `uploads/${fileName}`;
         const buffer = Buffer.from(imageBase64, 'base64');
+
+        if (buffer.length === 0) {
+            console.warn('[UPLOAD] Decoded buffer is empty');
+            return res.status(400).send('Invalid base64 data');
+        }
+
         fs.writeFileSync(filePath, buffer);
+        console.log(`[UPLOAD] Saved to ${filePath}, size: ${buffer.length} bytes`);
 
         const photoUrl = `/uploads/${fileName}`;
         await pool.query('UPDATE drivers SET photo_url = $1 WHERE name = $2', [photoUrl, driverName]);
 
         res.json({ photoUrl });
-    } catch (e) { res.status(500).send(e.message); }
+    } catch (e) {
+        console.error(`[UPLOAD-ERROR] ${e.message}`);
+        res.status(500).send(e.message);
+    }
 });
 
 app.get('/api/all-drivers', async (req, res) => {
