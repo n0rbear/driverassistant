@@ -1,0 +1,170 @@
+﻿<!DOCTYPE html>
+<html lang="hu">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Fejlesztési és Javítási Jegyzék - Etap 1</title>
+    <style>
+        body { font-family: Arial, sans-serif; line-height: 1.55; color: #222; max-width: 980px; margin: 30px auto; padding: 20px; }
+        h1 { color: #0056b3; border-bottom: 2px solid #0056b3; padding-bottom: 10px; }
+        h2 { color: #2c3e50; margin-top: 32px; border-bottom: 1px solid #ddd; padding-bottom: 6px; }
+        table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+        th, td { border: 1px solid #ddd; padding: 9px; vertical-align: top; }
+        th { background: #f2f5f8; text-align: left; }
+        .p0 { color: #b00020; font-weight: bold; }
+        .p1 { color: #d35400; font-weight: bold; }
+        .p2 { color: #0056b3; font-weight: bold; }
+        .done { color: #1b7f3a; font-weight: bold; }
+        .progress { color: #a05a00; font-weight: bold; }
+        .todo { color: #555; font-weight: bold; }
+        .note { background: #fff8e1; border-left: 4px solid #ffb300; padding: 12px; }
+        @media print {
+            body { max-width: 100%; margin: 0; padding: 0; }
+            h1, h2 { page-break-after: avoid; }
+        }
+    </style>
+</head>
+<body>
+    <h1>Fejlesztési és Javítási Jegyzék (Etap 1)</h1>
+
+    <p class="note">
+        Ez belső fejlesztési jegyzet. A sorrend szándékosan az alapoktól indul:
+        előbb stabilitás és biztonság, utána webes UX, majd app funkciók és PDF/export.
+    </p>
+
+    <p class="note">
+        Vasárnap reggelig (2026-07-12) kiadható tesztpéldány fókusz:
+        az 1., 2., 3., 6. és 7. pont legyen stabil. A tesztelésre kiadott példány
+        külön mappába kerül, az eredeti projekt pedig tovább fejleszthető marad.
+        Kötelező minimum: profil létrehozása túrákkal és hotel adatokkal együtt,
+        folyamatos szerveres adatszinkron, és működő webes megjelenítés.
+    </p>
+
+    <h2>00. Multi-céges architektúra, szerepkörök és jogosultságok</h2>
+    <table>
+        <tr><th>Prioritás</th><th>Feladat</th><th>Státusz</th><th>Elfogadási feltétel</th></tr>
+        <tr><td class="p0">P0</td><td>Multi-tenant adatmodell bevezetése: minden adat céghez és sofőrhöz UUID alapján kapcsolódjon.</td><td class="progress">Backend alap kész</td><td>A túra, költség, tankolás, hotel, chat, munkaidő és live státusz nem név alapján, hanem company_uuid + driver_uuid alapján kapcsolódik.</td></tr>
+        <tr><td class="p0">P0</td><td>Sofőrnév ne legyen technikai azonosító.</td><td class="progress">Migrációs mezők kész</td><td>Névváltoztatás után sem szakadnak szét a túrák, GPS adatok, költségek és chat üzenetek.</td></tr>
+        <tr><td class="p0">P0</td><td>Sofőr saját, cégtől független identitása.</td><td class="todo">Későbbi architektúra</td><td>A sofőrnek legyen saját, hordozható profilja, amely munkahelyváltáskor is megmarad; a céges kapcsolatok külön időszakos hozzárendelések legyenek, hogy a régi adatok elérhetők maradjanak.</td></tr>
+        <tr><td class="p0">P0</td><td>Telefon-web társítás és leválasztás.</td><td class="done">Első verzió kész</td><td>Telefon aktiváló kóddal társítható webes sofőrprofilhoz, a telefon kijelentkezéskor leválasztja az eszközt, weben pedig a sofőr törlése nélkül leválaszthatók a társított telefonok.</td></tr>
+        <tr><td class="p0">P0</td><td>Szerepkörök létrehozása: DRIVER, DISPATCHER, CEO, SUPER_ADMIN.</td><td class="todo">Hátra van</td><td>Minden webes és mobil művelet szerepkör alapján engedélyezett.</td></tr>
+        <tr><td class="p1">P1</td><td>Jogosultságok konfigurálhatóvá tétele cégenként.</td><td class="todo">Hátra van</td><td>Admin felületen állítható, hogy CEO/diszpécser mely modulokat látja.</td></tr>
+        <tr><td class="p0">P0</td><td>Sofőr- és cégszintű adatszigetelés végigvezetése.</td><td class="progress">Részben kész</td><td>App oldalon túra, költség, hotel, dokumentum, chat és aktuális túra sofőr szerint szűrve. Következő kör: lokációs előzmények, mentett helyek, webes role/company jogosultságok teljes leválasztása.</td></tr>
+    </table>
+
+    <h3>Tervezett szerepkör és láthatósági szabályok</h3>
+    <table>
+        <tr><th>Szerep</th><th>Alap láthatóság</th><th>Állítható jogosultságok</th></tr>
+        <tr><td>DRIVER</td><td>Saját túrák, saját megállók, saját chat, saját munkaidő, saját költségfeltöltés.</td><td>Fotófeltöltés, költségrögzítés, menetlevél export, saját profil szerkesztése.</td></tr>
+        <tr><td>DISPATCHER</td><td>Céghez rendelt sofőrök túrái, státuszai, útvonalai, chat.</td><td>Költségek/tankolások láthatósága opcionális; alapból nem feltétlenül látja.</td></tr>
+        <tr><td>CEO</td><td>Céges áttekintés: sofőrök, túrák, tankolások, költségek, riportok, statisztikák.</td><td>Beállítható, hogy lássa-e élő GPS-t, részletes chatet, személyes megjegyzéseket.</td></tr>
+        <tr><td>SUPER_ADMIN</td><td>Minden tenant/cég technikai felügyelete.</td><td>Cég létrehozása, csomag/jogosultság kezelés, support hozzáférés.</td></tr>
+    </table>
+
+    <h3>Jogosultsági modulok</h3>
+    <table>
+        <tr><th>Modul</th><th>Megjegyzés</th></tr>
+        <tr><td>Túrák</td><td>Sofőr saját, diszpécser céges, CEO céges összesítő nézetben.</td></tr>
+        <tr><td>Élő GPS/státusz</td><td>Diszpécsernek általában kell, CEO-nak cégenként állítható.</td></tr>
+        <tr><td>Tankolások</td><td>CEO alapból lássa; diszpécser csak akkor, ha a cég engedélyezi.</td></tr>
+        <tr><td>Költségek</td><td>CEO alapból lássa; diszpécser láthatósága konfigurálható.</td></tr>
+        <tr><td>Chat</td><td>Diszpécser-sofőr kommunikáció; CEO hozzáférése cégenként állítható.</td></tr>
+        <tr><td>Menetlevél/PDF</td><td>Sofőr saját, CEO céges riportként, diszpécser opcionálisan.</td></tr>
+    </table>
+
+    <h3>Adatbázis reset és mintaadat stratégia</h3>
+    <table>
+        <tr><th>Prioritás</th><th>Feladat</th><th>Státusz</th><th>Elfogadási feltétel</th></tr>
+        <tr><td class="p1">P1</td><td>Biztonságos tesztadat-reset folyamat készítése.</td><td class="done">Backend kész</td><td>Csak explicit megerősítéssel törölhető élő adat, előtte export/backup készül.</td></tr>
+        <tr><td class="p1">P1</td><td>Minta multi-céges adatcsomag készítése.</td><td class="done">Backend kész</td><td>Legalább 2 cég, cégenként CEO, diszpécser, 2-3 sofőr, túrák, tankolások, költségek, chat és live státusz.</td></tr>
+        <tr><td class="p2">P2</td><td>Demo mód elkülönítése éles adattól.</td><td class="done">Kész</td><td>Demo cégek külön jelöltek, és külön resetelhetők az éles ügyféladat törlése nélkül.</td></tr>
+    </table>
+
+    <h2>0. Alap stabilitás és biztonság</h2>
+    <table>
+        <tr><th>Prioritás</th><th>Feladat</th><th>Státusz</th><th>Elfogadási feltétel</th></tr>
+        <tr><td class="p0">P0</td><td>Beégetett tokenek és API kulcsok eltávolítása.</td><td class="done">Kész</td><td>Mistral és Telegram titok nincs beégetve; env/build változókból érkezik.</td></tr>
+        <tr><td class="p0">P0</td><td>Admin/API végpontok védelme.</td><td class="done">Kész</td><td>Éles/Render környezetben ADMIN_TOKEN nélkül nincs admin művelet.</td></tr>
+        <tr><td class="p1">P1</td><td>Költségszinkron SQL hiba javítása.</td><td class="done">Kész</td><td>Meglévő költség újraszinkronizálása nem dob SQL hibát.</td></tr>
+        <tr><td class="p1">P1</td><td>Fotófeltöltés validáció.</td><td class="done">Kész</td><td>Csak méretlimiten belüli jpg/png/webp menthető.</td></tr>
+        <tr><td class="p1">P1</td><td>HTML/XSS védelem a webes listákban.</td><td class="done">Kész</td><td>Felhasználói adat nem kerül nyersen HTML-be a fő webes listákban és modálokban.</td></tr>
+    </table>
+
+    <h2>1. Weboldal navigáció és frissítés</h2>
+    <table>
+        <tr><th>Prioritás</th><th>Feladat</th><th>Státusz</th><th>Elfogadási feltétel</th></tr>
+        <tr><td class="p1">P1</td><td>Navigációs állapot megőrzése mentés után.</td><td class="done">Kész</td><td>Mentés után ugyanazon a tabon marad, toast visszajelzéssel.</td></tr>
+        <tr><td class="p1">P1</td><td>Teljes oldalfrissítés helyett részleges élő frissítés.</td><td class="done">Kész</td><td>Sebesség, pozíció, státusz, chat, flotta és térkép API-ból frissül reload nélkül.</td></tr>
+        <tr><td class="p2">P2</td><td>Android frissítési mechanizmus változatlanul hagyása.</td><td class="done">Kész</td><td>Az Etap 1 webes frissítései nem írják át az app GPS küldését.</td></tr>
+    </table>
+
+    <h2>2. Automatikus állapotkezelés</h2>
+    <table>
+        <tr><th>Prioritás</th><th>Feladat</th><th>Státusz</th><th>Elfogadási feltétel</th></tr>
+        <tr><td class="p1">P1</td><td>App csak nyers GPS/sebesség/időbélyeg adatot küldjön.</td><td class="progress">Státusz-duplikáció kiszedve</td><td>Az app már nem küld saját státuszt; a fennmaradó profil/depot metaadat később külön endpointba kerülhet.</td></tr>
+        <tr><td class="p1">P1</td><td>Szerver számolja a státuszt címek, hotelek, otthon/bázis alapján.</td><td class="done">Kész</td><td>Szerveroldalon egységesen áll elő: Vezetés, Rakodás, Pihenő, Offline.</td></tr>
+        <tr><td class="p1">P1</td><td>Rövid, 3 percen belüli megállások figyelmen kívül hagyása.</td><td class="done">Kész</td><td>Megálláskor rögtön Pihenő látszik, de 3 percen belüli újrainduláskor a pihenő törlődik és a vezetés összevonódik. Az összevonás időbélyeg-eltérés esetén is visszanyitja az előző vezetést.</td></tr>
+        <tr><td class="p2">P2</td><td>App és web csak megjeleníti a szerver által számolt státuszt.</td><td class="todo">Hátra van</td><td>Dashboard mindkét oldalon ugyanazt mutatja.</td></tr>
+    </table>
+
+    <h2>3. Profiladatok és felhasználókezelés</h2>
+    <table>
+        <tr><th>Prioritás</th><th>Feladat</th><th>Státusz</th><th>Elfogadási feltétel</th></tr>
+        <tr><td class="p1">P1</td><td>Kétirányú profil szinkron app és web között.</td><td class="progress">Részben kész</td><td>Profil képernyő szerverről frissít, webes módosítást nem ír felül vakon a telefon; fotó külön feltöltés, EXIF-forgatás és körös vágó előnézet készült. Következő kör: aktiváló kódos/UUID-s első belépés teljesítése.</td></tr>
+        <tr><td class="p1">P1</td><td>Webes admin felhasználó-kezelés.</td><td class="done">Kész</td><td>Admin tud sofőrt létrehozni, módosítani, inaktiválni és törölni.</td></tr>
+        <tr><td class="p2">P2</td><td>Aktiváló kódos app migráció telefoncsere esetére.</td><td class="todo">Hátra van</td><td>Új telepítés kóddal letölti a meglévő profilt.</td></tr>
+        <tr><td class="p0">P0</td><td>Tesztkiadás előtti teljes profilcsomag.</td><td class="todo">Hátra van</td><td>Új profil létrehozásakor a hozzá tartozó túrák, hotel adatok és szerveres szinkron együtt működik; a sofőr oldali kikapcsolhatóság nem követelmény.</td></tr>
+    </table>
+
+    <h2>4. Túrák menüpont (Web)</h2>
+    <table>
+        <tr><th>Prioritás</th><th>Feladat</th><th>Státusz</th><th>Elfogadási feltétel</th></tr>
+        <tr><td class="p1">P1</td><td>Túra részletes adatlekérés.</td><td class="done">Kész</td><td>Megállók, depó, állapot, címzett, cím, időablak, telefon és megjegyzés weben látható.</td></tr>
+        <tr><td class="p2">P2</td><td>Túrához tartozó PDF letöltés.</td><td class="todo">Hátra van</td><td>Egy gombbal hivatalos PDF export készül.</td></tr>
+    </table>
+
+    <h2>5. Költségkezelés</h2>
+    <table>
+        <tr><th>Prioritás</th><th>Feladat</th><th>Státusz</th><th>Elfogadási feltétel</th></tr>
+        <tr><td class="p1">P1</td><td>Manuális rögzítés appban és weben.</td><td class="done">Kész</td><td>Sofőr appból, admin pedig weben tud költséget létrehozni.</td></tr>
+        <tr><td class="p1">P1</td><td>Elfogadva/Kifizetve státusz weben.</td><td class="done">Kész</td><td>Admin gombbal státuszt tud váltani.</td></tr>
+    </table>
+
+    <h2>6. Hotelek és túraintegráció</h2>
+    <table>
+        <tr><th>Prioritás</th><th>Feladat</th><th>Státusz</th><th>Elfogadási feltétel</th></tr>
+        <tr><td class="p1">P1</td><td>Hotel alapadatok, szobaszám, belépőkód, Buchungsnummer.</td><td class="done">Kész</td><td>App és backend is tárolja, weben látszik; a webes Hotelek fül külön Buchungsnummer oszlopot mutat.</td></tr>
+        <tr><td class="p0">P0</td><td>Hotel adatok folyamatos szerveres szinkronja.</td><td class="done">Kész</td><td>Új, módosított és törölt hotel adat appból szerverre kerül; a fő app-frissítés percenként a hotel listát is szinkronizálja.</td></tr>
+        <tr><td class="p1">P1</td><td>Hotel túra adott címe után beszúrása és áthelyezése.</td><td class="done">Kész</td><td>Mentett hotel beszúrható a túrába kiválasztott állomás után, HOTEL típusú megállóként; a megállók fel/le mozgathatók és szinkronizálódnak.</td></tr>
+    </table>
+
+    <h2>7. Navigáció és helyszíni kommunikáció</h2>
+    <table>
+        <tr><th>Prioritás</th><th>Feladat</th><th>Státusz</th><th>Elfogadási feltétel</th></tr>
+        <tr><td class="p1">P1</td><td>Külső navigáció indítása appból.</td><td class="done">Kész</td><td>Következő cím és megálló cím Google Maps/Waze felé átadható.</td></tr>
+        <tr><td class="p1">P1</td><td>Helyszíni megjegyzés és fotó feltöltés.</td><td class="done">Kész</td><td>Megálló megjegyzése szerkeszthető, a megállóhoz külön fotó tölthető fel, a fotó URL-je a szerveres túraszinkronban megmarad, és a webes túralistában is látható.</td></tr>
+    </table>
+
+    <h2>8. Menetlevél / Tagesfahrblatt</h2>
+    <table>
+        <tr><th>Prioritás</th><th>Feladat</th><th>Státusz</th><th>Elfogadási feltétel</th></tr>
+        <tr><td class="p1">P1</td><td>App és web menetlevél nézet.</td><td class="progress">Részben kész</td><td>Mai és korábbi napok munkasávjai megjelennek.</td></tr>
+        <tr><td class="p0">P0</td><td>Hivatalosan elfogadható PDF minta pontosítása.</td><td class="todo">Kell minta</td><td>Van konkrét PDF/minta, amit reprodukálni lehet.</td></tr>
+        <tr><td class="p1">P1</td><td>28 napos visszatekintés.</td><td class="todo">Hátra van</td><td>Bármelyik nap megnyitható és exportálható 28 napra vissza.</td></tr>
+    </table>
+
+    <h2>9. Webes hibajavítások</h2>
+    <table>
+        <tr><th>Prioritás</th><th>Feladat</th><th>Státusz</th><th>Elfogadási feltétel</th></tr>
+        <tr><td class="p1">P1</td><td>Chat beviteli mező helyreállítása.</td><td class="done">Kész</td><td>Chat input és küldés működik, 3 mp-enként frissül.</td></tr>
+        <tr><td class="p1">P1</td><td>Statisztika oldal javítása.</td><td class="done">Kész</td><td>Havi munkaidő, vezetés, pihenő, költség és túraszám megjelenik.</td></tr>
+    </table>
+
+    <h2>Roadmap - Következő etapok</h2>
+    <table>
+        <tr><th>Fázis</th><th>Feladat</th><th>Megjegyzés</th></tr>
+        <tr><td>A</td><td>Digitális átvétel, aláírás, részleges átvétel kezelése.</td><td>e-CMR / Rollkarte alap.</td></tr>
+        <tr><td>B</td><td>Rollkarte PDF export és nyomtatás aláírásokkal.</td><td>Appból és webből is elérhető legyen.</td></tr>
+    </table>
+</body>
+</html>
