@@ -1,6 +1,7 @@
 // FIXED SERVER v17 - TRACE LIVE UPDATES
 const express = require('express');
 const { Pool } = require('pg');
+const path = require('path');
 const app = express();
 app.use(express.json({ limit: '10mb' }));
 app.use('/uploads', express.static('uploads'));
@@ -23,6 +24,10 @@ const requireAdmin = (req, res, next) => {
     if (token === ADMIN_TOKEN) return next();
     return res.sendStatus(401);
 };
+
+app.get('/tour-import-template.xlsx', (req, res) => {
+    res.download(path.join(__dirname, 'DriverAssistant_tura_import_sablon.xlsx'), 'DriverAssistant_tura_import_sablon.xlsx');
+});
 const escapeHtml = (value) => String(value ?? '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
@@ -1807,6 +1812,7 @@ app.get('/driver/:name', async (req, res) => {
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
     <style>
         body { font-family: sans-serif; margin: 0; background: #1a1a1a; color: white; display: flex; flex-direction: column; height: 100vh; }
         header { background: #222; padding: 15px 30px; display: flex; align-items: center; border-bottom: 1px solid #444; }
@@ -1890,7 +1896,12 @@ app.get('/driver/:name', async (req, res) => {
             </div>
         </div>
         <div id="tours" class="tab-content">
-            <button onclick="editTour()" style="background:#2ecc71; color:white; padding:10px; margin-bottom:20px;">+ Új túra</button>
+            <div style="display:flex; gap:10px; margin-bottom:20px; flex-wrap:wrap;">
+                <button onclick="editTour()" style="background:#2ecc71; color:white; padding:10px;">+ Új túra</button>
+                <button onclick="document.getElementById('tourExcelImport').click()" style="background:#3498db; color:white; padding:10px;">Excel import</button>
+                <button onclick="location.href='/tour-import-template.xlsx'" style="background:#555; color:white; padding:10px;">Sablon letöltése</button>
+                <input type="file" id="tourExcelImport" accept=".xlsx,.xls,.csv" style="display:none" onchange="importTourFromExcel(this)">
+            </div>
             <div id="tours-list">
                 ${toursRes.map(t => `
                     <div class="tour-card">
@@ -2715,7 +2726,7 @@ app.get('/driver/:name', async (req, res) => {
                         return '<div class="tour-card">' +
                             '<div style="float:right; display:flex; gap:5px;">' +
                                 '<select onchange="transferTour(' + t.id + ', this.value)" style="width:auto;"><option value="">-- Áthelyezés --</option>' + allDNames.map(n => "<option value='" + esc(n) + "'>" + esc(n) + "</option>").join('') + '</select>' +
-                                '<button data-tour="' + encodeURIComponent(JSON.stringify(t)) + '" onclick="editTour(JSON.parse(decodeURIComponent(this.dataset.tour)))">✏</button>' +
+                                '<button data-tour="' + encodeURIComponent(JSON.stringify(Object.assign({}, t, { stops }))) + '" onclick="editTour(JSON.parse(decodeURIComponent(this.dataset.tour)))">✏</button>' +
                                 '<button onclick="deleteTour(' + t.id + ')" style="background:#e74c3c; color:white;">🗑</button>' +
                             '</div>' +
                             '<b>' + esc(t.name) + '</b> (' + esc(t.customer || '') + ') - ' + new Date(Number(t.date)).toLocaleDateString() + ' ' +
@@ -2893,6 +2904,120 @@ app.get('/driver/:name', async (req, res) => {
                     showToast('Koltseg statusz frissitve.');
                 } catch (e) {
                     console.error('Cost status error:', e);
+                }
+            }
+
+            function pickColumn(row, names) {
+                const keys = Object.keys(row || {});
+                for (const name of names) {
+                    const found = keys.find(k => k.trim().toLowerCase() === name.trim().toLowerCase());
+                    if (found !== undefined && row[found] !== undefined && row[found] !== null) return String(row[found]).trim();
+                }
+                return '';
+            }
+
+            function excelDateToTimestamp(value) {
+                if (!value) return Date.now();
+                if (typeof value === 'number' && window.XLSX && XLSX.SSF) {
+                    const parsed = XLSX.SSF.parse_date_code(value);
+                    if (parsed) return new Date(parsed.y, parsed.m - 1, parsed.d).getTime();
+                }
+                const text = String(value).trim();
+                const parts = text.match(/^(\\d{4})[-.\\/](\\d{1,2})[-.\\/](\\d{1,2})/);
+                if (parts) return new Date(Number(parts[1]), Number(parts[2]) - 1, Number(parts[3])).getTime();
+                const parsedDate = new Date(text);
+                return Number.isNaN(parsedDate.getTime()) ? Date.now() : parsedDate.getTime();
+            }
+
+            async function importTourFromExcel(input) {
+                const file = input.files && input.files[0];
+                input.value = '';
+                if (!file) return;
+                if (!window.XLSX) {
+                    showToast('Az Excel import könyvtár nem töltődött be.');
+                    return;
+                }
+                try {
+                    const buffer = await file.arrayBuffer();
+                    const workbook = XLSX.read(buffer, { type: 'array' });
+                    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+                    const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+                    if (!rows.length) {
+                        showToast('Az Excel fájl üres.');
+                        return;
+                    }
+                    const first = rows[0];
+                    const tourName = pickColumn(first, ['Túra neve', 'Tura neve', 'Tour name', 'TourName', 'Name']) || file.name.replace(/\\.[^.]+$/, '');
+                    const customer = pickColumn(first, ['Megrendelő', 'Megrendelo', 'Customer', 'Kunde']);
+                    const tourDate = excelDateToTimestamp(pickColumn(first, ['Dátum', 'Datum', 'Date', 'Tour date']));
+
+                    const stops = rows.map((row, index) => {
+                        const street = pickColumn(row, ['Utca', 'Street', 'Straße', 'Strasse']);
+                        const house = pickColumn(row, ['Házszám', 'Hazszam', 'House number', 'Hausnummer']);
+                        const postal = pickColumn(row, ['Irányítószám', 'Iranyitoszam', 'Irsz', 'Postal code', 'PLZ']);
+                        const city = pickColumn(row, ['Város', 'Varos', 'City', 'Ort']);
+                        const addressFull = pickColumn(row, ['Teljes cím', 'Teljes cim', 'Address full', 'Address', 'Cím', 'Cim']) ||
+                            ([street, house].filter(Boolean).join(' ') + ([postal, city].filter(Boolean).length ? ', ' + [postal, city].filter(Boolean).join(' ') : '')).trim();
+                        return {
+                            uuid: null,
+                            recipient: pickColumn(row, ['Címzett', 'Cimzett', 'Recipient', 'Empfänger', 'Empfaenger', 'Kontakt']),
+                            company: pickColumn(row, ['Cég', 'Ceg', 'Company', 'Firma']),
+                            street,
+                            house_number: house,
+                            postal_code: postal,
+                            city,
+                            address_full: addressFull,
+                            contact_name: pickColumn(row, ['Kapcsolattartó', 'Kapcsolattarto', 'Contact name']),
+                            phone_number: pickColumn(row, ['Telefon', 'Phone', 'Telefonnummer']),
+                            email: pickColumn(row, ['Email', 'E-mail']),
+                            time_window: pickColumn(row, ['Időablak', 'Idoablak', 'Time window', 'Zeitfenster']),
+                            notes: pickColumn(row, ['Megjegyzés', 'Megjegyzes', 'Notes', 'Notiz']),
+                            stop_type: (pickColumn(row, ['Típus', 'Tipus', 'Stop type', 'Type']) || 'DELIVERY').toUpperCase(),
+                            order_index: index,
+                            latitude: null,
+                            longitude: null
+                        };
+                    }).filter(s => s.recipient || s.company || s.address_full || s.street || s.city);
+
+                    if (!stops.length) {
+                        showToast('Nem találtam importálható címsort.');
+                        return;
+                    }
+
+                    const data = {
+                        id: null,
+                        uuid: null,
+                        driver_name: DRIVER_NAME,
+                        name: tourName,
+                        customer,
+                        date: tourDate,
+                        is_current: true,
+                        notes: pickColumn(first, ['Túra megjegyzés', 'Tura megjegyzes', 'Tour notes']),
+                        depot_name: pickColumn(first, ['Depó név', 'Depo nev', 'Depot name']),
+                        depot_company: pickColumn(first, ['Depó cég', 'Depo ceg', 'Depot company']),
+                        depot_street: pickColumn(first, ['Depó utca', 'Depo utca', 'Depot street']),
+                        depot_house_number: pickColumn(first, ['Depó házszám', 'Depo hazszam', 'Depot house number']),
+                        depot_postal_code: pickColumn(first, ['Depó irsz', 'Depo irsz', 'Depot postal code']),
+                        depot_city: pickColumn(first, ['Depó város', 'Depo varos', 'Depot city']),
+                        depot_lat: null,
+                        depot_lng: null,
+                        stops
+                    };
+
+                    const res = await adminFetch('/admin/save-tour', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify(data)
+                    });
+                    if (res.ok) {
+                        showToast('Excel túra importálva.');
+                        refreshTours();
+                    } else {
+                        showToast('Nem sikerült importálni az Excel túrát.');
+                    }
+                } catch (e) {
+                    console.error('Excel import error:', e);
+                    showToast('Hiba az Excel import során.');
                 }
             }
 
