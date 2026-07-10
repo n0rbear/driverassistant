@@ -265,9 +265,9 @@ const StatusEngine = {
 
     async discardShortRest(client, driverName, rest) {
         const restStart = Number(rest.start_time);
-        const minPreviousEnd = restStart - SHORT_REST_GRACE_MS;
+        const minPreviousEnd = restStart - (SHORT_REST_GRACE_MS * 3);
         const maxPreviousEnd = restStart + 1000;
-        const previousDrivingRes = await client.query(
+        let previousDrivingRes = await client.query(
             `SELECT id FROM work_times
              WHERE driver_name = $1
                AND type LIKE $2
@@ -277,12 +277,25 @@ const StatusEngine = {
              LIMIT 1`,
             [driverName, 'Vezet%', minPreviousEnd, maxPreviousEnd]
         );
+        if (!previousDrivingRes.rows[0]) {
+            previousDrivingRes = await client.query(
+                `SELECT id FROM work_times
+                 WHERE driver_name = $1
+                   AND type LIKE $2
+                   AND end_time IS NOT NULL
+                   AND end_time <= $3
+                 ORDER BY end_time DESC, start_time DESC
+                 LIMIT 1`,
+                [driverName, 'Vezet%', restStart]
+            );
+        }
         if (previousDrivingRes.rows[0]) {
             await client.query('UPDATE work_times SET end_time = NULL, end_mileage = NULL WHERE id = $1', [previousDrivingRes.rows[0].id]);
+            await client.query('DELETE FROM work_times WHERE id = $1', [rest.id]);
         } else {
             console.warn(`[STATUS] Short rest discarded for ${driverName}, but previous driving block was not found near ${restStart}`);
+            await client.query('UPDATE work_times SET type = $1 WHERE id = $2', ['Vezetés', rest.id]);
         }
-        await client.query('DELETE FROM work_times WHERE id = $1', [rest.id]);
     }
 };
 
