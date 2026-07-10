@@ -1374,12 +1374,14 @@ app.get('/api/fleet-status', async (req, res) => {
                 COALESCE(d.license_plate, all_drivers.license_plate) as license_plate,
                 all_drivers.timestamp
             FROM (
-                SELECT driver_name, status, license_plate, timestamp::BIGINT FROM live_updates
+                SELECT driver_name, status, license_plate, timestamp::BIGINT, 1 as source_rank FROM live_updates
                 UNION ALL
-                SELECT driver_name, 'Túra feltöltve' as status, '' as license_plate, date::BIGINT as timestamp FROM tours WHERE deleted_at IS NULL
+                SELECT driver_name, 'Túra feltöltve' as status, '' as license_plate, date::BIGINT as timestamp, 2 as source_rank FROM tours WHERE deleted_at IS NULL
+                UNION ALL
+                SELECT name as driver_name, 'Új sofőr' as status, license_plate, COALESCE(profile_updated_at, created_at, 0)::BIGINT as timestamp, 3 as source_rank FROM drivers WHERE is_active = true
             ) AS all_drivers
             LEFT JOIN drivers d ON d.name = all_drivers.driver_name
-            ORDER BY all_drivers.driver_name, all_drivers.timestamp DESC
+            ORDER BY all_drivers.driver_name, all_drivers.source_rank ASC, all_drivers.timestamp DESC
         `);
         res.json(drivers.rows);
     } catch (e) { res.status(500).send(e.message); }
@@ -1428,12 +1430,14 @@ app.get('/', async (req, res) => {
                 COALESCE(d.license_plate, all_drivers.license_plate) as license_plate,
                 all_drivers.timestamp
             FROM (
-                SELECT driver_name, status, license_plate, timestamp::BIGINT FROM live_updates
+                SELECT driver_name, status, license_plate, timestamp::BIGINT, 1 as source_rank FROM live_updates
                 UNION ALL
-                SELECT driver_name, 'Túra feltöltve' as status, '' as license_plate, date::BIGINT as timestamp FROM tours WHERE deleted_at IS NULL
+                SELECT driver_name, 'Túra feltöltve' as status, '' as license_plate, date::BIGINT as timestamp, 2 as source_rank FROM tours WHERE deleted_at IS NULL
+                UNION ALL
+                SELECT name as driver_name, 'Új sofőr' as status, license_plate, COALESCE(profile_updated_at, created_at, 0)::BIGINT as timestamp, 3 as source_rank FROM drivers WHERE is_active = true
             ) AS all_drivers
             LEFT JOIN drivers d ON d.name = all_drivers.driver_name
-            ORDER BY all_drivers.driver_name, all_drivers.timestamp DESC
+            ORDER BY all_drivers.driver_name, all_drivers.source_rank ASC, all_drivers.timestamp DESC
         `);
         let list = driversRes.rows.map(d => '<div class="card driver-card" data-driver-name="' + escapeHtml(d.driver_name) + '"><img src="' + escapeHtml(d.driver_photo || '') + '" style="width:50px;height:50px;border-radius:50%;float:right;background:#444;object-fit:cover;"><h3>' + escapeHtml(d.driver_name) + '</h3><p>' + escapeHtml(d.status) + (d.license_plate ? ' | ' + escapeHtml(d.license_plate) : '') + '</p></div>').join('');
         res.send(`<html><head><title>Driver ERP</title><style>
@@ -1718,7 +1722,7 @@ app.get('/', async (req, res) => {
 
 app.get('/driver/:name', async (req, res) => {
     const name = req.params.name;
-    const allD = (await pool.query('SELECT DISTINCT driver_name FROM (SELECT driver_name FROM live_updates UNION SELECT driver_name FROM tours) as d')).rows.map(r => r.driver_name).filter(n => n && n !== name);
+    const allD = (await pool.query('SELECT DISTINCT driver_name FROM (SELECT name as driver_name FROM drivers WHERE is_active = true UNION SELECT driver_name FROM live_updates UNION SELECT driver_name FROM tours) as d')).rows.map(r => r.driver_name).filter(n => n && n !== name);
     const update = (await pool.query('SELECT * FROM live_updates WHERE driver_name = $1 ORDER BY timestamp DESC LIMIT 1', [name])).rows[0] || { driver_name: name };
     const driverRes = await pool.query('SELECT * FROM drivers WHERE name = $1', [name]);
     const dInfo = driverRes.rows[0] || {};
