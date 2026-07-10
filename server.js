@@ -1435,7 +1435,7 @@ app.get('/', async (req, res) => {
             LEFT JOIN drivers d ON d.name = all_drivers.driver_name
             ORDER BY all_drivers.driver_name, all_drivers.timestamp DESC
         `);
-        let list = driversRes.rows.map(d => '<div class="card" onclick="location.href=\'/driver/' + encodeURIComponent(d.driver_name) + '\'"><img src="' + escapeHtml(d.driver_photo || '') + '" style="width:50px;height:50px;border-radius:50%;float:right;background:#444;object-fit:cover;"><h3>' + escapeHtml(d.driver_name) + '</h3><p>' + escapeHtml(d.status) + (d.license_plate ? ' | ' + escapeHtml(d.license_plate) : '') + '</p></div>').join('');
+        let list = driversRes.rows.map(d => '<div class="card driver-card" data-driver-name="' + escapeHtml(d.driver_name) + '"><img src="' + escapeHtml(d.driver_photo || '') + '" style="width:50px;height:50px;border-radius:50%;float:right;background:#444;object-fit:cover;"><h3>' + escapeHtml(d.driver_name) + '</h3><p>' + escapeHtml(d.status) + (d.license_plate ? ' | ' + escapeHtml(d.license_plate) : '') + '</p></div>').join('');
         res.send(`<html><head><title>Driver ERP</title><style>
             body { font-family: sans-serif; background: #1a1a1a; color: white; padding: 40px; }
             .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 20px; }
@@ -1532,13 +1532,24 @@ app.get('/', async (req, res) => {
                         const r = await fetch('/api/fleet-status');
                         if (!r.ok) return;
                         const drivers = await r.json();
-                        document.getElementById('driver-grid').innerHTML = drivers.map(d =>
-                            '<div class="card" onclick="location.href=\'/driver/' + encodeURIComponent(d.driver_name) + '\'">' +
+                        const grid = document.getElementById('driver-grid');
+                        grid.innerHTML = drivers.map(d =>
+                            '<div class="card driver-card" data-driver-name="' + esc(d.driver_name) + '">' +
                                 '<img src="' + esc(d.driver_photo || '') + '" style="width:50px;height:50px;border-radius:50%;float:right;background:#444;object-fit:cover;">' +
                                 '<h3>' + esc(d.driver_name) + '</h3>' +
                                 '<p>' + esc(d.status) + (d.license_plate ? ' | ' + esc(d.license_plate) : '') + '</p>' +
                             '</div>').join('');
+                        bindDriverCards();
                     } catch (e) { console.error('Fleet refresh error:', e); }
+                }
+
+                function bindDriverCards() {
+                    document.querySelectorAll('.driver-card').forEach(card => {
+                        card.onclick = () => {
+                            const driverName = card.dataset.driverName || '';
+                            if (driverName) location.href = '/driver/' + encodeURIComponent(driverName);
+                        };
+                    });
                 }
 
                 async function refreshDrivers() {
@@ -1699,6 +1710,7 @@ app.get('/', async (req, res) => {
                 }
 
                 setInterval(refreshFleet, 5000);
+                bindDriverCards();
             </script>
         </body></html>`);
     } catch (e) { res.status(500).send(e.message); }
