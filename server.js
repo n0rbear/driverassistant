@@ -331,8 +331,8 @@ const ImportEngine = {
         let idx = 0;
         for (const s of groupedStops.values()) {
             const main = s.items[0];
-            const res = await client.query(`INSERT INTO stops (uuid, tour_id, address, recipient, company, street, house_number, postal_code, city, state, country, address_full, contact_name, phone_number, email, time_window, notes, order_index, latitude, longitude, is_completed, arrival_time, stop_type, updated_at, items) VALUES (COALESCE($1::UUID, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25) ON CONFLICT (uuid) DO UPDATE SET tour_id=EXCLUDED.tour_id, address=EXCLUDED.address, recipient=EXCLUDED.recipient, company=EXCLUDED.company, street=EXCLUDED.street, house_number=EXCLUDED.house_number, postal_code=EXCLUDED.postal_code, city=EXCLUDED.city, state=EXCLUDED.state, country=EXCLUDED.country, address_full=EXCLUDED.address_full, contact_name=EXCLUDED.contact_name, phone_number=EXCLUDED.phone_number, email=EXCLUDED.email, time_window=EXCLUDED.time_window, notes=EXCLUDED.notes, order_index=EXCLUDED.order_index, latitude=EXCLUDED.latitude, longitude=EXCLUDED.longitude, is_completed=EXCLUDED.is_completed, arrival_time=EXCLUDED.arrival_time, stop_type=EXCLUDED.stop_type, updated_at=EXCLUDED.updated_at, items=EXCLUDED.items RETURNING uuid`,
-                [main.uuid, tourId, s.address_full, main.recipient, s.company, s.street, s.house_number, s.postal_code, s.city, s.state, s.country, s.address_full, main.contact_name, main.phone_number, main.email, main.time_window, main.notes, idx++, s.latitude, s.longitude, main.is_completed, main.arrival_time, main.stop_type, main.updated_at, JSON.stringify(s.items)]);
+            const res = await client.query(`INSERT INTO stops (uuid, tour_id, address, recipient, company, street, house_number, postal_code, city, state, country, address_full, contact_name, phone_number, email, time_window, notes, order_index, latitude, longitude, is_completed, arrival_time, stop_type, updated_at, items, photo_url) VALUES (COALESCE($1::UUID, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26) ON CONFLICT (uuid) DO UPDATE SET tour_id=EXCLUDED.tour_id, address=EXCLUDED.address, recipient=EXCLUDED.recipient, company=EXCLUDED.company, street=EXCLUDED.street, house_number=EXCLUDED.house_number, postal_code=EXCLUDED.postal_code, city=EXCLUDED.city, state=EXCLUDED.state, country=EXCLUDED.country, address_full=EXCLUDED.address_full, contact_name=EXCLUDED.contact_name, phone_number=EXCLUDED.phone_number, email=EXCLUDED.email, time_window=EXCLUDED.time_window, notes=EXCLUDED.notes, order_index=EXCLUDED.order_index, latitude=EXCLUDED.latitude, longitude=EXCLUDED.longitude, is_completed=EXCLUDED.is_completed, arrival_time=EXCLUDED.arrival_time, stop_type=EXCLUDED.stop_type, updated_at=EXCLUDED.updated_at, items=EXCLUDED.items, photo_url=COALESCE(EXCLUDED.photo_url, stops.photo_url) RETURNING uuid`,
+                [main.uuid, tourId, s.address_full, main.recipient, s.company, s.street, s.house_number, s.postal_code, s.city, s.state, s.country, s.address_full, main.contact_name, main.phone_number, main.email, main.time_window, main.notes, idx++, s.latitude, s.longitude, main.is_completed, main.arrival_time, main.stop_type, main.updated_at, JSON.stringify(s.items), main.photo_url || main.photoUrl || null]);
             currentUuids.push(res.rows[0].uuid);
         }
         await client.query('UPDATE stops SET deleted_at = $1, updated_at = $1 WHERE tour_id = $2 AND deleted_at IS NULL AND NOT (uuid = ANY($3::UUID[]))', [tour.updated_at, tourId, currentUuids]);
@@ -408,7 +408,7 @@ const initDb = async () => {
         `CREATE TABLE IF NOT EXISTS work_times (id SERIAL PRIMARY KEY, uuid UUID DEFAULT gen_random_uuid() UNIQUE, driver_name TEXT, type TEXT, start_time BIGINT, end_time BIGINT, mileage INT, end_mileage INT, license_plate TEXT, notes TEXT, date TEXT, UNIQUE(uuid))`,
         `CREATE TABLE IF NOT EXISTS hotels (id SERIAL PRIMARY KEY, uuid UUID DEFAULT gen_random_uuid() UNIQUE, driver_name TEXT, name TEXT, address TEXT, timestamp BIGINT, UNIQUE(uuid))`,
         `CREATE TABLE IF NOT EXISTS tours (id SERIAL PRIMARY KEY, uuid UUID DEFAULT gen_random_uuid() UNIQUE, driver_name TEXT, name TEXT, customer TEXT, date BIGINT, day_of_week TEXT, notes TEXT, is_closed BOOLEAN, is_current BOOLEAN, depot_name TEXT, depot_company TEXT, depot_street TEXT, depot_house_number TEXT, depot_postal_code TEXT, depot_city TEXT, depot_state TEXT, depot_country TEXT, depot_address_full TEXT, depot_lat DOUBLE PRECISION, depot_lng DOUBLE PRECISION, deleted_at BIGINT, updated_at BIGINT, UNIQUE(uuid))`,
-        `CREATE TABLE IF NOT EXISTS stops (id SERIAL PRIMARY KEY, uuid UUID DEFAULT gen_random_uuid() UNIQUE, tour_id INT, address TEXT, recipient TEXT, company TEXT, street TEXT, house_number TEXT, postal_code TEXT, city TEXT, state TEXT, country TEXT, address_full TEXT, contact_name TEXT, phone_number TEXT, email TEXT, time_window TEXT, notes TEXT, alternative_names TEXT, order_index INT, latitude DOUBLE PRECISION, longitude DOUBLE PRECISION, is_completed BOOLEAN, arrival_time BIGINT, deleted_at BIGINT, updated_at BIGINT, stop_type TEXT DEFAULT 'DELIVERY', items JSONB, UNIQUE(uuid))`,
+        `CREATE TABLE IF NOT EXISTS stops (id SERIAL PRIMARY KEY, uuid UUID DEFAULT gen_random_uuid() UNIQUE, tour_id INT, address TEXT, recipient TEXT, company TEXT, street TEXT, house_number TEXT, postal_code TEXT, city TEXT, state TEXT, country TEXT, address_full TEXT, contact_name TEXT, phone_number TEXT, email TEXT, time_window TEXT, notes TEXT, alternative_names TEXT, order_index INT, latitude DOUBLE PRECISION, longitude DOUBLE PRECISION, is_completed BOOLEAN, arrival_time BIGINT, photo_url TEXT, deleted_at BIGINT, updated_at BIGINT, stop_type TEXT DEFAULT 'DELIVERY', items JSONB, UNIQUE(uuid))`,
         `CREATE OR REPLACE FUNCTION set_current_tour(p_driver_name TEXT, p_tour_uuid UUID) RETURNS VOID AS $$
         BEGIN
             UPDATE tours SET is_current = false, updated_at = (EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT
@@ -422,6 +422,7 @@ const initDb = async () => {
     const cols = [
         ['stops', 'items', 'JSONB'],
         ['stops', 'stop_type', 'TEXT DEFAULT \'DELIVERY\''],
+        ['stops', 'photo_url', 'TEXT'],
         ['tours', 'depot_company', 'TEXT'],
         ['tours', 'depot_street', 'TEXT'],
         ['tours', 'depot_house_number', 'TEXT'],
@@ -1165,6 +1166,45 @@ app.post('/api/upload-photo', async (req, res) => {
     }
 });
 
+app.post('/api/upload-stop-photo', async (req, res) => {
+    try {
+        const { stopUuid, imageBase64 } = req.body;
+        if (!stopUuid || !imageBase64) {
+            return res.status(400).send('Missing stopUuid or image data');
+        }
+
+        const normalizedBase64 = String(imageBase64).replace(/^data:image\/[a-zA-Z0-9.+-]+;base64,/, '');
+        if (!/^[a-zA-Z0-9+/=\r\n]+$/.test(normalizedBase64)) {
+            return res.status(400).send('Invalid base64 data');
+        }
+
+        const buffer = Buffer.from(normalizedBase64, 'base64');
+        if (buffer.length === 0) return res.status(400).send('Invalid base64 data');
+        if (buffer.length > MAX_UPLOAD_BYTES) return res.status(413).send('Image too large');
+
+        let ext = null;
+        if (buffer.length > 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) ext = 'jpg';
+        if (buffer.length > 8 && buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47) ext = 'png';
+        if (buffer.length > 12 && buffer.toString('ascii', 0, 4) === 'RIFF' && buffer.toString('ascii', 8, 12) === 'WEBP') ext = 'webp';
+        if (!ext) return res.status(400).send('Unsupported image type');
+
+        const safeStop = String(stopUuid).replace(/[^a-z0-9-]/gi, '_');
+        const fileName = `stop_${safeStop}_${Date.now()}.${ext}`;
+        const filePath = `uploads/${fileName}`;
+        fs.writeFileSync(filePath, buffer);
+
+        const photoUrl = `/uploads/${fileName}`;
+        const now = Date.now();
+        const result = await pool.query('UPDATE stops SET photo_url = $1, updated_at = $2 WHERE uuid::text = $3', [photoUrl, now, stopUuid]);
+        if (result.rowCount === 0) return res.status(404).send('Stop not found');
+
+        res.json({ photoUrl, updatedAt: now });
+    } catch (e) {
+        console.error(`[STOP-UPLOAD-ERROR] ${e.message}`);
+        res.status(500).send(e.message);
+    }
+});
+
 app.get('/api/all-drivers', async (req, res) => {
     const result = await pool.query('SELECT * FROM drivers ORDER BY name ASC');
     res.json(result.rows);
@@ -1199,7 +1239,7 @@ app.get('/api/get-tours/:driverName', async (req, res) => {
             const stopsRes = await pool.query('SELECT * FROM stops WHERE tour_id = $1 AND deleted_at IS NULL ORDER BY order_index ASC', [tour.id]);
             results.push({
                 tour: { ...tour, date: Number(tour.date), deletedAt: tour.deleted_at ? Number(tour.deleted_at) : null, updatedAt: tour.updated_at ? Number(tour.updated_at) : null, depotLatitude: tour.depot_lat, depotLongitude: tour.depot_lng },
-                stops: stopsRes.rows.map(s => ({ ...s, latitude: s.latitude, longitude: s.longitude, isCompleted: !!s.is_completed, stopType: s.stop_type, arrivalTime: s.arrival_time ? Number(s.arrival_time) : null, updatedAt: s.updated_at ? Number(s.updated_at) : null }))
+                stops: stopsRes.rows.map(s => ({ ...s, latitude: s.latitude, longitude: s.longitude, isCompleted: !!s.is_completed, stopType: s.stop_type, arrivalTime: s.arrival_time ? Number(s.arrival_time) : null, photoUrl: s.photo_url || null, updatedAt: s.updated_at ? Number(s.updated_at) : null }))
             });
         }
         res.json(results);
@@ -1737,9 +1777,11 @@ app.get('/driver/:name', async (req, res) => {
                             const stopTitle = s.recipient || s.contact_name || s.company || s.address_full || s.address || 'Megálló';
                             const stopAddress = s.address_full || s.address || '';
                             const stopMeta = [s.time_window, s.phone_number, s.notes].filter(Boolean).map(escapeHtml).join(' | ');
+                            const stopPhoto = s.photo_url || s.photoUrl || '';
                             return "<div class='stop-item'><b>" + (s.order_index + 1) + ". " + (s.stop_type === 'HOTEL' ? '🏨 ' : (s.stop_type === 'DEPOT' ? '🏠 ' : '')) + escapeHtml(stopTitle) + "</b>" +
                                 (stopAddress ? "<br><span>" + escapeHtml(stopAddress) + "</span>" : "") +
                                 (stopMeta ? "<br><small style='color:#aaa;'>" + stopMeta + "</small>" : "") +
+                                (stopPhoto ? "<br><img src='" + escapeHtml(stopPhoto) + "' style='margin-top:8px;max-width:220px;max-height:140px;border-radius:6px;object-fit:cover;border:1px solid #444;'>" : "") +
                                 "</div>";
                         }).join('')}
                     </div>
@@ -2526,9 +2568,11 @@ app.get('/driver/:name', async (req, res) => {
                 const stopTitle = s.recipient || s.contact_name || s.company || s.address_full || s.address || 'Megálló';
                 const stopAddress = s.address_full || s.address || '';
                 const stopMeta = [s.time_window, s.phone_number, s.notes].filter(Boolean).map(esc).join(' | ');
+                const stopPhoto = s.photo_url || s.photoUrl || '';
                 return "<div class='stop-item'><b>" + (s.order_index + 1) + ". " + (s.stop_type === 'HOTEL' ? '🏨 ' : (s.stop_type === 'DEPOT' ? '🏠 ' : '')) + esc(stopTitle) + "</b>" +
                     (stopAddress ? "<br><span>" + esc(stopAddress) + "</span>" : "") +
                     (stopMeta ? "<br><small style='color:#aaa;'>" + stopMeta + "</small>" : "") +
+                    (stopPhoto ? "<br><img src='" + esc(stopPhoto) + "' style='margin-top:8px;max-width:220px;max-height:140px;border-radius:6px;object-fit:cover;border:1px solid #444;'>" : "") +
                     "</div>";
             }
 
