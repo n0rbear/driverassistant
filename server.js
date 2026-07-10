@@ -452,6 +452,7 @@ const initDb = async () => {
         ['stops', 'driver_uuid', 'UUID'],
         ['drivers', 'company_uuid', 'UUID'],
         ['drivers', 'photo_url', 'TEXT'],
+        ['drivers', 'profile_updated_at', 'BIGINT DEFAULT 0'],
         ['drivers', 'home_lat', 'DOUBLE PRECISION'],
         ['drivers', 'home_lng', 'DOUBLE PRECISION'],
         ['drivers', 'base_lat', 'DOUBLE PRECISION'],
@@ -983,13 +984,20 @@ app.post('/api/sync-profile', async (req, res) => {
         }
 
         const driver = driverRes.rows[0];
+        const incomingUpdatedAt = Number(d.profileUpdatedAt || d.profile_updated_at || 0);
+        const now = Date.now();
 
         if (driver) {
+            const serverUpdatedAt = Number(driver.profile_updated_at || 0);
+            if (incomingUpdatedAt > 0 && serverUpdatedAt > incomingUpdatedAt) {
+                await client.query('ROLLBACK');
+                return res.status(409).json({ error: 'PROFILE_CHANGED_ON_SERVER', profile: driver });
+            }
             const oldName = driver.name;
             await client.query(
-                `UPDATE drivers SET name=$1, email=$2, phone=$3, whatsapp=$4, telegram=$5, license_plate=$6, photo_url=$7, is_active=true
-                 WHERE uuid=$8`,
-                [d.name, d.email, d.phone, d.whatsapp, d.telegram, d.licensePlate, d.photoUrl, driver.uuid]
+                `UPDATE drivers SET name=$1, email=$2, phone=$3, whatsapp=$4, telegram=$5, license_plate=$6, photo_url=$7, is_active=true, profile_updated_at=$8
+                 WHERE uuid=$9`,
+                [d.name, d.email, d.phone, d.whatsapp, d.telegram, d.licensePlate, d.photoUrl, now, driver.uuid]
             );
 
             // Ha megváltozott a név, frissítsük az összes kapcsolódó táblát is
@@ -1004,14 +1012,14 @@ app.post('/api/sync-profile', async (req, res) => {
             // Új sofőr beszúrása (csak ha tényleg nem létezik)
             const code = Math.random().toString(36).substring(2, 8).toUpperCase();
             await client.query(
-                `INSERT INTO drivers (name, email, phone, whatsapp, telegram, license_plate, photo_url, activation_code, is_active)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, true)`,
-                [d.name, d.email, d.phone, d.whatsapp, d.telegram, d.licensePlate, d.photoUrl, code]
+                `INSERT INTO drivers (name, email, phone, whatsapp, telegram, license_plate, photo_url, activation_code, is_active, profile_updated_at)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, true, $9)`,
+                [d.name, d.email, d.phone, d.whatsapp, d.telegram, d.licensePlate, d.photoUrl, code, now]
             );
         }
 
         await client.query('COMMIT');
-        res.sendStatus(200);
+        res.json({ success: true, profileUpdatedAt: now });
     } catch (e) {
         await client.query('ROLLBACK');
         console.error(`[SYNC-PROFILE-ERROR] ${e.message}`);
@@ -1029,6 +1037,14 @@ app.get('/api/get-profile/:name', async (req, res) => {
     } catch (e) { res.status(500).send(e.message); }
 });
 
+app.get('/api/get-profile-by-uuid/:uuid', async (req, res) => {
+    try {
+        const result = await pool.query('SELECT * FROM drivers WHERE uuid = $1', [req.params.uuid]);
+        if (result.rows.length === 0) return res.status(404).send('Driver not found');
+        res.json(result.rows[0]);
+    } catch (e) { res.status(500).send(e.message); }
+});
+
 app.post('/admin/save-driver', requireAdmin, async (req, res) => {
     const d = req.body;
     const client = await pool.connect();
@@ -1040,8 +1056,8 @@ app.post('/admin/save-driver', requireAdmin, async (req, res) => {
             const oldName = oldRes.rows[0]?.name;
 
             await client.query(
-                `UPDATE drivers SET name=$1, email=$2, phone=$3, whatsapp=$4, telegram=$5, license_plate=$6, photo_url=$7, is_active=$8, home_lat=$9, home_lng=$10, base_lat=$11, base_lng=$12 WHERE uuid=$13`,
-                [d.name, d.email, d.phone, d.whatsapp, d.telegram, d.license_plate, d.photo_url, d.is_active, d.home_lat, d.home_lng, d.base_lat, d.base_lng, d.uuid]
+                `UPDATE drivers SET name=$1, email=$2, phone=$3, whatsapp=$4, telegram=$5, license_plate=$6, photo_url=$7, is_active=$8, home_lat=$9, home_lng=$10, base_lat=$11, base_lng=$12, profile_updated_at=$13 WHERE uuid=$14`,
+                [d.name, d.email, d.phone, d.whatsapp, d.telegram, d.license_plate, d.photo_url, d.is_active, d.home_lat, d.home_lng, d.base_lat, d.base_lng, Date.now(), d.uuid]
             );
 
             // Ha megváltozott a név, frissítsük az összes kapcsolódó táblát is (cascade)
@@ -1055,8 +1071,8 @@ app.post('/admin/save-driver', requireAdmin, async (req, res) => {
         } else {
             const code = Math.random().toString(36).substring(2, 8).toUpperCase();
             await client.query(
-                `INSERT INTO drivers (name, email, phone, whatsapp, telegram, license_plate, photo_url, activation_code) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-                [d.name, d.email, d.phone, d.whatsapp, d.telegram, d.license_plate, d.photo_url, code]
+                `INSERT INTO drivers (name, email, phone, whatsapp, telegram, license_plate, photo_url, activation_code, profile_updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+                [d.name, d.email, d.phone, d.whatsapp, d.telegram, d.license_plate, d.photo_url, code, Date.now()]
             );
         }
         await client.query('COMMIT');
@@ -1124,13 +1140,14 @@ app.post('/api/upload-photo', async (req, res) => {
         console.log(`[UPLOAD] Saved to ${filePath}, size: ${buffer.length} bytes`);
 
         const photoUrl = `/uploads/${fileName}`;
+        const now = Date.now();
         if (uuid) {
-            await pool.query('UPDATE drivers SET photo_url = $1 WHERE uuid = $2', [photoUrl, uuid]);
+            await pool.query('UPDATE drivers SET photo_url = $1, profile_updated_at = $2 WHERE uuid = $3', [photoUrl, now, uuid]);
         } else {
-            await pool.query('UPDATE drivers SET photo_url = $1 WHERE name = $2', [photoUrl, driverName]);
+            await pool.query('UPDATE drivers SET photo_url = $1, profile_updated_at = $2 WHERE name = $3', [photoUrl, now, driverName]);
         }
 
-        res.json({ photoUrl });
+        res.json({ photoUrl, profileUpdatedAt: now });
     } catch (e) {
         console.error(`[UPLOAD-ERROR] ${e.message}`);
         res.status(500).send(e.message);
