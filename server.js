@@ -788,6 +788,39 @@ app.post('/admin/save-cost', requireAdmin, async (req, res) => {
     }
 });
 
+app.post('/admin/save-hotel', requireAdmin, async (req, res) => {
+    const { driverName, name, address, roomNumber, entryCode, bookingNumber, phoneNumber, email, notes, timestamp } = req.body;
+    const hotelTimestamp = Number(timestamp || Date.now());
+    if (!driverName || !name) return res.sendStatus(400);
+    try {
+        const driverRes = await pool.query('SELECT company_uuid, uuid FROM drivers WHERE name = $1 LIMIT 1', [driverName]);
+        const driver = driverRes.rows[0] || {};
+        const result = await pool.query(
+            `INSERT INTO hotels (company_uuid, driver_uuid, uuid, driver_name, name, address, room_number, entry_code, booking_number, phone_number, email, notes, timestamp)
+             VALUES ($1, $2, gen_random_uuid(), $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+             RETURNING id, uuid, driver_name, name, address, room_number, entry_code, booking_number, phone_number, email, notes, timestamp`,
+            [
+                driver.company_uuid || null,
+                driver.uuid || null,
+                driverName,
+                name,
+                address || '',
+                roomNumber || '',
+                entryCode || '',
+                bookingNumber || '',
+                phoneNumber || '',
+                email || '',
+                notes || '',
+                Number.isFinite(hotelTimestamp) ? hotelTimestamp : Date.now()
+            ]
+        );
+        const row = result.rows[0];
+        res.json({ ...row, timestamp: Number(row.timestamp) });
+    } catch (e) {
+        res.status(500).send(e.message);
+    }
+});
+
 app.post('/api/sync-hotels', async (req, res) => {
     const client = await pool.connect();
     try {
@@ -1062,7 +1095,7 @@ app.post('/api/sync-profile', async (req, res) => {
             }
             const oldName = driver.name;
             await client.query(
-                `UPDATE drivers SET name=$1, email=$2, phone=$3, whatsapp=$4, telegram=$5, license_plate=$6, photo_url=$7, is_active=true, profile_updated_at=$8
+                `UPDATE drivers SET name=$1, email=$2, phone=$3, whatsapp=$4, telegram=$5, license_plate=$6, photo_url=COALESCE(NULLIF($7, ''), photo_url), is_active=true, profile_updated_at=$8
                  WHERE uuid=$9`,
                 [d.name, d.email, d.phone, d.whatsapp, d.telegram, d.licensePlate, d.photoUrl, now, driver.uuid]
             );
@@ -1132,7 +1165,7 @@ app.post('/admin/save-driver', requireAdmin, async (req, res) => {
             const oldName = oldRes.rows[0]?.name;
 
             await client.query(
-                `UPDATE drivers SET name=$1, email=$2, phone=$3, whatsapp=$4, telegram=$5, license_plate=$6, photo_url=$7, is_active=$8, home_lat=$9, home_lng=$10, base_lat=$11, base_lng=$12, profile_updated_at=$13 WHERE uuid=$14`,
+                `UPDATE drivers SET name=$1, email=$2, phone=$3, whatsapp=$4, telegram=$5, license_plate=$6, photo_url=COALESCE(NULLIF($7, ''), photo_url), is_active=$8, home_lat=$9, home_lng=$10, base_lat=$11, base_lng=$12, profile_updated_at=$13 WHERE uuid=$14`,
                 [d.name, d.email, d.phone, d.whatsapp, d.telegram, d.license_plate, d.photo_url, d.is_active, d.home_lat, d.home_lng, d.base_lat, d.base_lng, Date.now(), d.uuid]
             );
 
@@ -1912,7 +1945,23 @@ app.get('/driver/:name', async (req, res) => {
             </div>
             <table><thead><tr><th>Dátum</th><th>Kategória</th><th>Összeg</th><th>Státusz</th><th>Művelet</th></tr></thead><tbody id="costs-list">${costs.map(c => `<tr data-cost-id="${c.id}" data-cost-uuid="${escapeHtml(c.uuid || '')}"><td>${new Date(Number(c.timestamp)).toLocaleDateString()}</td><td>${escapeHtml(c.category)}</td><td>${escapeHtml(c.amount)} ${escapeHtml(c.currency)}</td><td class="cost-status">${escapeHtml(c.status)}</td><td><button data-uuid="${escapeHtml(c.uuid || '')}" data-id="${c.id}" data-status="Elfogadva" onclick="updateCostStatus(this.dataset.uuid, Number(this.dataset.id), this.dataset.status)">Elfogadás</button> <button data-uuid="${escapeHtml(c.uuid || '')}" data-id="${c.id}" data-status="Kifizetve" onclick="updateCostStatus(this.dataset.uuid, Number(this.dataset.id), this.dataset.status)">Kifizetve</button></td></tr>`).join('')}</tbody></table>
         </div>
-        <div id="hotels" class="tab-content"><table><tr><th>Dátum</th><th>Név</th><th>Cím</th><th>Szoba</th><th>Kód</th><th>Buchungsnummer</th></tr>${hotelsRes.map(h => `<tr><td>${new Date(Number(h.timestamp)).toLocaleDateString()}</td><td>${escapeHtml(h.name)}</td><td>${escapeHtml(h.address)}</td><td>${escapeHtml(h.room_number || '')}</td><td>${escapeHtml(h.entry_code || '')}</td><td>${escapeHtml(h.booking_number || '')}</td></tr>`).join('')}</table></div>
+        <div id="hotels" class="tab-content">
+            <div style="background:#222; padding:15px; border-radius:8px; margin-bottom:15px;">
+                <h3 style="margin-top:0;">Új hotel</h3>
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+                    <div><label>Név</label><input type="text" id="hotelName"></div>
+                    <div><label>Cím</label><input type="text" id="hotelAddress"></div>
+                    <div><label>Szoba</label><input type="text" id="hotelRoom"></div>
+                    <div><label>Kód</label><input type="text" id="hotelCode"></div>
+                    <div><label>Buchungsnummer</label><input type="text" id="hotelBooking"></div>
+                    <div><label>Telefon</label><input type="text" id="hotelPhone"></div>
+                    <div><label>Email</label><input type="text" id="hotelEmail"></div>
+                    <div><label>Megjegyzés</label><input type="text" id="hotelNotes"></div>
+                </div>
+                <button onclick="saveWebHotel()" style="margin-top:10px; width:160px; background:#3498db; color:white;">Mentés</button>
+            </div>
+            <table><thead><tr><th>Dátum</th><th>Név</th><th>Cím</th><th>Szoba</th><th>Kód</th><th>Buchungsnummer</th></tr></thead><tbody id="hotels-list">${hotelsRes.map(h => `<tr><td>${new Date(Number(h.timestamp)).toLocaleDateString()}</td><td>${escapeHtml(h.name)}</td><td>${escapeHtml(h.address)}</td><td>${escapeHtml(h.room_number || '')}</td><td>${escapeHtml(h.entry_code || '')}</td><td>${escapeHtml(h.booking_number || '')}</td></tr>`).join('')}</tbody></table>
+        </div>
         <div id="chat" class="tab-content">
             <div id="chat-messages" style="height:400px; background:#111; padding:15px; overflow-y:auto; display:flex; flex-direction:column; margin-bottom:15px;">
                 ${chat.map(m => `<div class="msg ${m.sender === 'DISZPÉCSER' ? 'msg-boss' : 'msg-driver'}"><b>${escapeHtml(m.sender)}:</b><br>${escapeHtml(m.message)}</div>`).join('')}
@@ -2485,6 +2534,10 @@ app.get('/driver/:name', async (req, res) => {
                         const d = await r.json();
                         document.getElementById('prof-whatsapp').value = d.whatsapp || '';
                         document.getElementById('prof-telegram').value = d.telegram || '';
+                        if (d.photo_url) {
+                            document.getElementById('p-photo').src = d.photo_url;
+                            document.getElementById('prof-photo-url').value = d.photo_url;
+                        }
                     }
                 } catch(e) {}
             }
@@ -2734,6 +2787,57 @@ app.get('/driver/:name', async (req, res) => {
                     '<td><button data-uuid="' + esc(uuid) + '" data-id="' + id + '" data-status="Elfogadva" onclick="updateCostStatus(this.dataset.uuid, Number(this.dataset.id), this.dataset.status)">Elfogadás</button> ' +
                     '<button data-uuid="' + esc(uuid) + '" data-id="' + id + '" data-status="Kifizetve" onclick="updateCostStatus(this.dataset.uuid, Number(this.dataset.id), this.dataset.status)">Kifizetve</button></td>' +
                 '</tr>';
+            }
+
+            function renderHotelRow(h) {
+                return '<tr>' +
+                    '<td>' + new Date(Number(h.timestamp || Date.now())).toLocaleDateString() + '</td>' +
+                    '<td>' + esc(h.name || '') + '</td>' +
+                    '<td>' + esc(h.address || '') + '</td>' +
+                    '<td>' + esc(h.room_number || h.roomNumber || '') + '</td>' +
+                    '<td>' + esc(h.entry_code || h.entryCode || '') + '</td>' +
+                    '<td>' + esc(h.booking_number || h.bookingNumber || '') + '</td>' +
+                '</tr>';
+            }
+
+            async function saveWebHotel() {
+                const name = document.getElementById('hotelName').value.trim();
+                if (!name) {
+                    showToast('Adj meg hotel nevet.');
+                    return;
+                }
+                const payload = {
+                    driverName: DRIVER_NAME,
+                    name,
+                    address: document.getElementById('hotelAddress').value || '',
+                    roomNumber: document.getElementById('hotelRoom').value || '',
+                    entryCode: document.getElementById('hotelCode').value || '',
+                    bookingNumber: document.getElementById('hotelBooking').value || '',
+                    phoneNumber: document.getElementById('hotelPhone').value || '',
+                    email: document.getElementById('hotelEmail').value || '',
+                    notes: document.getElementById('hotelNotes').value || '',
+                    timestamp: Date.now()
+                };
+                try {
+                    const r = await adminFetch('/admin/save-hotel', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify(payload)
+                    });
+                    if (!r.ok) {
+                        showToast('Nem sikerült menteni a hotelt.');
+                        return;
+                    }
+                    const saved = await r.json();
+                    document.getElementById('hotels-list').insertAdjacentHTML('afterbegin', renderHotelRow(saved));
+                    ['hotelName', 'hotelAddress', 'hotelRoom', 'hotelCode', 'hotelBooking', 'hotelPhone', 'hotelEmail', 'hotelNotes'].forEach(id => {
+                        document.getElementById(id).value = '';
+                    });
+                    showToast('Hotel mentve.');
+                } catch (e) {
+                    console.error('Save hotel error:', e);
+                    showToast('Hiba a hotel mentésekor.');
+                }
             }
 
             async function saveWebCost() {
