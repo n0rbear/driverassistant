@@ -2070,7 +2070,7 @@ app.get('/driver/:name', async (req, res) => {
             // Sofőr marker (kék kör fehér szegéllyel)
             const driverMarker = L.circleMarker([driverLat, driverLng], {
                 color: '#3498db', radius: 10, fillOpacity: 1, weight: 3, fillColor: '#fff'
-            }).addTo(map).bindPopup('<b>' + esc(DRIVER_NAME) + '</b><br><span id="popup-speed">Sebesség: ' + Math.round(update.speed || 0) + ' km/h</span>');
+            }).addTo(map).bindPopup('<b>' + esc(DRIVER_NAME) + '</b><br><span id="popup-speed">Sebesség: ${Math.round(update.speed || 0)} km/h</span>');
 
             let routeLayer = null;
             const stopMarkerLayer = L.layerGroup().addTo(map);
@@ -2248,15 +2248,15 @@ app.get('/driver/:name', async (req, res) => {
             }
 
             // Depó marker
-            if (update.depot_lat != null && update.depot_lat !== 0) {
+            if (${update.depot_lat != null && update.depot_lat !== 0 ? 'true' : 'false'}) {
                 const depotIcon = L.divIcon({
                     className: 'custom-div-icon',
                     html: "<div style='background-color:#2ecc71; color:white; border-radius:50%; width:24px; height:24px; display:flex; align-items:center; justify-content:center; font-size:12px; border:2px solid white;'>🏠</div>",
                     iconSize: [24, 24],
                     iconAnchor: [12, 12]
                 });
-                L.marker([update.depot_lat, update.depot_lng], { icon: depotIcon }).addTo(map).bindPopup('🏠 Depó: ' + (update.depot_name || 'Bázis'));
-                bounds.extend([update.depot_lat, update.depot_lng]);
+                L.marker([${update.depot_lat || 0}, ${update.depot_lng || 0}], { icon: depotIcon }).addTo(map).bindPopup('🏠 Depó: ${escapeJsString(update.depot_name || 'Bázis')}');
+                bounds.extend([${update.depot_lat || 0}, ${update.depot_lng || 0}]);
             }
 
             // Térkép igazítása
