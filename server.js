@@ -2923,27 +2923,66 @@ app.get('/driver/:name', async (req, res) => {
                 if(t && t.stops) t.stops.forEach(s => addStopRow(s)); else addStopRow(null);
                 document.getElementById('tourModal').style.display = 'block';
             }
+
+            function normalizeStopForEditor(s) {
+                const src = s || {};
+                const n = {
+                    uuid: src.uuid || '',
+                    recipient: src.recipient || src.contact_name || src.contactName || '',
+                    company: src.company || '',
+                    street: src.street || '',
+                    house_number: src.house_number || src.houseNumber || '',
+                    postal_code: src.postal_code || src.postalCode || '',
+                    city: src.city || '',
+                    state: src.state || '',
+                    country: src.country || '',
+                    address_full: src.address_full || src.addressFull || src.address || '',
+                    phone_number: src.phone_number || src.phoneNumber || '',
+                    email: src.email || '',
+                    time_window: src.time_window || src.timeWindow || '',
+                    notes: src.notes || '',
+                    stop_type: src.stop_type || src.stopType || 'DELIVERY',
+                    latitude: src.latitude || '',
+                    longitude: src.longitude || '',
+                    items: src.items || null
+                };
+                if ((!n.street || !n.city) && n.address_full) {
+                    const match = String(n.address_full).match(/^(.+?)\s+([^,\s]+)\s*,\s*(\d{4,6})\s+(.+)$/);
+                    if (match) {
+                        n.street = n.street || match[1];
+                        n.house_number = n.house_number || match[2];
+                        n.postal_code = n.postal_code || match[3];
+                        n.city = n.city || match[4];
+                    } else if (!n.street) {
+                        n.street = n.address_full;
+                    }
+                }
+                return n;
+            }
+
             function addStopRow(s) {
+                s = normalizeStopForEditor(s);
                 const d = document.createElement('div'); d.className = 'stop-edit-row'; d.style = 'border:1px solid #444; padding:15px; margin-bottom:15px; border-radius:8px; position:relative;';
-                const uuid = s ? s.uuid : (window.crypto && crypto.randomUUID ? crypto.randomUUID() : null);
-                const items = s && s.items ? (Array.isArray(s.items) ? s.items : [s.items]) : [{ recipient: s ? s.recipient : '', notes: s ? s.notes : '', stop_type: s ? s.stop_type : 'DELIVERY' }];
-                d.dataset.lat = s ? (s.latitude || '') : '';
-                d.dataset.lng = s ? (s.longitude || '') : '';
+                const uuid = s.uuid || (window.crypto && crypto.randomUUID ? crypto.randomUUID() : null);
+                const items = s.items ? (Array.isArray(s.items) ? s.items : [s.items]) : [{ recipient: s.recipient, notes: s.notes, stop_type: s.stop_type }];
+                const mainItem = items[0] || {};
+                d.dataset.lat = s.latitude || '';
+                d.dataset.lng = s.longitude || '';
                 d.innerHTML = '<button onclick="this.parentElement.remove()" style="position:absolute; right:10px; top:10px; background:#e74c3c; border:none; color:white; padding:5px 10px; border-radius:4px; cursor:pointer;">X</button>' +
                     '<input type="hidden" class="stop-uuid" value="' + esc(uuid || '') + '">' +
                     '<div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">' +
-                        '<div><label>Címzett</label><input type="text" class="stop-recipient" value="' + esc(items[0].recipient || '') + '"></div>' +
-                        '<div><label>Cég</label><input type="text" class="stop-company" value="' + esc(s ? (s.company || '') : '') + '"></div>' +
+                        '<div><label>Címzett</label><input type="text" class="stop-recipient" value="' + esc(mainItem.recipient || s.recipient || '') + '"></div>' +
+                        '<div><label>Cég</label><input type="text" class="stop-company" value="' + esc(s.company || '') + '"></div>' +
                     '</div>' +
                     '<div style="display:grid; grid-template-columns:2fr 1fr; gap:10px; margin-top:5px;">' +
-                        '<div><label>Utca</label><input type="text" class="stop-street" value="' + esc(s ? (s.street || '') : '') + '"></div>' +
-                        '<div><label>Házszám</label><input type="text" class="stop-house" value="' + esc(s ? (s.house_number || '') : '') + '"></div>' +
+                        '<div><label>Utca</label><input type="text" class="stop-street" value="' + esc(s.street || '') + '"></div>' +
+                        '<div><label>Házszám</label><input type="text" class="stop-house" value="' + esc(s.house_number || '') + '"></div>' +
                     '</div>' +
                     '<div style="display:grid; grid-template-columns:1fr 2fr; gap:10px; margin-top:5px;">' +
-                        '<div><label>Irsz</label><input type="text" class="stop-postal" value="' + esc(s ? (s.postal_code || '') : '') + '"></div>' +
-                        '<div><label>Város</label><input type="text" class="stop-city" value="' + esc(s ? (s.city || '') : '') + '"></div>' +
+                        '<div><label>Irsz</label><input type="text" class="stop-postal" value="' + esc(s.postal_code || '') + '"></div>' +
+                        '<div><label>Város</label><input type="text" class="stop-city" value="' + esc(s.city || '') + '"></div>' +
                     '</div>' +
-                    '<div style="margin-top:10px;"><label>Típus</label><select class="stop-type"><option value="DELIVERY" ' + (items[0].stop_type==='DELIVERY'?'selected':'') + '>DELIVERY</option><option value="PICKUP" ' + (items[0].stop_type==='PICKUP'?'selected':'') + '>PICKUP</option><option value="HOTEL" ' + (items[0].stop_type==='HOTEL'?'selected':'') + '>HOTEL</option></select></div>';
+                    '<div style="margin-top:10px;"><label>Típus</label><select class="stop-type"><option value="DELIVERY" ' + ((mainItem.stop_type || s.stop_type)==='DELIVERY'?'selected':'') + '>DELIVERY</option><option value="PICKUP" ' + ((mainItem.stop_type || s.stop_type)==='PICKUP'?'selected':'') + '>PICKUP</option><option value="HOTEL" ' + ((mainItem.stop_type || s.stop_type)==='HOTEL'?'selected':'') + '>HOTEL</option></select></div>';
                 document.getElementById('modalStops').appendChild(d);
             }
             async function geocode(street, house, postal, city) {
@@ -2974,9 +3013,14 @@ app.get('/driver/:name', async (req, res) => {
                 for (let i = 0; i < rows.length; i++) {
                     const r = rows[i];
                     const u = r.querySelector('.stop-uuid').value;
+                    const street = r.querySelector('.stop-street').value;
+                    const house = r.querySelector('.stop-house').value;
+                    const postal = r.querySelector('.stop-postal').value;
+                    const city = r.querySelector('.stop-city').value;
+                    const addressFull = [street, house].filter(Boolean).join(' ') + ([postal, city].filter(Boolean).length ? ', ' + [postal, city].filter(Boolean).join(' ') : '');
 
                     if (!r.dataset.lat || r.dataset.lat === "") {
-                        const c = await geocode(r.querySelector('.stop-street').value, r.querySelector('.stop-house').value, r.querySelector('.stop-postal').value, r.querySelector('.stop-city').value);
+                        const c = await geocode(street, house, postal, city);
                         if (c) { r.dataset.lat = c.lat; r.dataset.lng = c.lon; }
                     }
 
@@ -2984,10 +3028,11 @@ app.get('/driver/:name', async (req, res) => {
                         uuid: u === "" ? null : u,
                         recipient: r.querySelector('.stop-recipient').value,
                         company: r.querySelector('.stop-company').value,
-                        street: r.querySelector('.stop-street').value,
-                        house_number: r.querySelector('.stop-house').value,
-                        postal_code: r.querySelector('.stop-postal').value,
-                        city: r.querySelector('.stop-city').value,
+                        street,
+                        house_number: house,
+                        postal_code: postal,
+                        city,
+                        address_full: addressFull.trim(),
                         stop_type: r.querySelector('.stop-type').value,
                         order_index: i,
                         latitude: r.dataset.lat ? parseFloat(r.dataset.lat) : null,
