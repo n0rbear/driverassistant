@@ -1601,7 +1601,7 @@ app.get('/driver/:name', async (req, res) => {
     const toursRes = (await pool.query('SELECT * FROM tours WHERE driver_name = $1 AND deleted_at IS NULL ORDER BY date DESC', [name])).rows;
     const hotelsRes = (await pool.query(`SELECT name::TEXT, address::TEXT, room_number::TEXT, entry_code::TEXT, timestamp::BIGINT FROM hotels WHERE driver_name = $1 UNION ALL SELECT COALESCE(recipient, address_full)::TEXT as name, address_full::TEXT as address, ''::TEXT as room_number, ''::TEXT as entry_code, COALESCE(arrival_time::BIGINT, (SELECT date::BIGINT FROM tours WHERE id = tour_id))::BIGINT as timestamp FROM stops WHERE tour_id IN (SELECT id FROM tours WHERE driver_name = $1) AND stop_type = 'HOTEL' ORDER BY timestamp DESC`, [name])).rows;
     for (let t of toursRes) t.stops = (await pool.query('SELECT * FROM stops WHERE tour_id = $1 AND deleted_at IS NULL ORDER BY order_index ASC', [t.id])).rows;
-    const currentTourObj = toursRes.find(t => t.is_current);
+    const currentTourObj = toursRes.find(t => t.is_current) || toursRes[0];
     const currentStopsJson = JSON.stringify(currentTourObj ? currentTourObj.stops : []);
 
     const drivingTodaySec = work
@@ -2073,6 +2073,7 @@ app.get('/driver/:name', async (req, res) => {
             }).addTo(map).bindPopup('<b>' + esc(DRIVER_NAME) + '</b><br><span id="popup-speed">Sebesség: ' + Math.round(update.speed || 0) + ' km/h</span>');
 
             let routeLayer = null;
+            const stopMarkerLayer = L.layerGroup().addTo(map);
             let lastNextLat = ${update.next_lat || 0};
             let lastNextLng = ${update.next_lng || 0};
 
@@ -2102,6 +2103,38 @@ app.get('/driver/:name', async (req, res) => {
                     map.removeLayer(routeLayer);
                     routeLayer = null;
                 }
+            }
+
+            function renderStopMarkers(stops) {
+                stopMarkerLayer.clearLayers();
+                (stops || []).forEach(s => {
+                    if (s.latitude && s.longitude) {
+                        const order = Number(s.order_index || 0) + 1;
+                        const icon = L.divIcon({
+                            className: 'custom-div-icon',
+                            html: "<div style='background-color:#e74c3c; color:white; border-radius:50%; width:20px; height:20px; display:flex; align-items:center; justify-content:center; font-size:10px; font-weight:bold; border:2px solid white;'>" + order + "</div>",
+                            iconSize: [20, 20],
+                            iconAnchor: [10, 10]
+                        });
+                        L.marker([s.latitude, s.longitude], { icon: icon }).addTo(stopMarkerLayer)
+                            .bindPopup(order + '. ' + (s.recipient || s.address_full || s.address || 'Megálló'));
+                    }
+                });
+            }
+
+            async function refreshMapTour() {
+                try {
+                    const r = await fetch('/api/get-tours/' + encodeURIComponent(DRIVER_NAME));
+                    if (!r.ok) return;
+                    const data = await r.json();
+                    const tourData = data.find(item => item.tour.is_current) || (data.length > 0 ? data[0] : null);
+                    const stops = tourData ? tourData.stops : [];
+                    const pos = driverMarker.getLatLng();
+                    const dLat = (tourData && tourData.tour.depot_lat) ? tourData.tour.depot_lat : 0;
+                    const dLng = (tourData && tourData.tour.depot_lng) ? tourData.tour.depot_lng : 0;
+                    drawRoute(pos.lat, pos.lng, stops, dLat, dLng);
+                    renderStopMarkers(stops);
+                } catch (e) { console.error('Map tour refresh error:', e); }
             }
 
             // Kezdeti útvonal
@@ -2185,6 +2218,7 @@ app.get('/driver/:name', async (req, res) => {
                                     const dLat = (tourData && tourData.tour.depot_lat) ? tourData.tour.depot_lat : d.depot_lat;
                                     const dLng = (tourData && tourData.tour.depot_lng) ? tourData.tour.depot_lng : d.depot_lng;
                                     drawRoute(d.latitude, d.longitude, stops, dLat, dLng);
+                                    renderStopMarkers(stops);
                                 });
                         }
                     }
@@ -2201,23 +2235,15 @@ app.get('/driver/:name', async (req, res) => {
             openTab(null, savedTab);
 
             setInterval(refreshLiveStatus, 5000);
+            setInterval(refreshMapTour, 15000);
 
             // Túra állomások
             const bounds = L.latLngBounds([driverLat, driverLng]);
 
+            renderStopMarkers(rawStops);
             if (rawStops) {
                 rawStops.forEach(s => {
-                    if (s.latitude && s.longitude) {
-                        const icon = L.divIcon({
-                            className: 'custom-div-icon',
-                            html: "<div style='background-color:#e74c3c; color:white; border-radius:50%; width:20px; height:20px; display:flex; align-items:center; justify-content:center; font-size:10px; font-weight:bold; border:2px solid white;'>" + (s.order_index + 1) + "</div>",
-                            iconSize: [20, 20],
-                            iconAnchor: [10, 10]
-                        });
-                        L.marker([s.latitude, s.longitude], { icon: icon }).addTo(map)
-                            .bindPopup((s.order_index + 1) + '. ' + (s.recipient || s.address_full || s.address));
-                        bounds.extend([s.latitude, s.longitude]);
-                    }
+                    if (s.latitude && s.longitude) bounds.extend([s.latitude, s.longitude]);
                 });
             }
 
