@@ -402,6 +402,15 @@ const initDb = async () => {
             can_edit BOOLEAN DEFAULT FALSE,
             UNIQUE(company_uuid, role, module)
         )`,
+        `CREATE TABLE IF NOT EXISTS driver_devices (
+            id SERIAL PRIMARY KEY,
+            driver_uuid UUID,
+            device_id TEXT UNIQUE NOT NULL,
+            device_name TEXT,
+            is_active BOOLEAN DEFAULT TRUE,
+            linked_at BIGINT,
+            last_seen_at BIGINT
+        )`,
         `CREATE TABLE IF NOT EXISTS live_updates (id SERIAL PRIMARY KEY, uuid UUID DEFAULT gen_random_uuid() UNIQUE, driver_name TEXT, driver_photo TEXT, driver_phone TEXT, driver_email TEXT, license_plate TEXT, latitude DOUBLE PRECISION, longitude DOUBLE PRECISION, speed FLOAT, status TEXT, current_tour TEXT, next_stop TEXT, next_lat DOUBLE PRECISION, next_lng DOUBLE PRECISION, next_stop_dist FLOAT, next_stop_duration BIGINT, tour_remaining_dist FLOAT, tour_remaining_duration BIGINT, depot_name TEXT, depot_lat DOUBLE PRECISION, depot_lng DOUBLE PRECISION, timestamp BIGINT, UNIQUE(uuid))`,
         `CREATE TABLE IF NOT EXISTS costs (id SERIAL PRIMARY KEY, uuid UUID DEFAULT gen_random_uuid() UNIQUE, driver_name TEXT, amount DECIMAL, currency TEXT, category TEXT, notes TEXT, mileage INT, status TEXT DEFAULT 'Rögzítve', timestamp BIGINT, UNIQUE(uuid))`,
         `CREATE TABLE IF NOT EXISTS chat_messages (id SERIAL PRIMARY KEY, uuid UUID DEFAULT gen_random_uuid() UNIQUE, driver_name TEXT, sender TEXT, message TEXT, timestamp BIGINT, UNIQUE(uuid))`,
@@ -468,7 +477,11 @@ const initDb = async () => {
         ['drivers', 'home_lat', 'DOUBLE PRECISION'],
         ['drivers', 'home_lng', 'DOUBLE PRECISION'],
         ['drivers', 'base_lat', 'DOUBLE PRECISION'],
-        ['drivers', 'base_lng', 'DOUBLE PRECISION']
+        ['drivers', 'base_lng', 'DOUBLE PRECISION'],
+        ['driver_devices', 'device_name', 'TEXT'],
+        ['driver_devices', 'is_active', 'BOOLEAN DEFAULT TRUE'],
+        ['driver_devices', 'linked_at', 'BIGINT'],
+        ['driver_devices', 'last_seen_at', 'BIGINT']
     ];
     for (const [t, c, type] of cols) {
         if (t === 'stops' && c === 'items') console.log('[SCHEMA] checking stops.items');
@@ -972,11 +985,38 @@ app.post('/api/set-current-tour', async (req, res) => {
 // ==========================================
 
 app.post('/api/activate-driver', async (req, res) => {
-    const { code } = req.body;
+    const { code, deviceId, deviceName } = req.body;
     try {
         const result = await pool.query('SELECT * FROM drivers WHERE activation_code = $1 AND is_active = true', [code]);
         if (result.rows.length === 0) return res.status(404).send('Érvénytelen vagy inaktív aktiváló kód.');
-        res.json(result.rows[0]);
+        const driver = result.rows[0];
+        const now = Date.now();
+        if (deviceId) {
+            await pool.query(
+                `INSERT INTO driver_devices (driver_uuid, device_id, device_name, is_active, linked_at, last_seen_at)
+                 VALUES ($1, $2, $3, true, $4, $4)
+                 ON CONFLICT (device_id) DO UPDATE SET
+                    driver_uuid = EXCLUDED.driver_uuid,
+                    device_name = EXCLUDED.device_name,
+                    is_active = true,
+                    last_seen_at = EXCLUDED.last_seen_at`,
+                [driver.uuid, deviceId, deviceName || 'Android telefon', now]
+            );
+        }
+        res.json(driver);
+    } catch (e) { res.status(500).send(e.message); }
+});
+
+app.post('/api/unlink-device', async (req, res) => {
+    const { uuid, deviceId } = req.body;
+    if (!deviceId) return res.status(400).send('Missing deviceId');
+    try {
+        if (uuid) {
+            await pool.query('UPDATE driver_devices SET is_active = false, last_seen_at = $1 WHERE device_id = $2 AND driver_uuid = $3', [Date.now(), deviceId, uuid]);
+        } else {
+            await pool.query('UPDATE driver_devices SET is_active = false, last_seen_at = $1 WHERE device_id = $2', [Date.now(), deviceId]);
+        }
+        res.json({ success: true });
     } catch (e) { res.status(500).send(e.message); }
 });
 
@@ -1054,6 +1094,15 @@ app.get('/api/get-profile-by-uuid/:uuid', async (req, res) => {
         const result = await pool.query('SELECT * FROM drivers WHERE uuid = $1', [req.params.uuid]);
         if (result.rows.length === 0) return res.status(404).send('Driver not found');
         res.json(result.rows[0]);
+    } catch (e) { res.status(500).send(e.message); }
+});
+
+app.post('/admin/unlink-driver-devices', requireAdmin, async (req, res) => {
+    const { uuid } = req.body;
+    if (!uuid) return res.status(400).send('Missing driver uuid');
+    try {
+        await pool.query('UPDATE driver_devices SET is_active = false, last_seen_at = $1 WHERE driver_uuid = $2', [Date.now(), uuid]);
+        res.json({ success: true });
     } catch (e) { res.status(500).send(e.message); }
 });
 
@@ -1505,6 +1554,7 @@ app.get('/', async (req, res) => {
                             '<td><span style="color:' + (d.is_active ? '#2ecc71' : '#e74c3c') + '">' + (d.is_active ? 'AKTÍV' : 'INAKTÍV') + '</span></td>' +
                             '<td>' +
                                 '<button data-driver="' + encodeURIComponent(JSON.stringify(d)) + '" onclick="editDriver(JSON.parse(decodeURIComponent(this.dataset.driver)))">✏</button>' +
+                                '<button data-uuid="' + esc(d.uuid) + '" onclick="unlinkDriverDevices(this.dataset.uuid)" style="background:#f39c12; color:white; border:none; border-radius:4px; padding:5px 10px; cursor:pointer;">📱 leválaszt</button>' +
                                 '<button data-uuid="' + esc(d.uuid) + '" onclick="deleteDriver(this.dataset.uuid)" style="background:#e74c3c; color:white; border:none; border-radius:4px; padding:5px 10px; cursor:pointer;">🗑</button>' +
                             '</td>' +
                         '</tr>').join('');
@@ -1578,6 +1628,19 @@ app.get('/', async (req, res) => {
                     });
                     if (r.ok) {
                         showToast('Sofőr törölve.');
+                        refreshDrivers();
+                    }
+                }
+
+                async function unlinkDriverDevices(uuid) {
+                    if (!confirm('Leválasztod a sofőr társított telefonjait? A sofőr és az adatai megmaradnak.')) return;
+                    const r = await adminFetch('/admin/unlink-driver-devices', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({ uuid })
+                    });
+                    if (r.ok) {
+                        showToast('Telefonos társítás leválasztva.');
                         refreshDrivers();
                     }
                 }
@@ -2472,6 +2535,19 @@ app.get('/driver/:name', async (req, res) => {
                 });
                 if (r.ok) {
                     showToast('Sofőr törölve.');
+                    refreshDrivers();
+                }
+            }
+
+            async function unlinkDriverDevices(uuid) {
+                if (!confirm('Leválasztod a sofőr társított telefonjait? A sofőr és az adatai megmaradnak.')) return;
+                const r = await adminFetch('/admin/unlink-driver-devices', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ uuid })
+                });
+                if (r.ok) {
+                    showToast('Telefonos társítás leválasztva.');
                     refreshDrivers();
                 }
             }
