@@ -1478,11 +1478,16 @@ app.post('/admin/transfer-tour', requireAdmin, async (req, res) => {
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
-        const tourRes = await client.query('SELECT uuid, is_current FROM tours WHERE id = $1', [tourId]);
+        if (!tourId || !newDriverName) return res.status(400).send('Missing tourId or newDriverName');
+        const tourRes = await client.query('SELECT uuid, is_current FROM tours WHERE id = $1 AND deleted_at IS NULL', [tourId]);
         if (tourRes.rows.length === 0) throw new Error('Tour not found');
         const { uuid, is_current } = tourRes.rows[0];
+        const driverRes = await client.query('SELECT uuid, company_uuid FROM drivers WHERE name = $1 LIMIT 1', [newDriverName]);
+        const newDriver = driverRes.rows[0] || {};
 
-        await client.query('UPDATE tours SET driver_name = $1, updated_at = $2 WHERE id = $3', [newDriverName, Date.now(), tourId]);
+        const now = Date.now();
+        await client.query('UPDATE tours SET driver_name = $1, driver_uuid = COALESCE($2, driver_uuid), company_uuid = COALESCE($3, company_uuid), updated_at = $4 WHERE id = $5', [newDriverName, newDriver.uuid || null, newDriver.company_uuid || null, now, tourId]);
+        await client.query('UPDATE stops SET driver_uuid = COALESCE($1, driver_uuid), company_uuid = COALESCE($2, company_uuid), updated_at = $3 WHERE tour_id = $4 AND deleted_at IS NULL', [newDriver.uuid || null, newDriver.company_uuid || null, now, tourId]);
 
         if (is_current) {
             await client.query('SELECT set_current_tour($1, $2)', [newDriverName, uuid]);
@@ -1499,10 +1504,17 @@ app.post('/admin/transfer-tour', requireAdmin, async (req, res) => {
 });
 
 app.post('/admin/delete-tour', requireAdmin, async (req, res) => {
-    const now = Date.now();
-    await pool.query('UPDATE stops SET deleted_at = $1, updated_at = $1 WHERE tour_id = $2', [now, req.body.id]);
-    await pool.query('UPDATE tours SET deleted_at = $1, updated_at = $1 WHERE id = $2', [now, req.body.id]);
-    res.json({ success: true });
+    const id = req.body.id;
+    if (!id) return res.status(400).send('Missing tour id');
+    try {
+        const now = Date.now();
+        await pool.query('UPDATE stops SET deleted_at = $1, updated_at = $1 WHERE tour_id = $2', [now, id]);
+        const result = await pool.query('UPDATE tours SET deleted_at = $1, updated_at = $1 WHERE id = $2', [now, id]);
+        if (result.rowCount === 0) return res.status(404).send('Tour not found');
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).send(e.message);
+    }
 });
 
 app.get('/api/live-status/:name', async (req, res) => {
@@ -1865,17 +1877,22 @@ app.get('/', async (req, res) => {
                     return token;
                 }
 
-                function adminFetch(url, options = {}) {
+                async function adminFetch(url, options = {}, retry = true) {
                     const token = getAdminToken();
                     const headers = Object.assign({}, options.headers || {});
                     if (token) headers.Authorization = 'Bearer ' + token;
-                    return fetch(url, Object.assign({}, options, { headers })).then(r => {
-                        if (r.status === 401 || r.status === 503) {
-                            localStorage.removeItem('adminToken');
-                            showToast('Admin token hibás vagy hiányzik.');
+                    const response = await fetch(url, Object.assign({}, options, { headers }));
+                    if ((response.status === 401 || response.status === 503) && retry) {
+                        localStorage.removeItem('adminToken');
+                        const message = await response.text().catch(() => '');
+                        showToast(message || 'Admin token hibás vagy hiányzik.');
+                        const nextToken = prompt('Admin token:') || '';
+                        if (nextToken) {
+                            localStorage.setItem('adminToken', nextToken);
+                            return adminFetch(url, options, false);
                         }
-                        return r;
-                    });
+                    }
+                    return response;
                 }
 
                 setInterval(refreshFleet, 5000);
@@ -2173,17 +2190,22 @@ app.get('/driver/:name', async (req, res) => {
                 return token;
             }
 
-            function adminFetch(url, options = {}) {
+            async function adminFetch(url, options = {}, retry = true) {
                 const token = getAdminToken();
                 const headers = Object.assign({}, options.headers || {});
                 if (token) headers.Authorization = 'Bearer ' + token;
-                return fetch(url, Object.assign({}, options, { headers })).then(r => {
-                    if (r.status === 401 || r.status === 503) {
-                        localStorage.removeItem('adminToken');
-                        showToast('Admin token hibás vagy hiányzik.');
+                const response = await fetch(url, Object.assign({}, options, { headers }));
+                if ((response.status === 401 || response.status === 503) && retry) {
+                    localStorage.removeItem('adminToken');
+                    const message = await response.text().catch(() => '');
+                    showToast(message || 'Admin token hibás vagy hiányzik.');
+                    const nextToken = prompt('Admin token:') || '';
+                    if (nextToken) {
+                        localStorage.setItem('adminToken', nextToken);
+                        return adminFetch(url, options, false);
                     }
-                    return r;
-                });
+                }
+                return response;
             }
 
             function openTab(e, t) {
@@ -3220,8 +3242,31 @@ app.get('/driver/:name', async (req, res) => {
                 }
             }
 
-            function transferTour(tourId, newDriverName) { if (!newDriverName) return; if (confirm('Áthelyezed ' + newDriverName + ' részére?')) adminFetch('/admin/transfer-tour', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ tourId, newDriverName }) }).then(r => { if(r.ok) { showToast('Túra sikeresen áthelyezve!'); refreshTours(); } }); }
-            function deleteTour(id) { if(confirm('Törlöd?')) adminFetch('/admin/delete-tour', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({id}) }).then(r => { if(r.ok) { showToast('Túra törölve!'); refreshTours(); } }); }
+            async function transferTour(tourId, newDriverName) {
+                if (!newDriverName) return;
+                if (!confirm('Áthelyezed ' + newDriverName + ' részére?')) return;
+                const r = await adminFetch('/admin/transfer-tour', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ tourId, newDriverName }) });
+                if (r.ok) {
+                    showToast('Túra sikeresen áthelyezve!');
+                    refreshTours();
+                    refreshHotels();
+                } else {
+                    const msg = await r.text().catch(() => '');
+                    showToast('Nem sikerült áthelyezni a túrát: ' + (msg || r.status));
+                }
+            }
+            async function deleteTour(id) {
+                if (!confirm('Törlöd?')) return;
+                const r = await adminFetch('/admin/delete-tour', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({id}) });
+                if (r.ok) {
+                    showToast('Túra törölve!');
+                    refreshTours();
+                    refreshHotels();
+                } else {
+                    const msg = await r.text().catch(() => '');
+                    showToast('Nem sikerült törölni a túrát: ' + (msg || r.status));
+                }
+            }
             function closeModal() { document.getElementById('tourModal').style.display = 'none'; }
             function editTour(t) {
                 document.getElementById('tourId').value = t ? t.id : '';
