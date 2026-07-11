@@ -2112,7 +2112,7 @@ app.get('/driver/:name', async (req, res) => {
                 <div style="display:grid; grid-template-columns:2fr 1fr; gap:10px; margin-top:10px;"><input type="text" id="tDepotStreet" placeholder="Utca"><input type="text" id="tDepotHouse" placeholder="Házszám"></div>
                 <div style="display:grid; grid-template-columns:1fr 2fr; gap:10px; margin-top:10px;"><input type="text" id="tDepotPostal" placeholder="Irsz"><input type="text" id="tDepotCity" placeholder="Város"></div>
                 <h3>Megállók</h3><div id="modalStops"></div><button onclick="addStopRow()">+ Megálló</button>
-                <div style="margin-top:30px; display:flex; gap:10px; justify-content:flex-end;"><button onclick="closeModal()">Mégse</button><button onclick="saveTour()" style="background:#3498db; color:white; padding:10px 30px;">Mentés</button></div>
+                <div style="margin-top:30px; display:flex; gap:10px; justify-content:flex-end;"><button onclick="closeModal()">Mégse</button><button onclick="saveTour(event)" style="background:#3498db; color:white; padding:10px 30px;">Mentés</button></div>
             </div>
         </div>
 
@@ -3240,7 +3240,7 @@ app.get('/driver/:name', async (req, res) => {
                         '<div><label>Irsz</label><input type="text" class="stop-postal" value="' + esc(s.postal_code || '') + '"></div>' +
                         '<div><label>Város</label><input type="text" class="stop-city" value="' + esc(s.city || '') + '"></div>' +
                     '</div>' +
-                    '<div style="margin-top:10px;"><label>Típus</label><select class="stop-type" onchange="toggleStopHotelFields(this.closest(\\'.stop-edit-row\\'))"><option value="DELIVERY" ' + ((mainItem.stop_type || s.stop_type)==='DELIVERY'?'selected':'') + '>DELIVERY</option><option value="PICKUP" ' + ((mainItem.stop_type || s.stop_type)==='PICKUP'?'selected':'') + '>PICKUP</option><option value="HOTEL" ' + ((mainItem.stop_type || s.stop_type)==='HOTEL'?'selected':'') + '>HOTEL</option></select></div>' +
+                    '<div style="margin-top:10px;"><label>Típus</label><select class="stop-type"><option value="DELIVERY" ' + ((mainItem.stop_type || s.stop_type)==='DELIVERY'?'selected':'') + '>DELIVERY</option><option value="PICKUP" ' + ((mainItem.stop_type || s.stop_type)==='PICKUP'?'selected':'') + '>PICKUP</option><option value="HOTEL" ' + ((mainItem.stop_type || s.stop_type)==='HOTEL'?'selected':'') + '>HOTEL</option></select></div>' +
                     '<div class="stop-hotel-fields" style="display:none; margin-top:10px; padding:10px; background:#2b2b2b; border-radius:6px;">' +
                         '<b style="display:block; margin-bottom:8px; color:#3498db;">Hotel adatok</b>' +
                         '<div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px;">' +
@@ -3255,6 +3255,7 @@ app.get('/driver/:name', async (req, res) => {
                         '<div style="margin-top:8px;"><label>Hotel megjegyzés</label><input type="text" class="stop-notes" value="' + esc(mainItem.notes || s.notes || '') + '"></div>' +
                     '</div>';
                 document.getElementById('modalStops').appendChild(d);
+                d.querySelector('.stop-type').addEventListener('change', () => toggleStopHotelFields(d));
                 toggleStopHotelFields(d);
             }
 
@@ -3274,11 +3275,13 @@ app.get('/driver/:name', async (req, res) => {
                 } catch (e) { return null; }
             }
 
-            async function saveTour() {
-                const btn = event.target;
-                const oldText = btn.innerText;
-                btn.innerText = 'Mentés... (Geocoding)';
-                btn.disabled = true;
+            async function saveTour(evt) {
+                const btn = evt?.target;
+                const oldText = btn?.innerText || 'Mentés';
+                if (btn) {
+                    btn.innerText = 'Mentés... (Geocoding)';
+                    btn.disabled = true;
+                }
 
                 const modal = document.getElementById('tourModal');
                 // Depó koordináták ha hiányzik
@@ -3341,7 +3344,19 @@ app.get('/driver/:name', async (req, res) => {
                     stops
                 };
                 const res = await adminFetch('/admin/save-tour', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) });
-                if(res.ok) { showToast('Túra mentve!'); closeModal(); refreshTours(); } else { alert('Hiba!'); btn.innerText = oldText; btn.disabled = false; }
+                if(res.ok) {
+                    showToast('Túra mentve!');
+                    closeModal();
+                    refreshTours();
+                    refreshHotels();
+                } else {
+                    const msg = await res.text();
+                    alert('Hiba a túra mentésekor: ' + msg);
+                    if (btn) {
+                        btn.innerText = oldText;
+                        btn.disabled = false;
+                    }
+                }
             }
         </script>
     </body></html>`;
