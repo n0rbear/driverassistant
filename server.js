@@ -917,6 +917,21 @@ app.post('/api/sync-hotels', async (req, res) => {
     try {
         await client.query('BEGIN');
         for (const h of (req.body || [])) {
+            const driverName = h.driverName || h.driver_name;
+            if (!driverName || !h.name) continue;
+            if (h.uuid) {
+                const stopHotelRes = await client.query(
+                    `SELECT 1
+                     FROM stops
+                     JOIN tours ON tours.id = stops.tour_id
+                     WHERE stops.uuid::TEXT = $1
+                       AND tours.driver_name = $2
+                       AND stops.stop_type = 'HOTEL'
+                     LIMIT 1`,
+                    [h.uuid, driverName]
+                );
+                if (stopHotelRes.rows[0]) continue;
+            }
             await client.query(`INSERT INTO hotels (uuid, driver_name, name, address, room_number, entry_code, booking_number, phone_number, email, notes, timestamp)
                 VALUES (COALESCE($1::UUID, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
                 ON CONFLICT (uuid) DO UPDATE SET
@@ -931,7 +946,7 @@ app.post('/api/sync-hotels', async (req, res) => {
                     notes = EXCLUDED.notes,
                     timestamp = EXCLUDED.timestamp
                 WHERE hotels.timestamp IS NULL OR EXCLUDED.timestamp >= hotels.timestamp`,
-                [h.uuid || null, h.driverName || h.driver_name, h.name, h.address, h.roomNumber || h.room_number || '', h.entryCode || h.entry_code || '', h.bookingNumber || h.booking_number || '', h.phoneNumber || h.phone_number || '', h.email || '', h.notes || '', h.timestamp || Date.now()]);
+                [h.uuid || null, driverName, h.name, h.address, h.roomNumber || h.room_number || '', h.entryCode || h.entry_code || '', h.bookingNumber || h.booking_number || '', h.phoneNumber || h.phone_number || '', h.email || '', h.notes || '', h.timestamp || Date.now()]);
         }
         await client.query('COMMIT');
         res.sendStatus(200);
@@ -1437,6 +1452,16 @@ app.get('/api/get-tours/:driverName', async (req, res) => {
 
 app.get('/api/get-hotels/:driverName', async (req, res) => {
     try {
+        await pool.query(
+            `DELETE FROM hotels h
+             USING stops s, tours t
+             WHERE h.uuid = s.uuid
+               AND s.tour_id = t.id
+               AND h.driver_name = t.driver_name
+               AND h.driver_name = $1
+               AND s.stop_type = 'HOTEL'`,
+            [req.params.driverName]
+        );
         const result = await pool.query(
             `SELECT 'hotel'::TEXT as source, id::INT, uuid::TEXT, driver_name::TEXT, name::TEXT, address::TEXT, room_number::TEXT, entry_code::TEXT, booking_number::TEXT, phone_number::TEXT, email::TEXT, notes::TEXT, timestamp::BIGINT
              FROM hotels
@@ -1459,6 +1484,31 @@ app.get('/api/get-hotels/:driverName', async (req, res) => {
              WHERE tour_id IN (SELECT id FROM tours WHERE driver_name = $1 AND deleted_at IS NULL)
                AND deleted_at IS NULL
                AND stop_type = 'HOTEL'
+             ORDER BY timestamp DESC`,
+            [req.params.driverName]
+        );
+        res.json(result.rows.map(h => ({ ...h, timestamp: Number(h.timestamp || Date.now()) })));
+    } catch (e) {
+        res.status(500).send(e.message);
+    }
+});
+
+app.get('/api/get-manual-hotels/:driverName', async (req, res) => {
+    try {
+        await pool.query(
+            `DELETE FROM hotels h
+             USING stops s, tours t
+             WHERE h.uuid = s.uuid
+               AND s.tour_id = t.id
+               AND h.driver_name = t.driver_name
+               AND h.driver_name = $1
+               AND s.stop_type = 'HOTEL'`,
+            [req.params.driverName]
+        );
+        const result = await pool.query(
+            `SELECT 'hotel'::TEXT as source, id::INT, uuid::TEXT, driver_name::TEXT, name::TEXT, address::TEXT, room_number::TEXT, entry_code::TEXT, booking_number::TEXT, phone_number::TEXT, email::TEXT, notes::TEXT, timestamp::BIGINT
+             FROM hotels
+             WHERE driver_name = $1
              ORDER BY timestamp DESC`,
             [req.params.driverName]
         );
