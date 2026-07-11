@@ -315,7 +315,7 @@ const ImportEngine = {
 
         const tour = { ...tourData, driver_name: driverName, updated_at: tourData.updated_at || tourData.updatedAt || Date.now() };
         const depot = AddressEngine.normalize(tourData);
-        const groupedStops = new Map();
+        const groupedStops = [];
 
         for (const rawStop of stopsData) {
             const n = AddressEngine.normalize(rawStop);
@@ -331,8 +331,7 @@ const ImportEngine = {
                 arrival_time: rawStop.arrival_time || rawStop.arrivalTime || null,
                 updated_at: rawStop.updated_at || rawStop.updatedAt || Date.now()
             };
-            if (groupedStops.has(fp)) groupedStops.get(fp).items.push(item);
-            else groupedStops.set(fp, { ...n, items: [item] });
+            groupedStops.push({ ...n, fingerprint: fp, items: [item] });
         }
 
         if (tourId) {
@@ -1348,6 +1347,32 @@ app.get('/api/get-tours/:driverName', async (req, res) => {
     } catch (e) { res.status(500).send(e.message); }
 });
 
+app.get('/api/get-hotels/:driverName', async (req, res) => {
+    try {
+        const result = await pool.query(
+            `SELECT name::TEXT, address::TEXT, room_number::TEXT, entry_code::TEXT, booking_number::TEXT, timestamp::BIGINT
+             FROM hotels
+             WHERE driver_name = $1
+             UNION ALL
+             SELECT COALESCE(recipient, address_full)::TEXT as name,
+                    address_full::TEXT as address,
+                    ''::TEXT as room_number,
+                    ''::TEXT as entry_code,
+                    ''::TEXT as booking_number,
+                    COALESCE(arrival_time::BIGINT, (SELECT date::BIGINT FROM tours WHERE id = tour_id))::BIGINT as timestamp
+             FROM stops
+             WHERE tour_id IN (SELECT id FROM tours WHERE driver_name = $1 AND deleted_at IS NULL)
+               AND deleted_at IS NULL
+               AND stop_type = 'HOTEL'
+             ORDER BY timestamp DESC`,
+            [req.params.driverName]
+        );
+        res.json(result.rows.map(h => ({ ...h, timestamp: Number(h.timestamp || Date.now()) })));
+    } catch (e) {
+        res.status(500).send(e.message);
+    }
+});
+
 app.post('/admin/save-tour', requireAdmin, async (req, res) => {
     const client = await pool.connect();
     try {
@@ -1782,7 +1807,7 @@ app.get('/driver/:name', async (req, res) => {
     const chat = (await pool.query('SELECT * FROM chat_messages WHERE driver_name = $1 ORDER BY timestamp ASC', [name])).rows;
     const work = (await pool.query('SELECT DISTINCT ON (start_time) * FROM work_times WHERE driver_name = $1 ORDER BY start_time DESC, id DESC', [name])).rows;
     const toursRes = (await pool.query('SELECT * FROM tours WHERE driver_name = $1 AND deleted_at IS NULL ORDER BY date DESC', [name])).rows;
-    const hotelsRes = (await pool.query(`SELECT name::TEXT, address::TEXT, room_number::TEXT, entry_code::TEXT, booking_number::TEXT, timestamp::BIGINT FROM hotels WHERE driver_name = $1 UNION ALL SELECT COALESCE(recipient, address_full)::TEXT as name, address_full::TEXT as address, ''::TEXT as room_number, ''::TEXT as entry_code, ''::TEXT as booking_number, COALESCE(arrival_time::BIGINT, (SELECT date::BIGINT FROM tours WHERE id = tour_id))::BIGINT as timestamp FROM stops WHERE tour_id IN (SELECT id FROM tours WHERE driver_name = $1) AND stop_type = 'HOTEL' ORDER BY timestamp DESC`, [name])).rows;
+    const hotelsRes = (await pool.query(`SELECT name::TEXT, address::TEXT, room_number::TEXT, entry_code::TEXT, booking_number::TEXT, timestamp::BIGINT FROM hotels WHERE driver_name = $1 UNION ALL SELECT COALESCE(recipient, address_full)::TEXT as name, address_full::TEXT as address, ''::TEXT as room_number, ''::TEXT as entry_code, ''::TEXT as booking_number, COALESCE(arrival_time::BIGINT, (SELECT date::BIGINT FROM tours WHERE id = tour_id))::BIGINT as timestamp FROM stops WHERE tour_id IN (SELECT id FROM tours WHERE driver_name = $1 AND deleted_at IS NULL) AND deleted_at IS NULL AND stop_type = 'HOTEL' ORDER BY timestamp DESC`, [name])).rows;
     for (let t of toursRes) t.stops = (await pool.query('SELECT * FROM stops WHERE tour_id = $1 AND deleted_at IS NULL ORDER BY order_index ASC', [t.id])).rows;
     const currentTourObj = toursRes.find(t => t.is_current) || toursRes[0];
     const currentStopsJson = JSON.stringify(currentTourObj ? currentTourObj.stops : []);
@@ -2088,6 +2113,9 @@ app.get('/driver/:name', async (req, res) => {
                     }
                     if (t === 'stats') {
                         loadStats();
+                    }
+                    if (t === 'hotels') {
+                        refreshHotels();
                     }
                 }
             }
@@ -2809,6 +2837,18 @@ app.get('/driver/:name', async (req, res) => {
                     '<td>' + esc(h.entry_code || h.entryCode || '') + '</td>' +
                     '<td>' + esc(h.booking_number || h.bookingNumber || '') + '</td>' +
                 '</tr>';
+            }
+
+            async function refreshHotels() {
+                try {
+                    const r = await fetch('/api/get-hotels/' + encodeURIComponent(DRIVER_NAME));
+                    if (!r.ok) return;
+                    const data = await r.json();
+                    const list = document.getElementById('hotels-list');
+                    if (list) list.innerHTML = data.map(renderHotelRow).join('');
+                } catch (e) {
+                    console.error('Refresh hotels error:', e);
+                }
             }
 
             async function saveWebHotel() {
