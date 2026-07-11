@@ -316,8 +316,13 @@ const ImportEngine = {
         const tour = { ...tourData, driver_name: driverName, updated_at: tourData.updated_at || tourData.updatedAt || Date.now() };
         const depot = AddressEngine.normalize(tourData);
         const groupedStops = [];
+        const deletedStopUuids = [];
 
         for (const rawStop of stopsData) {
+            if ((rawStop.deleted_at || rawStop.deletedAt) && rawStop.uuid) {
+                deletedStopUuids.push(String(rawStop.uuid));
+                continue;
+            }
             const n = AddressEngine.normalize(rawStop);
             const fp = AddressEngine.getFingerprint(n);
             const item = {
@@ -326,6 +331,7 @@ const ImportEngine = {
                 contact_name: rawStop.contact_name || rawStop.contactName || '',
                 phone_number: rawStop.phone_number || rawStop.phoneNumber || '',
                 email: rawStop.email || '', time_window: rawStop.time_window || rawStop.timeWindow || '',
+                stop_date: rawStop.stop_date || rawStop.stopDate || null,
                 room_number: rawStop.room_number || rawStop.roomNumber || '',
                 entry_code: rawStop.entry_code || rawStop.entryCode || '',
                 booking_number: rawStop.booking_number || rawStop.bookingNumber || '',
@@ -347,12 +353,16 @@ const ImportEngine = {
             if (!tour.uuid) tour.uuid = res.rows[0].uuid;
         }
 
+        if (deletedStopUuids.length > 0) {
+            await client.query('UPDATE stops SET deleted_at = $1, updated_at = $1 WHERE tour_id = $2 AND uuid::text = ANY($3::text[])', [tour.updated_at, tourId, deletedStopUuids]);
+        }
+
         const currentUuids = [];
         let idx = 0;
         for (const s of groupedStops.values()) {
             const main = s.items[0];
-            const res = await client.query(`INSERT INTO stops (uuid, tour_id, address, recipient, company, street, house_number, postal_code, city, state, country, address_full, contact_name, phone_number, email, time_window, notes, order_index, latitude, longitude, is_completed, arrival_time, stop_type, updated_at, items, photo_url, room_number, entry_code, booking_number) VALUES (COALESCE($1::UUID, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29) ON CONFLICT (uuid) DO UPDATE SET tour_id=EXCLUDED.tour_id, address=EXCLUDED.address, recipient=EXCLUDED.recipient, company=EXCLUDED.company, street=EXCLUDED.street, house_number=EXCLUDED.house_number, postal_code=EXCLUDED.postal_code, city=EXCLUDED.city, state=EXCLUDED.state, country=EXCLUDED.country, address_full=EXCLUDED.address_full, contact_name=EXCLUDED.contact_name, phone_number=EXCLUDED.phone_number, email=EXCLUDED.email, time_window=EXCLUDED.time_window, notes=EXCLUDED.notes, order_index=EXCLUDED.order_index, latitude=EXCLUDED.latitude, longitude=EXCLUDED.longitude, is_completed=EXCLUDED.is_completed, arrival_time=EXCLUDED.arrival_time, stop_type=EXCLUDED.stop_type, updated_at=EXCLUDED.updated_at, items=EXCLUDED.items, photo_url=COALESCE(EXCLUDED.photo_url, stops.photo_url), room_number=EXCLUDED.room_number, entry_code=EXCLUDED.entry_code, booking_number=EXCLUDED.booking_number RETURNING uuid`,
-                [main.uuid, tourId, s.address_full, main.recipient, s.company, s.street, s.house_number, s.postal_code, s.city, s.state, s.country, s.address_full, main.contact_name, main.phone_number, main.email, main.time_window, main.notes, idx++, s.latitude, s.longitude, main.is_completed, main.arrival_time, main.stop_type, main.updated_at, JSON.stringify(s.items), main.photo_url || main.photoUrl || null, main.room_number, main.entry_code, main.booking_number]);
+            const res = await client.query(`INSERT INTO stops (uuid, tour_id, address, recipient, company, street, house_number, postal_code, city, state, country, address_full, contact_name, phone_number, email, time_window, stop_date, notes, order_index, latitude, longitude, is_completed, arrival_time, stop_type, updated_at, items, photo_url, room_number, entry_code, booking_number) VALUES (COALESCE($1::UUID, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30) ON CONFLICT (uuid) DO UPDATE SET tour_id=EXCLUDED.tour_id, address=EXCLUDED.address, recipient=EXCLUDED.recipient, company=EXCLUDED.company, street=EXCLUDED.street, house_number=EXCLUDED.house_number, postal_code=EXCLUDED.postal_code, city=EXCLUDED.city, state=EXCLUDED.state, country=EXCLUDED.country, address_full=EXCLUDED.address_full, contact_name=EXCLUDED.contact_name, phone_number=EXCLUDED.phone_number, email=EXCLUDED.email, time_window=EXCLUDED.time_window, stop_date=EXCLUDED.stop_date, notes=EXCLUDED.notes, order_index=EXCLUDED.order_index, latitude=EXCLUDED.latitude, longitude=EXCLUDED.longitude, is_completed=EXCLUDED.is_completed, arrival_time=EXCLUDED.arrival_time, stop_type=EXCLUDED.stop_type, updated_at=EXCLUDED.updated_at, items=EXCLUDED.items, photo_url=COALESCE(EXCLUDED.photo_url, stops.photo_url), room_number=EXCLUDED.room_number, entry_code=EXCLUDED.entry_code, booking_number=EXCLUDED.booking_number, deleted_at=NULL RETURNING uuid`,
+                [main.uuid, tourId, s.address_full, main.recipient, s.company, s.street, s.house_number, s.postal_code, s.city, s.state, s.country, s.address_full, main.contact_name, main.phone_number, main.email, main.time_window, main.stop_date, main.notes, idx++, s.latitude, s.longitude, main.is_completed, main.arrival_time, main.stop_type, main.updated_at, JSON.stringify(s.items), main.photo_url || main.photoUrl || null, main.room_number, main.entry_code, main.booking_number]);
             currentUuids.push(res.rows[0].uuid);
         }
         await client.query('UPDATE stops SET deleted_at = $1, updated_at = $1 WHERE tour_id = $2 AND deleted_at IS NULL AND NOT (uuid = ANY($3::UUID[]))', [tour.updated_at, tourId, currentUuids]);
@@ -455,6 +465,7 @@ const initDb = async () => {
         ['stops', 'room_number', 'TEXT'],
         ['stops', 'entry_code', 'TEXT'],
         ['stops', 'booking_number', 'TEXT'],
+        ['stops', 'stop_date', 'BIGINT'],
         ['tours', 'depot_company', 'TEXT'],
         ['tours', 'depot_street', 'TEXT'],
         ['tours', 'depot_house_number', 'TEXT'],
@@ -864,6 +875,28 @@ app.post('/admin/save-hotel-record', requireAdmin, async (req, res) => {
         );
         const row = result.rows[0];
         res.json({ ...row, timestamp: Number(row.timestamp || Date.now()) });
+    } catch (e) {
+        res.status(500).send(e.message);
+    }
+});
+
+app.post('/admin/delete-hotel-record', requireAdmin, async (req, res) => {
+    const { source, id, uuid } = req.body;
+    if (!id && !uuid) return res.sendStatus(400);
+    try {
+        if (source === 'stop') {
+            const now = Date.now();
+            const result = await pool.query(
+                `UPDATE stops SET deleted_at=$1, updated_at=$1 WHERE ${uuid ? 'uuid::text = $2' : 'id = $2'}`,
+                [now, uuid || id]
+            );
+            return res.json({ success: true, count: result.rowCount });
+        }
+        const result = await pool.query(
+            `DELETE FROM hotels WHERE ${uuid ? 'uuid::text = $1' : 'id = $1'}`,
+            [uuid || id]
+        );
+        res.json({ success: true, count: result.rowCount });
     } catch (e) {
         res.status(500).send(e.message);
     }
@@ -1384,7 +1417,7 @@ app.get('/api/get-tours/:driverName', async (req, res) => {
             const stopsRes = await pool.query('SELECT * FROM stops WHERE tour_id = $1 AND deleted_at IS NULL ORDER BY order_index ASC', [tour.id]);
             results.push({
                 tour: { ...tour, date: Number(tour.date), deletedAt: tour.deleted_at ? Number(tour.deleted_at) : null, updatedAt: tour.updated_at ? Number(tour.updated_at) : null, depotLatitude: tour.depot_lat, depotLongitude: tour.depot_lng },
-                stops: stopsRes.rows.map(s => ({ ...s, latitude: s.latitude, longitude: s.longitude, isCompleted: !!s.is_completed, stopType: s.stop_type, arrivalTime: s.arrival_time ? Number(s.arrival_time) : null, photoUrl: s.photo_url || null, updatedAt: s.updated_at ? Number(s.updated_at) : null }))
+                stops: stopsRes.rows.map(s => ({ ...s, latitude: s.latitude, longitude: s.longitude, isCompleted: !!s.is_completed, stopType: s.stop_type, stopDate: s.stop_date ? Number(s.stop_date) : null, arrivalTime: s.arrival_time ? Number(s.arrival_time) : null, photoUrl: s.photo_url || null, updatedAt: s.updated_at ? Number(s.updated_at) : null }))
             });
         }
         res.json(results);
@@ -1989,10 +2022,12 @@ app.get('/driver/:name', async (req, res) => {
                         ${t.stops.map(s => {
                             const stopTitle = s.recipient || s.contact_name || s.company || s.address_full || s.address || 'Megálló';
                             const stopAddress = s.address_full || s.address || '';
+                            const stopDate = s.stop_date || s.stopDate;
                             const stopMeta = [s.time_window, s.phone_number, s.notes].filter(Boolean).map(escapeHtml).join(' | ');
                             const stopPhoto = s.photo_url || s.photoUrl || '';
                             return "<div class='stop-item'><b>" + (s.order_index + 1) + ". " + (s.stop_type === 'HOTEL' ? '🏨 ' : (s.stop_type === 'DEPOT' ? '🏠 ' : '')) + escapeHtml(stopTitle) + "</b>" +
                                 (stopAddress ? "<br><span>" + escapeHtml(stopAddress) + "</span>" : "") +
+                                (stopDate ? "<br><small style='color:#9fd3ff;'>Dátum: " + new Date(Number(stopDate)).toLocaleDateString() + "</small>" : "") +
                                 (stopMeta ? "<br><small style='color:#aaa;'>" + stopMeta + "</small>" : "") +
                                 (stopPhoto ? "<br><img src='" + escapeHtml(stopPhoto) + "' style='margin-top:8px;max-width:220px;max-height:140px;border-radius:6px;object-fit:cover;border:1px solid #444;'>" : "") +
                                 "</div>";
@@ -2052,7 +2087,7 @@ app.get('/driver/:name', async (req, res) => {
                     <button onclick="resetHotelForm()" style="width:120px;">Új adat</button>
                 </div>
             </div>
-            <table><thead><tr><th>Dátum</th><th>Név</th><th>Cím</th><th>Szoba</th><th>Kód</th><th>Buchungsnummer</th><th>Művelet</th></tr></thead><tbody id="hotels-list">${hotelsRes.map(h => `<tr><td>${new Date(Number(h.timestamp)).toLocaleDateString()}</td><td>${escapeHtml(h.name)}</td><td>${escapeHtml(h.address)}</td><td>${escapeHtml(h.room_number || '')}</td><td>${escapeHtml(h.entry_code || '')}</td><td>${escapeHtml(h.booking_number || '')}</td><td><button data-hotel="${escapeHtml(JSON.stringify(h))}" onclick="editHotelRecord(JSON.parse(this.dataset.hotel))">Szerkesztés</button></td></tr>`).join('')}</tbody></table>
+            <table><thead><tr><th>Dátum</th><th>Név</th><th>Cím</th><th>Szoba</th><th>Kód</th><th>Buchungsnummer</th><th>Művelet</th></tr></thead><tbody id="hotels-list">${hotelsRes.map(h => `<tr><td>${new Date(Number(h.timestamp)).toLocaleDateString()}</td><td>${escapeHtml(h.name)}</td><td>${escapeHtml(h.address)}</td><td>${escapeHtml(h.room_number || '')}</td><td>${escapeHtml(h.entry_code || '')}</td><td>${escapeHtml(h.booking_number || '')}</td><td><button data-hotel="${escapeHtml(JSON.stringify(h))}" onclick="editHotelRecord(JSON.parse(this.dataset.hotel))">Szerkesztés</button> <button data-hotel="${escapeHtml(JSON.stringify(h))}" onclick="deleteHotelRecord(JSON.parse(this.dataset.hotel))" style="background:#e74c3c;color:white;">Törlés</button></td></tr>`).join('')}</tbody></table>
         </div>
         <div id="chat" class="tab-content">
             <div id="chat-messages" style="height:400px; background:#111; padding:15px; overflow-y:auto; display:flex; flex-direction:column; margin-bottom:15px;">
@@ -2893,7 +2928,8 @@ app.get('/driver/:name', async (req, res) => {
                     '<td>' + esc(h.room_number || h.roomNumber || '') + '</td>' +
                     '<td>' + esc(h.entry_code || h.entryCode || '') + '</td>' +
                     '<td>' + esc(h.booking_number || h.bookingNumber || '') + '</td>' +
-                    '<td><button data-hotel="' + payload + '" onclick="editHotelRecord(JSON.parse(this.dataset.hotel))">Szerkesztés</button></td>' +
+                    '<td><button data-hotel="' + payload + '" onclick="editHotelRecord(JSON.parse(this.dataset.hotel))">Szerkesztés</button> ' +
+                    '<button data-hotel="' + payload + '" onclick="deleteHotelRecord(JSON.parse(this.dataset.hotel))" style="background:#e74c3c;color:white;">Törlés</button></td>' +
                 '</tr>';
             }
 
@@ -2971,6 +3007,30 @@ app.get('/driver/:name', async (req, res) => {
                 } catch (e) {
                     console.error('Save hotel error:', e);
                     showToast('Hiba a hotel mentésekor.');
+                }
+            }
+
+            async function deleteHotelRecord(h) {
+                if (!h || (!h.id && !h.uuid)) return;
+                if (!confirm('Törlöd ezt a hotelt?')) return;
+                try {
+                    const r = await adminFetch('/admin/delete-hotel-record', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({ source: h.source || 'hotel', id: h.id || null, uuid: h.uuid || null })
+                    });
+                    if (!r.ok) {
+                        const errorText = await r.text().catch(() => '');
+                        showToast('Nem sikerült törölni a hotelt: ' + (errorText || r.status));
+                        return;
+                    }
+                    resetHotelForm();
+                    refreshHotels();
+                    refreshTours();
+                    showToast('Hotel törölve.');
+                } catch (e) {
+                    console.error('Delete hotel error:', e);
+                    showToast('Hiba a hotel törlésekor.');
                 }
             }
 
@@ -3052,6 +3112,12 @@ app.get('/driver/:name', async (req, res) => {
                 return Number.isNaN(parsedDate.getTime()) ? Date.now() : parsedDate.getTime();
             }
 
+            function optionalExcelDateToTimestamp(value) {
+                if (!value) return null;
+                const ts = excelDateToTimestamp(value);
+                return Number.isNaN(Number(ts)) ? null : ts;
+            }
+
             async function importTourFromExcel(input) {
                 const file = input.files && input.files[0];
                 input.value = '';
@@ -3093,6 +3159,7 @@ app.get('/driver/:name', async (req, res) => {
                             contact_name: pickColumn(row, ['Kapcsolattartó', 'Kapcsolattarto', 'Contact name']),
                             phone_number: pickColumn(row, ['Telefon', 'Phone', 'Telefonnummer']),
                             email: pickColumn(row, ['Email', 'E-mail']),
+                            stop_date: optionalExcelDateToTimestamp(pickColumn(row, ['Stop dátum', 'Stop datum', 'Megálló dátuma', 'Megallo datuma', 'Dátum', 'Datum', 'Date'])),
                             room_number: pickColumn(row, ['Szoba', 'Room', 'Zimmer']),
                             entry_code: pickColumn(row, ['Belépőkód', 'Belepokod', 'Entry code', 'Code']),
                             booking_number: pickColumn(row, ['Buchungsnummer', 'Foglalási szám', 'Foglalasi szam', 'Booking number']),
@@ -3191,6 +3258,7 @@ app.get('/driver/:name', async (req, res) => {
                     phone_number: src.phone_number || src.phoneNumber || '',
                     email: src.email || '',
                     time_window: src.time_window || src.timeWindow || '',
+                    stop_date: src.stop_date || src.stopDate || '',
                     notes: src.notes || '',
                     stop_type: src.stop_type || src.stopType || 'DELIVERY',
                     room_number: src.room_number || src.roomNumber || '',
@@ -3214,6 +3282,16 @@ app.get('/driver/:name', async (req, res) => {
                 return n;
             }
 
+            function dateInputValue(value) {
+                if (!value) return '';
+                const d = new Date(Number(value));
+                return Number.isNaN(d.getTime()) ? '' : d.toISOString().split('T')[0];
+            }
+
+            function dateInputToTimestamp(value) {
+                return value ? new Date(value).getTime() : null;
+            }
+
             function addStopRow(s) {
                 s = normalizeStopForEditor(s);
                 const d = document.createElement('div'); d.className = 'stop-edit-row'; d.style = 'border:1px solid #444; padding:15px; margin-bottom:15px; border-radius:8px; position:relative;';
@@ -3235,6 +3313,10 @@ app.get('/driver/:name', async (req, res) => {
                     '<div style="display:grid; grid-template-columns:1fr 2fr; gap:10px; margin-top:5px;">' +
                         '<div><label>Irsz</label><input type="text" class="stop-postal" value="' + esc(s.postal_code || '') + '"></div>' +
                         '<div><label>Város</label><input type="text" class="stop-city" value="' + esc(s.city || '') + '"></div>' +
+                    '</div>' +
+                    '<div style="display:grid; grid-template-columns:1fr 2fr; gap:10px; margin-top:5px;">' +
+                        '<div><label>Dátum</label><input type="date" class="stop-date" value="' + esc(dateInputValue(s.stop_date)) + '"></div>' +
+                        '<div><label>Időablak</label><input type="text" class="stop-time-window" value="' + esc(s.time_window || '') + '"></div>' +
                     '</div>' +
                     '<div style="margin-top:10px;"><label>Típus</label><select class="stop-type"><option value="DELIVERY" ' + ((mainItem.stop_type || s.stop_type)==='DELIVERY'?'selected':'') + '>DELIVERY</option><option value="PICKUP" ' + ((mainItem.stop_type || s.stop_type)==='PICKUP'?'selected':'') + '>PICKUP</option><option value="HOTEL" ' + ((mainItem.stop_type || s.stop_type)==='HOTEL'?'selected':'') + '>HOTEL</option></select></div>' +
                     '<div class="stop-hotel-fields" style="display:none; margin-top:10px; padding:10px; background:#2b2b2b; border-radius:6px;">' +
@@ -3311,6 +3393,8 @@ app.get('/driver/:name', async (req, res) => {
                         postal_code: postal,
                         city,
                         address_full: addressFull.trim(),
+                        time_window: r.querySelector('.stop-time-window')?.value || '',
+                        stop_date: dateInputToTimestamp(r.querySelector('.stop-date')?.value || ''),
                         stop_type: r.querySelector('.stop-type').value,
                         room_number: r.querySelector('.stop-room')?.value || '',
                         entry_code: r.querySelector('.stop-entry-code')?.value || '',
