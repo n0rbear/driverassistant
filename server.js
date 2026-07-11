@@ -347,7 +347,7 @@ const ImportEngine = {
             groupedStops.push({ ...n, fingerprint: fp, items: [item] });
         }
 
-        if (tourId && shouldApplyTourPayload && !isMobileSync) {
+        if (tourId && shouldApplyTourPayload) {
             await client.query(`UPDATE tours SET driver_name=$1, name=$2, customer=$3, date=$4, day_of_week=$5, notes=$6, is_closed=$7, is_current=$8, depot_name=$9, depot_company=$10, depot_street=$11, depot_house_number=$12, depot_postal_code=$13, depot_city=$14, depot_state=$15, depot_country=$16, depot_address_full=$17, depot_lat=$18, depot_lng=$19, updated_at=$20, deleted_at=$22 WHERE id=$21`,
                 [driverName, tour.name, tour.customer, tour.date, tour.day_of_week, tour.notes, !!tour.is_closed, !!tour.is_current, depot.recipient || depot.address_full, depot.company, depot.street, depot.house_number, depot.postal_code, depot.city, depot.state, depot.country, depot.address_full, depot.latitude, depot.longitude, tour.updated_at, tourId, tour.deleted_at || tour.deletedAt || null]);
         } else if (!tourId) {
@@ -357,7 +357,7 @@ const ImportEngine = {
             if (!tour.uuid) tour.uuid = res.rows[0].uuid;
         }
 
-        if (deletedStopUuids.length > 0 && !isMobileSync) {
+        if (deletedStopUuids.length > 0) {
             await client.query('UPDATE stops SET deleted_at = $1, updated_at = $1 WHERE tour_id = $2 AND uuid::text = ANY($3::text[]) AND (updated_at IS NULL OR updated_at <= $1)', [tour.updated_at, tourId, deletedStopUuids]);
         }
 
@@ -366,17 +366,17 @@ const ImportEngine = {
         for (const s of groupedStops.values()) {
             const main = s.items[0];
             const stopConflictUpdate = isMobileSync
-                ? `is_completed=EXCLUDED.is_completed, arrival_time=COALESCE(EXCLUDED.arrival_time, stops.arrival_time), photo_url=COALESCE(EXCLUDED.photo_url, stops.photo_url), updated_at=GREATEST(COALESCE(stops.updated_at, 0), COALESCE(EXCLUDED.updated_at, 0))`
+                ? `is_completed=EXCLUDED.is_completed, arrival_time=COALESCE(EXCLUDED.arrival_time, stops.arrival_time), photo_url=COALESCE(EXCLUDED.photo_url, stops.photo_url), stop_type=EXCLUDED.stop_type, room_number=EXCLUDED.room_number, entry_code=EXCLUDED.entry_code, booking_number=EXCLUDED.booking_number, notes=EXCLUDED.notes, updated_at=GREATEST(COALESCE(stops.updated_at, 0), COALESCE(EXCLUDED.updated_at, 0)) WHERE stops.updated_at IS NULL OR EXCLUDED.updated_at >= stops.updated_at`
                 : `tour_id=EXCLUDED.tour_id, address=EXCLUDED.address, recipient=EXCLUDED.recipient, company=EXCLUDED.company, street=EXCLUDED.street, house_number=EXCLUDED.house_number, postal_code=EXCLUDED.postal_code, city=EXCLUDED.city, state=EXCLUDED.state, country=EXCLUDED.country, address_full=EXCLUDED.address_full, contact_name=EXCLUDED.contact_name, phone_number=EXCLUDED.phone_number, email=EXCLUDED.email, time_window=EXCLUDED.time_window, stop_date=EXCLUDED.stop_date, notes=EXCLUDED.notes, order_index=EXCLUDED.order_index, latitude=EXCLUDED.latitude, longitude=EXCLUDED.longitude, is_completed=EXCLUDED.is_completed, arrival_time=EXCLUDED.arrival_time, stop_type=EXCLUDED.stop_type, updated_at=EXCLUDED.updated_at, items=EXCLUDED.items, photo_url=COALESCE(EXCLUDED.photo_url, stops.photo_url), room_number=EXCLUDED.room_number, entry_code=EXCLUDED.entry_code, booking_number=EXCLUDED.booking_number, deleted_at=NULL WHERE stops.updated_at IS NULL OR EXCLUDED.updated_at >= stops.updated_at`;
             const res = await client.query(`INSERT INTO stops (uuid, tour_id, address, recipient, company, street, house_number, postal_code, city, state, country, address_full, contact_name, phone_number, email, time_window, stop_date, notes, order_index, latitude, longitude, is_completed, arrival_time, stop_type, updated_at, items, photo_url, room_number, entry_code, booking_number) VALUES (COALESCE($1::UUID, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30) ON CONFLICT (uuid) DO UPDATE SET ${stopConflictUpdate} RETURNING uuid`,
                 [main.uuid, tourId, s.address_full, main.recipient, s.company, s.street, s.house_number, s.postal_code, s.city, s.state, s.country, s.address_full, main.contact_name, main.phone_number, main.email, main.time_window, main.stop_date, main.notes, idx++, s.latitude, s.longitude, main.is_completed, main.arrival_time, main.stop_type, main.updated_at, JSON.stringify(s.items), main.photo_url || main.photoUrl || null, main.room_number, main.entry_code, main.booking_number]);
             currentUuids.push(res.rows[0]?.uuid || main.uuid);
         }
-        if (shouldApplyTourPayload && !isMobileSync) {
+        if (shouldApplyTourPayload) {
             await client.query('UPDATE stops SET deleted_at = $1, updated_at = $1 WHERE tour_id = $2 AND deleted_at IS NULL AND NOT (uuid = ANY($3::UUID[]))', [tour.updated_at, tourId, currentUuids]);
         }
 
-        if (tour.is_current && shouldApplyTourPayload && !isMobileSync) {
+        if (tour.is_current && shouldApplyTourPayload) {
             try {
                 const tourUuid = tour.uuid || tourData.uuid;
                 if (tourUuid) {
@@ -656,7 +656,20 @@ app.post('/api/live-update', async (req, res) => {
         await client.query('COMMIT');
 
         // 3. Return result to app
-        res.json({ status: resObj.status, licensePlate: currentPlate });
+        res.json({
+            status: resObj.status,
+            licensePlate: currentPlate,
+            nextStopDist: resObj.nextStopDist,
+            nextStopDur: resObj.nextStopDur,
+            tourRemainingDist: resObj.tourRemainingDist,
+            tourRemainingDur: resObj.tourRemainingDur,
+            nextStopInfo: resObj.nextStopInfo,
+            nextLat: resObj.nextLat,
+            nextLng: resObj.nextLng,
+            depotName: resObj.depotName,
+            depotLat: resObj.depotLat,
+            depotLng: resObj.depotLng
+        });
     } catch (e) {
         await client.query('ROLLBACK');
         console.error(`[TRACE-LIVE] Error: ${e.message}`);
