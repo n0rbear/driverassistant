@@ -603,6 +603,32 @@ const initDb = async () => {
     console.log('[STARTUP] initDb finished');
 };
 
+app.get('/api/get-worktimes/:driverName', async (req, res) => {
+    try {
+        const result = await pool.query('SELECT * FROM work_times WHERE driver_name = $1 ORDER BY start_time DESC', [req.params.driverName]);
+        res.json(result.rows.map(r => ({
+            ...r,
+            startTime: Number(r.start_time),
+            endTime: r.end_time ? Number(r.end_time) : null,
+            driverName: r.driver_name,
+            licensePlate: r.license_plate,
+            endMileage: r.end_mileage
+        })));
+    } catch (e) { res.status(500).send(e.message); }
+});
+
+app.get('/api/get-costs/:driverName', async (req, res) => {
+    try {
+        const result = await pool.query('SELECT * FROM costs WHERE driver_name = $1 ORDER BY timestamp DESC', [req.params.driverName]);
+        res.json(result.rows.map(r => ({
+            ...r,
+            driverName: r.driver_name,
+            photoPath: r.photo_path,
+            timestamp: Number(r.timestamp)
+        })));
+    } catch (e) { res.status(500).send(e.message); }
+});
+
 app.get('/health', (req, res) => res.sendStatus(200));
 
 app.post('/api/live-update', async (req, res) => {
@@ -1808,6 +1834,7 @@ app.get('/', async (req, res) => {
                     document.getElementById('drivers-list').innerHTML = drivers.map(d =>
                         '<tr>' +
                             '<td>' +
+                                '<small style="color:#777;display:block;">#' + d.id + ' | ' + (d.uuid || '').slice(0,8) + '...</small>' +
                                 '<img src="' + esc(d.photo_url || '') + '" style="width:30px;height:30px;border-radius:50%;vertical-align:middle;margin-right:10px;background:#444;object-fit:cover;">' +
                                 '<b>' + esc(d.name) + '</b>' +
                             '</td>' +
@@ -2106,6 +2133,7 @@ app.get('/driver/:name', async (req, res) => {
                 ${toursRes.map(t => `
                     <div class="tour-card">
                         <div style="float:right; display:flex; gap:5px;">
+                            <small style="color:#777; align-self:center; margin-right:10px;">ID: #${t.id} | UUID: ${(t.uuid || '').slice(0,8)}...</small>
                             <select onchange="transferTour(${t.id}, this.value)" style="width:auto;"><option value="">-- Áthelyezés --</option>${allD.map(n => "<option value='" + escapeHtml(n) + "'>" + escapeHtml(n) + "</option>").join('')}</select>
                             <button onclick="editTour(JSON.parse(decodeURIComponent('${encodeURIComponent(JSON.stringify(t))}')))">✏</button>
                             <button onclick="deleteTour(${t.id})" style="background:#e74c3c; color:white;">🗑</button>
@@ -2117,7 +2145,9 @@ app.get('/driver/:name', async (req, res) => {
                             const stopDate = s.stop_date || s.stopDate;
                             const stopMeta = [s.time_window, s.phone_number, s.notes].filter(Boolean).map(escapeHtml).join(' | ');
                             const stopPhoto = s.photo_url || s.photoUrl || '';
-                            return "<div class='stop-item'><b>" + (s.order_index + 1) + ". " + (s.stop_type === 'HOTEL' ? '🏨 ' : (s.stop_type === 'DEPOT' ? '🏠 ' : '')) + escapeHtml(stopTitle) + "</b>" +
+                            return "<div class='stop-item'>" +
+                                "<small style='color:#777;display:block;'>Stop ID: #" + s.id + " | UUID: " + (s.uuid || '').slice(0,8) + "...</small>" +
+                                "<b>" + (s.order_index + 1) + ". " + (s.stop_type === 'HOTEL' ? '🏨 ' : (s.stop_type === 'DEPOT' ? '🏠 ' : '')) + escapeHtml(stopTitle) + "</b>" +
                                 (stopAddress ? "<br><span>" + escapeHtml(stopAddress) + "</span>" : "") +
                                 (stopDate ? "<br><small style='color:#9fd3ff;'>Dátum: " + new Date(Number(stopDate)).toLocaleDateString() + "</small>" : "") +
                                 (stopMeta ? "<br><small style='color:#aaa;'>" + stopMeta + "</small>" : "") +
@@ -2156,7 +2186,7 @@ app.get('/driver/:name', async (req, res) => {
                     <button onclick="saveWebCost()" style="width:160px; background:#3498db; color:white;">Mentés</button>
                 </div>
             </div>
-            <table><thead><tr><th>Dátum</th><th>Kategória</th><th>Összeg</th><th>Státusz</th><th>Művelet</th></tr></thead><tbody id="costs-list">${costs.map(c => `<tr data-cost-id="${c.id}" data-cost-uuid="${escapeHtml(c.uuid || '')}"><td>${new Date(Number(c.timestamp)).toLocaleDateString()}</td><td>${escapeHtml(c.category)}</td><td>${escapeHtml(c.amount)} ${escapeHtml(c.currency)}</td><td class="cost-status">${escapeHtml(c.status)}</td><td><button data-uuid="${escapeHtml(c.uuid || '')}" data-id="${c.id}" data-status="Elfogadva" onclick="updateCostStatus(this.dataset.uuid, Number(this.dataset.id), this.dataset.status)">Elfogadás</button> <button data-uuid="${escapeHtml(c.uuid || '')}" data-id="${c.id}" data-status="Kifizetve" onclick="updateCostStatus(this.dataset.uuid, Number(this.dataset.id), this.dataset.status)">Kifizetve</button></td></tr>`).join('')}</tbody></table>
+            <table><thead><tr><th>ID / UUID</th><th>Dátum</th><th>Kategória</th><th>Összeg</th><th>Státusz</th><th>Művelet</th></tr></thead><tbody id="costs-list">${costs.map(c => `<tr data-cost-id="${c.id}" data-cost-uuid="${escapeHtml(c.uuid || '')}"><td><small style="color:#777;">#${c.id}<br>${(c.uuid || '').slice(0,8)}</small></td><td>${new Date(Number(c.timestamp)).toLocaleDateString()}</td><td>${escapeHtml(c.category)}</td><td>${escapeHtml(c.amount)} ${escapeHtml(c.currency)}</td><td class="cost-status">${escapeHtml(c.status)}</td><td><button data-uuid="${escapeHtml(c.uuid || '')}" data-id="${c.id}" data-status="Elfogadva" onclick="updateCostStatus(this.dataset.uuid, Number(this.dataset.id), this.dataset.status)">Elfogadás</button> <button data-uuid="${escapeHtml(c.uuid || '')}" data-id="${c.id}" data-status="Kifizetve" onclick="updateCostStatus(this.dataset.uuid, Number(this.dataset.id), this.dataset.status)">Kifizetve</button></td></tr>`).join('')}</tbody></table>
         </div>
         <div id="hotels" class="tab-content">
             <div style="background:#222; padding:15px; border-radius:8px; margin-bottom:15px;">
@@ -2179,7 +2209,7 @@ app.get('/driver/:name', async (req, res) => {
                     <button onclick="resetHotelForm()" style="width:120px;">Új adat</button>
                 </div>
             </div>
-            <table><thead><tr><th>Dátum</th><th>Név</th><th>Cím</th><th>Szoba</th><th>Kód</th><th>Buchungsnummer</th><th>Művelet</th></tr></thead><tbody id="hotels-list">${hotelsRes.map(h => `<tr><td>${new Date(Number(h.timestamp)).toLocaleDateString()}</td><td>${escapeHtml(h.name)}</td><td>${escapeHtml(h.address)}</td><td>${escapeHtml(h.room_number || '')}</td><td>${escapeHtml(h.entry_code || '')}</td><td>${escapeHtml(h.booking_number || '')}</td><td><button data-hotel="${escapeHtml(JSON.stringify(h))}" onclick="editHotelRecord(JSON.parse(this.dataset.hotel))">Szerkesztés</button> <button data-hotel="${escapeHtml(JSON.stringify(h))}" onclick="deleteHotelRecord(JSON.parse(this.dataset.hotel))" style="background:#e74c3c;color:white;">Törlés</button></td></tr>`).join('')}</tbody></table>
+            <table><thead><tr><th>ID / UUID</th><th>Dátum</th><th>Név</th><th>Cím</th><th>Szoba</th><th>Kód</th><th>Buchungsnummer</th><th>Művelet</th></tr></thead><tbody id="hotels-list">${hotelsRes.map(h => `<tr><td><small style="color:#777;">#${h.id}<br>${(h.uuid || '').slice(0,8)}</small></td><td>${new Date(Number(h.timestamp)).toLocaleDateString()}</td><td>${escapeHtml(h.name)}</td><td>${escapeHtml(h.address)}</td><td>${escapeHtml(h.room_number || '')}</td><td>${escapeHtml(h.entry_code || '')}</td><td>${escapeHtml(h.booking_number || '')}</td><td><button data-hotel="${escapeHtml(JSON.stringify(h))}" onclick="editHotelRecord(JSON.parse(this.dataset.hotel))">Szerkesztés</button> <button data-hotel="${escapeHtml(JSON.stringify(h))}" onclick="deleteHotelRecord(JSON.parse(this.dataset.hotel))" style="background:#e74c3c;color:white;">Törlés</button></td></tr>`).join('')}</tbody></table>
         </div>
         <div id="chat" class="tab-content">
             <div id="chat-messages" style="height:400px; background:#111; padding:15px; overflow-y:auto; display:flex; flex-direction:column; margin-bottom:15px;">
