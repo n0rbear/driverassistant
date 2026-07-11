@@ -347,7 +347,7 @@ const ImportEngine = {
             groupedStops.push({ ...n, fingerprint: fp, items: [item] });
         }
 
-        if (tourId && shouldApplyTourPayload) {
+        if (tourId && shouldApplyTourPayload && !isMobileSync) {
             await client.query(`UPDATE tours SET driver_name=$1, name=$2, customer=$3, date=$4, day_of_week=$5, notes=$6, is_closed=$7, is_current=$8, depot_name=$9, depot_company=$10, depot_street=$11, depot_house_number=$12, depot_postal_code=$13, depot_city=$14, depot_state=$15, depot_country=$16, depot_address_full=$17, depot_lat=$18, depot_lng=$19, updated_at=$20, deleted_at=$22 WHERE id=$21`,
                 [driverName, tour.name, tour.customer, tour.date, tour.day_of_week, tour.notes, !!tour.is_closed, !!tour.is_current, depot.recipient || depot.address_full, depot.company, depot.street, depot.house_number, depot.postal_code, depot.city, depot.state, depot.country, depot.address_full, depot.latitude, depot.longitude, tour.updated_at, tourId, tour.deleted_at || tour.deletedAt || null]);
         } else if (!tourId) {
@@ -357,7 +357,7 @@ const ImportEngine = {
             if (!tour.uuid) tour.uuid = res.rows[0].uuid;
         }
 
-        if (deletedStopUuids.length > 0) {
+        if (deletedStopUuids.length > 0 && !isMobileSync) {
             await client.query('UPDATE stops SET deleted_at = $1, updated_at = $1 WHERE tour_id = $2 AND uuid::text = ANY($3::text[]) AND (updated_at IS NULL OR updated_at <= $1)', [tour.updated_at, tourId, deletedStopUuids]);
         }
 
@@ -372,7 +372,7 @@ const ImportEngine = {
                 [main.uuid, tourId, s.address_full, main.recipient, s.company, s.street, s.house_number, s.postal_code, s.city, s.state, s.country, s.address_full, main.contact_name, main.phone_number, main.email, main.time_window, main.stop_date, main.notes, idx++, s.latitude, s.longitude, main.is_completed, main.arrival_time, main.stop_type, main.updated_at, JSON.stringify(s.items), main.photo_url || main.photoUrl || null, main.room_number, main.entry_code, main.booking_number]);
             currentUuids.push(res.rows[0]?.uuid || main.uuid);
         }
-        if (shouldApplyTourPayload) {
+        if (shouldApplyTourPayload && !isMobileSync) {
             await client.query('UPDATE stops SET deleted_at = $1, updated_at = $1 WHERE tour_id = $2 AND deleted_at IS NULL AND NOT (uuid = ANY($3::UUID[]))', [tour.updated_at, tourId, currentUuids]);
         }
 
