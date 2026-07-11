@@ -803,15 +803,11 @@ app.post('/admin/save-hotel', requireAdmin, async (req, res) => {
     const hotelTimestamp = Number(timestamp || Date.now());
     if (!driverName || !name) return res.sendStatus(400);
     try {
-        const driverRes = await pool.query('SELECT company_uuid, uuid FROM drivers WHERE name = $1 LIMIT 1', [driverName]);
-        const driver = driverRes.rows[0] || {};
         const result = await pool.query(
-            `INSERT INTO hotels (company_uuid, driver_uuid, uuid, driver_name, name, address, room_number, entry_code, booking_number, phone_number, email, notes, timestamp)
-             VALUES ($1, $2, gen_random_uuid(), $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+            `INSERT INTO hotels (uuid, driver_name, name, address, room_number, entry_code, booking_number, phone_number, email, notes, timestamp)
+             VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
              RETURNING id, uuid, driver_name, name, address, room_number, entry_code, booking_number, phone_number, email, notes, timestamp`,
             [
-                driver.company_uuid || null,
-                driver.uuid || null,
                 driverName,
                 name,
                 address || '',
@@ -859,13 +855,12 @@ app.post('/admin/save-hotel-record', requireAdmin, async (req, res) => {
             return res.json({ ...row, timestamp: Number(row.timestamp || Date.now()) });
         }
 
-        const driverRes = await pool.query('SELECT company_uuid, uuid FROM drivers WHERE name = $1 LIMIT 1', [driverName]);
-        const driver = driverRes.rows[0] || {};
+        if (!driverName) return res.status(400).send('Missing driverName');
         const result = await pool.query(
-            `INSERT INTO hotels (company_uuid, driver_uuid, uuid, driver_name, name, address, room_number, entry_code, booking_number, phone_number, email, notes, timestamp)
-             VALUES ($1, $2, gen_random_uuid(), $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+            `INSERT INTO hotels (uuid, driver_name, name, address, room_number, entry_code, booking_number, phone_number, email, notes, timestamp)
+             VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
              RETURNING 'hotel'::TEXT as source, id, uuid::TEXT, name, address, room_number, entry_code, booking_number, phone_number, email, notes, timestamp::BIGINT`,
-            [driver.company_uuid || null, driver.uuid || null, driverName, name, address || '', roomNumber || '', entryCode || '', bookingNumber || '', phoneNumber || '', email || '', notes || '', Number(timestamp || Date.now())]
+            [driverName, name, address || '', roomNumber || '', entryCode || '', bookingNumber || '', phoneNumber || '', email || '', notes || '', Number(timestamp || Date.now())]
         );
         const row = result.rows[0];
         res.json({ ...row, timestamp: Number(row.timestamp || Date.now()) });
@@ -2965,7 +2960,8 @@ app.get('/driver/:name', async (req, res) => {
                         body: JSON.stringify(payload)
                     });
                     if (!r.ok) {
-                        showToast('Nem sikerült menteni a hotelt.');
+                        const errorText = await r.text().catch(() => '');
+                        showToast('Nem sikerült menteni a hotelt: ' + (errorText || r.status));
                         return;
                     }
                     const saved = await r.json();
