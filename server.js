@@ -931,7 +931,7 @@ app.post('/api/sync-hotels', async (req, res) => {
                     notes = EXCLUDED.notes,
                     timestamp = EXCLUDED.timestamp
                 WHERE hotels.timestamp IS NULL OR EXCLUDED.timestamp >= hotels.timestamp`,
-                [h.uuid || null, h.driverName, h.name, h.address, h.roomNumber || h.room_number || '', h.entryCode || h.entry_code || '', h.bookingNumber || h.booking_number || '', h.phoneNumber || h.phone_number || '', h.email || '', h.notes || '', h.timestamp || Date.now()]);
+                [h.uuid || null, h.driverName || h.driver_name, h.name, h.address, h.roomNumber || h.room_number || '', h.entryCode || h.entry_code || '', h.bookingNumber || h.booking_number || '', h.phoneNumber || h.phone_number || '', h.email || '', h.notes || '', h.timestamp || Date.now()]);
         }
         await client.query('COMMIT');
         res.sendStatus(200);
@@ -1438,13 +1438,14 @@ app.get('/api/get-tours/:driverName', async (req, res) => {
 app.get('/api/get-hotels/:driverName', async (req, res) => {
     try {
         const result = await pool.query(
-            `SELECT 'hotel'::TEXT as source, id::INT, uuid::TEXT, name::TEXT, address::TEXT, room_number::TEXT, entry_code::TEXT, booking_number::TEXT, phone_number::TEXT, email::TEXT, notes::TEXT, timestamp::BIGINT
+            `SELECT 'hotel'::TEXT as source, id::INT, uuid::TEXT, driver_name::TEXT, name::TEXT, address::TEXT, room_number::TEXT, entry_code::TEXT, booking_number::TEXT, phone_number::TEXT, email::TEXT, notes::TEXT, timestamp::BIGINT
              FROM hotels
              WHERE driver_name = $1
              UNION ALL
              SELECT 'stop'::TEXT as source,
                     id::INT,
                     uuid::TEXT,
+                    $1::TEXT as driver_name,
                     COALESCE(recipient, address_full)::TEXT as name,
                     address_full::TEXT as address,
                     room_number::TEXT,
