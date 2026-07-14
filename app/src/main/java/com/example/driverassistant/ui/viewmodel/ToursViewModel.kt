@@ -74,14 +74,11 @@ class ToursViewModel @Inject constructor(
                 val toursWithStops = tours.map { t ->
                     com.example.driverassistant.data.api.TourWithStops(t, repository.getStopsForTourWithDeleted(t.id))
                 }
-                android.util.Log.d("SyncDebug", "PUSH Payload isCurrent values: ${toursWithStops.map { it.tour.uuid to it.tour.isCurrent }}")
+                android.util.Log.d("SyncDebug", "PUSH Payload for driver: $driverName")
                 backendApi.syncTours(driverName, toursWithStops)
 
                 // 2. PULL remote changes
-                android.util.Log.d("SyncDebug", "PULL Request for driver: $driverName")
                 val remoteTours = backendApi.getTours(driverName)
-                android.util.Log.d("SyncDebug", "PULL Response isCurrent values: ${remoteTours.map { it.tour.uuid to it.tour.isCurrent }}")
-                
                 repository.syncRemoteTours(driverName, remoteTours)
                 
                 android.util.Log.d("SyncDebug", "--- SYNC COMPLETED SUCCESSFULLY ---")
@@ -146,6 +143,7 @@ class ToursViewModel @Inject constructor(
         phone: String,
         email: String,
         window: String,
+        stopDate: Long?,
         notes: String,
         stopType: String = "DELIVERY"
     ) {
@@ -167,6 +165,7 @@ class ToursViewModel @Inject constructor(
                     phoneNumber = phone,
                     email = email,
                     timeWindow = window,
+                    stopDate = stopDate,
                     notes = notes,
                     stopType = stopType,
                     orderIndex = nextOrderIndex

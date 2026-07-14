@@ -9,12 +9,15 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
@@ -24,6 +27,8 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import coil.compose.rememberAsyncImagePainter
+import com.example.driverassistant.BuildConfig
 import com.example.driverassistant.R
 import com.example.driverassistant.domain.model.WorkTime
 import com.example.driverassistant.ui.components.AILoadingAnimation
@@ -39,10 +44,13 @@ import java.util.*
 @Composable
 fun DashboardScreen(
     viewModel: DashboardViewModel = hiltViewModel(),
-    aiViewModel: com.example.driverassistant.ui.viewmodel.AIViewModel = hiltViewModel()
+    aiViewModel: com.example.driverassistant.ui.viewmodel.AIViewModel = hiltViewModel(),
+    onOpenHotels: () -> Unit = {}
 ) {
     val currentTime = remember { mutableStateOf(System.currentTimeMillis()) }
     val workTimes by viewModel.workTimes.collectAsState()
+    val driverName by viewModel.driverNameFlow.collectAsState()
+    val driverPhoto by viewModel.driverPhoto.collectAsState()
     val isAIProcessing by aiViewModel.isProcessing.collectAsState()
     val currentTour by viewModel.currentTour.collectAsState()
     val nextStop by viewModel.nextStop.collectAsState()
@@ -155,6 +163,12 @@ fun DashboardScreen(
 
     val sdf = SimpleDateFormat("yyyy.MM.dd HH:mm:ss", Locale.getDefault())
     val timeSdf = SimpleDateFormat("HH:mm", Locale.getDefault())
+    val driverPhotoUrl = driverPhoto?.takeIf { it.isNotBlank() }?.let {
+        if (it.startsWith("/")) "https://driverassistant.onrender.com$it" else it
+    }
+    val logiHeroLogoId = remember(context) {
+        context.resources.getIdentifier("logihero_logo", "drawable", context.packageName)
+    }
 
     Box(modifier = Modifier.fillMaxSize()) {
         Image(
@@ -171,12 +185,77 @@ fun DashboardScreen(
                 .padding(16.dp)
                 .verticalScroll(rememberScrollState())
         ) {
+            if (BuildConfig.IS_TEST_APP) {
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 14.dp),
+                    shape = RoundedCornerShape(18.dp),
+                    color = Color.Black.copy(alpha = 0.92f),
+                    tonalElevation = 6.dp,
+                    shadowElevation = 6.dp
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 18.dp, vertical = 16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        if (logiHeroLogoId != 0) {
+                            Image(
+                                painter = painterResource(id = logiHeroLogoId),
+                                contentDescription = "LOGIHERO",
+                                modifier = Modifier
+                                    .height(34.dp)
+                                    .widthIn(max = 132.dp),
+                                contentScale = ContentScale.Fit
+                            )
+                            Spacer(modifier = Modifier.width(14.dp))
+                        }
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Driver Assistant",
+                                color = Color.White,
+                                style = MaterialTheme.typography.titleMedium
+                            )
+                            Text(
+                                text = "Digitale Tourenbegleitung",
+                                color = MaterialTheme.colorScheme.primary,
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                    }
+                }
+            }
+
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(text = "Aktuális idő: ${sdf.format(Date(currentTime.value))}", style = MaterialTheme.typography.titleMedium)
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                    if (driverPhotoUrl != null) {
+                        Image(
+                            painter = rememberAsyncImagePainter(driverPhotoUrl),
+                            contentDescription = "Profilkép",
+                            modifier = Modifier.size(48.dp).clip(CircleShape),
+                            contentScale = ContentScale.Crop
+                        )
+                    } else {
+                        Surface(
+                            modifier = Modifier.size(48.dp),
+                            shape = CircleShape,
+                            color = MaterialTheme.colorScheme.primaryContainer
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(Icons.Default.Person, contentDescription = null)
+                            }
+                        }
+                    }
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Column {
+                        Text(text = driverName, style = MaterialTheme.typography.titleMedium)
+                        Text(text = sdf.format(Date(currentTime.value)), style = MaterialTheme.typography.bodySmall)
+                    }
+                }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("Pihenőkkel", style = MaterialTheme.typography.labelSmall)
                     Switch(
@@ -190,41 +269,42 @@ fun DashboardScreen(
                 }
             }
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Button(
-                    onClick = { 
-                        lastActionByCamera = true
-                        val uri = FileUtils.getTempUri(context)
-                        tempUri = uri
-                        photoLauncher.launch(uri) 
-                    },
-                    modifier = Modifier.weight(1f),
-                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.tertiary)
+            if (true) { // Re-enable for everyone or use !BuildConfig.IS_TEST_APP if preferred, but user wants original look for full app
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Icon(Icons.Default.CameraAlt, contentDescription = null)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Fotózás (AI)")
-                }
+                    Button(
+                        onClick = {
+                            lastActionByCamera = true
+                            val uri = FileUtils.getTempUri(context)
+                            tempUri = uri
+                            photoLauncher.launch(uri)
+                        },
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.tertiary)
+                    ) {
+                        Icon(Icons.Default.CameraAlt, contentDescription = null)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Fotózás (AI)")
+                    }
 
-                Button(
-                    onClick = { 
-                        lastActionByCamera = false
-                        filePickerLauncher.launch("*/*") 
-                    },
-                    modifier = Modifier.weight(1f),
-                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.tertiary)
-                ) {
-                    Icon(Icons.Default.UploadFile, contentDescription = null)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Feltöltés (AI)")
+                    Button(
+                        onClick = {
+                            lastActionByCamera = false
+                            filePickerLauncher.launch("*/*")
+                        },
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.tertiary)
+                    ) {
+                        Icon(Icons.Default.UploadFile, contentDescription = null)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Feltöltés (AI)")
+                    }
                 }
+                Spacer(modifier = Modifier.height(16.dp))
             }
-        
-            Spacer(modifier = Modifier.height(16.dp))
-            
+
             DashboardCard("Munkaidő", viewModel.getTotalTime("Munka", currentTime.value))
             DashboardCard("Vezetési idő", viewModel.getTotalTime("Vezetés", currentTime.value))
             DashboardCard("Pihenőidő", viewModel.getTotalTime("Pihenő", currentTime.value))
@@ -408,7 +488,14 @@ fun DashboardScreen(
                             ) {
                                 val start = timeSdf.format(Date(wt.startTime))
                                 val end = wt.endTime?.let { timeSdf.format(Date(it)) } ?: "..."
-                                Text("${wt.type}: $start - $end")
+                                Column {
+                                    Text(
+                                        text = "[#${wt.id} | ${wt.uuid.take(8)}...]",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = Color.Gray
+                                    )
+                                    Text("${wt.type}: $start - $end")
+                                }
                                 Row {
                                     IconButton(onClick = { editingWorkTime = wt }, modifier = Modifier.size(24.dp)) {
                                         Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(16.dp))
@@ -437,16 +524,18 @@ fun DashboardScreen(
 
             Spacer(modifier = Modifier.height(16.dp))
             
-            Text(
-                text = if (currentTour == null) {
-                    "❌ DEBUG: Nincs aktív túra (currentTour = null)"
-                } else {
-                    "✅ DEBUG: Aktív túra: ${currentTour!!.name} (isCurrent = ${currentTour!!.isCurrent})"
-                },
-                color = if (currentTour == null) Color.Red else Color.Green,
-                style = MaterialTheme.typography.labelSmall,
-                modifier = Modifier.padding(16.dp)
-            )
+            if (true) {
+                Text(
+                    text = if (currentTour == null) {
+                        "❌ DEBUG: Nincs aktív túra (currentTour = null)"
+                    } else {
+                        "✅ DEBUG: Aktív túra: ${currentTour!!.name} (isCurrent = ${currentTour!!.isCurrent})"
+                    },
+                    color = if (currentTour == null) Color.Red else Color.Green,
+                    style = MaterialTheme.typography.labelSmall,
+                    modifier = Modifier.padding(16.dp)
+                )
+            }
 
             Text(text = "Következő cím:", style = MaterialTheme.typography.titleMedium)
             
@@ -459,6 +548,11 @@ fun DashboardScreen(
                 Column(modifier = Modifier.padding(16.dp)) {
                     if (nextStop != null || profileDepot != null) {
                         if (nextStop != null) {
+                            Text(
+                                text = "[#${nextStop!!.id} | ${nextStop!!.uuid.take(8)}...]",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Color.Gray
+                            )
                             Text(text = nextStop!!.contactName, style = MaterialTheme.typography.titleSmall)
                             Text(text = nextStop!!.address, style = MaterialTheme.typography.bodyLarge)
                         } else {
@@ -505,12 +599,39 @@ fun DashboardScreen(
                                         fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
                                     )
                                 }
+                                
+                                val serverData by viewModel.serverStatusData.collectAsState()
+                                serverData?.let { sd ->
+                                    if (sd.nextDist != null || sd.tourDist != null) {
+                                        Text(
+                                            text = "☁️ Szerver szerint (táv):",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = Color.Gray,
+                                            modifier = Modifier.padding(top = 4.dp)
+                                        )
+                                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                            sd.nextDist?.let { d ->
+                                                Text(text = "📍 Köv: %.1f km".format(d), style = MaterialTheme.typography.labelSmall, color = Color.Gray)
+                                            }
+                                            sd.tourDist?.let { d ->
+                                                Text(text = "🏁 Túra: %.1f km".format(d), style = MaterialTheme.typography.labelSmall, color = Color.Gray)
+                                            }
+                                        }
+                                    }
+                                }
                             }
                             if (nextStop != null) {
                                 TextButton(onClick = { IntentUtils.openMaps(context, nextStop!!.addressFull.ifBlank { nextStop!!.address }) }) {
                                     Icon(Icons.Default.Navigation, contentDescription = null)
                                     Spacer(modifier = Modifier.width(4.dp))
                                     Text("Navigálás")
+                                }
+                                if (nextStop!!.phoneNumber.isNotBlank()) {
+                                    TextButton(onClick = { IntentUtils.dialPhoneNumber(context, nextStop!!.phoneNumber) }) {
+                                        Icon(Icons.Default.Phone, contentDescription = null)
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("Hívás")
+                                    }
                                 }
                                 TextButton(onClick = { viewModel.completeStop(nextStop!!.id) }) {
                                     Icon(Icons.Default.Check, contentDescription = null)

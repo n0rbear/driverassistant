@@ -41,6 +41,7 @@ fun ProfileScreen(viewModel: ProfileViewModel = hiltViewModel()) {
     val driverTelegram by viewModel.driverTelegram.collectAsState()
     val defaultPlate by viewModel.defaultPlate.collectAsState()
     val driverPhoto by viewModel.driverPhoto.collectAsState()
+    val driverUuid by viewModel.driverUuidFlow.collectAsState()
     val isLinked by viewModel.isLinked.collectAsState()
     
     val context = LocalContext.current
@@ -84,6 +85,14 @@ fun ProfileScreen(viewModel: ProfileViewModel = hiltViewModel()) {
             Spacer(modifier = Modifier.height(16.dp))
             
             Text(text = driverName, style = MaterialTheme.typography.headlineMedium)
+            
+            driverUuid?.let {
+                Text(
+                    text = "ID: $it",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color.Gray
+                )
+            }
             
             Spacer(modifier = Modifier.height(16.dp))
             

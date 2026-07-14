@@ -33,6 +33,7 @@ data class Stop(
     @SerializedName("phone_number") val phoneNumber: String,
     val email: String,
     @SerializedName("time_window") val timeWindow: String,
+    @SerializedName("stop_date") val stopDate: Long? = null,
     val notes: String = "",
     @SerializedName("alternative_names") val alternativeNames: String? = null, // JSON list of potential names
     @SerializedName("order_index") val orderIndex: Int,
@@ -42,6 +43,9 @@ data class Stop(
     @SerializedName("stop_type") val stopType: String = "DELIVERY", // DELIVERY, PICKUP, HOTEL, DEPOT
     @SerializedName("arrival_time") val arrivalTime: Long? = null,
     @SerializedName("photo_url") val photoUrl: String? = null,
+    @SerializedName("room_number") val roomNumber: String = "",
+    @SerializedName("entry_code") val entryCode: String = "",
+    @SerializedName("booking_number") val bookingNumber: String = "",
     @SerializedName("deleted_at") val deletedAt: Long? = null,
     @SerializedName("updated_at") val updatedAt: Long? = null
 )

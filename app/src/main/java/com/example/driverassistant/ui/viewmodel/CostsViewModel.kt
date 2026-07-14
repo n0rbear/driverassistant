@@ -85,14 +85,24 @@ class CostsViewModel @Inject constructor(
 
     private fun syncCostsWithBackend() {
         viewModelScope.launch {
+            _isProcessing.value = true
             try {
                 android.util.Log.d("SyncDebug", "CostsViewModel: START syncCostsWithBackend")
+                
+                // 1. PULL remote costs
+                val remoteCosts = backendApi.getCosts(driverName)
+                repository.syncRemoteCosts(driverName, remoteCosts)
+
+                // 2. PUSH local costs
                 val allCosts = repository.getAllCosts(driverName).first()
-                android.util.Log.d("SyncDebug", "CostsViewModel: PUSH Payload: ${gson.toJson(allCosts)}")
+                android.util.Log.d("SyncDebug", "CostsViewModel: PUSH Payload")
                 backendApi.syncCosts(allCosts)
+                
                 android.util.Log.d("SyncDebug", "CostsViewModel: syncCostsWithBackend COMPLETED")
             } catch (e: Exception) {
                 android.util.Log.e("SyncDebug", "CostsViewModel: Failed to sync costs with backend", e)
+            } finally {
+                _isProcessing.value = false
             }
         }
     }
@@ -100,12 +110,14 @@ class CostsViewModel @Inject constructor(
     fun deleteCost(cost: Cost) {
         viewModelScope.launch {
             repository.deleteCost(cost)
+            syncCostsWithBackend()
         }
     }
 
     fun updateCost(cost: Cost) {
         viewModelScope.launch {
             repository.updateCost(cost)
+            syncCostsWithBackend()
         }
     }
 

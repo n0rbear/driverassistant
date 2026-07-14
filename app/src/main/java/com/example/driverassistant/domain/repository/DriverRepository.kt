@@ -31,6 +31,8 @@ interface DriverRepository {
     suspend fun insertHotel(hotel: Hotel)
     suspend fun updateHotel(hotel: Hotel)
     suspend fun deleteHotel(hotel: Hotel)
+    suspend fun getAllHotelsSnapshot(driverName: String): List<Hotel>
+    suspend fun syncRemoteHotels(driverName: String, remoteHotels: List<Hotel>, syncStartedAt: Long)
 
     fun getLocationHistory(): Flow<List<LocationData>>
     suspend fun insertLocation(location: LocationData)
@@ -43,6 +45,8 @@ interface DriverRepository {
     suspend fun getAllOngoingWorkTimes(driverName: String): List<WorkTime>
     fun getOngoingWorkTimesFlow(driverName: String): Flow<List<WorkTime>>
     suspend fun closeAllOngoingWorkTimes(driverName: String, endTime: Long)
+    suspend fun syncRemoteWorkTimes(driverName: String, remoteWorkTimes: List<WorkTime>)
+    suspend fun syncRemoteCosts(driverName: String, remoteCosts: List<Cost>)
 
     fun getAllSavedLocations(): Flow<List<SavedLocation>>
     suspend fun insertSavedLocation(location: SavedLocation)

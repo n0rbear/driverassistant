@@ -44,6 +44,38 @@ class DriverRepositoryImpl @Inject constructor(
     override suspend fun insertHotel(hotel: Hotel) = dao.insertHotel(hotel)
     override suspend fun updateHotel(hotel: Hotel) = dao.updateHotel(hotel)
     override suspend fun deleteHotel(hotel: Hotel) = dao.deleteHotel(hotel)
+    override suspend fun getAllHotelsSnapshot(driverName: String): List<Hotel> = dao.getAllHotelsSnapshot(driverName)
+
+    override suspend fun syncRemoteHotels(driverName: String, remoteHotels: List<Hotel>, syncStartedAt: Long) {
+        val localHotels = dao.getAllHotelsSnapshot(driverName)
+        val remoteByUuid = remoteHotels
+            .filter { it.uuid.isNotBlank() }
+            .associateBy { it.uuid }
+
+        for (remote in remoteHotels) {
+            val existing = if (remote.uuid.isNotBlank()) dao.getHotelByUuid(remote.uuid) else null
+            val normalizedRemote = remote.copy(
+                id = existing?.id ?: 0,
+                driverName = driverName,
+                roomNumber = remote.roomNumber,
+                entryCode = remote.entryCode,
+                bookingNumber = remote.bookingNumber,
+                phoneNumber = remote.phoneNumber,
+                email = remote.email,
+                notes = remote.notes
+            )
+
+            if (existing == null) {
+                dao.insertHotel(normalizedRemote)
+            } else if (remote.timestamp >= existing.timestamp) {
+                dao.updateHotel(normalizedRemote)
+            }
+        }
+
+        localHotels
+            .filter { it.uuid.isNotBlank() && it.uuid !in remoteByUuid && it.timestamp <= syncStartedAt }
+            .forEach { dao.deleteHotelByUuid(it.uuid) }
+    }
 
     override fun getLocationHistory(): Flow<List<LocationData>> = dao.getLocationHistory()
     override suspend fun insertLocation(location: LocationData) = dao.insertLocation(location)
@@ -66,6 +98,42 @@ class DriverRepositoryImpl @Inject constructor(
     }
     override fun getOngoingWorkTimesFlow(driverName: String): Flow<List<WorkTime>> = dao.getOngoingWorkTimesFlow(driverName)
     override suspend fun closeAllOngoingWorkTimes(driverName: String, endTime: Long) = dao.closeAllOngoingWorkTimes(driverName, endTime)
+
+    override suspend fun syncRemoteWorkTimes(driverName: String, remoteWorkTimes: List<WorkTime>) {
+        for (remote in remoteWorkTimes) {
+            val existing = dao.getWorkTimeByUuid(remote.uuid)
+            if (existing == null) {
+                dao.insertWorkTime(remote.copy(id = 0))
+            } else {
+                // If remote has an end time but local doesn't, or end time is different, update.
+                // WorkTimes don't have an explicit 'updated_at', but we can assume newer timestamps or just replace.
+                dao.updateWorkTime(remote.copy(id = existing.id))
+            }
+        }
+    }
+
+    override suspend fun syncRemoteCosts(driverName: String, remoteCosts: List<Cost>) {
+        val localCosts = dao.getAllCosts(driverName).first()
+        val remoteByUuid = remoteCosts.associateBy { it.uuid }
+        
+        for (remote in remoteCosts) {
+            val existing = dao.getCostByUuid(remote.uuid)
+            if (existing == null) {
+                dao.insertCost(remote.copy(id = 0))
+            } else {
+                dao.updateCost(remote.copy(id = existing.id))
+            }
+        }
+
+        // Handle deletions: if a cost is in local but not in remote list, and remote list is not empty, delete it locally
+        if (remoteCosts.isNotEmpty()) {
+            localCosts.forEach { local ->
+                if (local.uuid !in remoteByUuid) {
+                    dao.deleteCost(local)
+                }
+            }
+        }
+    }
 
     override fun getAllSavedLocations(): Flow<List<SavedLocation>> = dao.getAllSavedLocations()
     override suspend fun insertSavedLocation(location: SavedLocation) = dao.insertSavedLocation(location)
@@ -134,6 +202,11 @@ class DriverRepositoryImpl @Inject constructor(
             // 3. Handle Stops
             val localStops = dao.getStopsForTourWithDeleted(tourId)
             android.util.Log.d("SyncDebug", "DriverRepository: Processing ${remote.stops.size} stops for Tour ID: $tourId. Local stops: ${localStops.size}")
+            val remoteStopUuids = remote.stops.map { it.uuid }.toSet()
+            val newestLocalStopChange = localStops
+                .map { maxOf(it.updatedAt ?: 0L, it.deletedAt ?: 0L) }
+                .maxOrNull() ?: 0L
+            val newestLocalChange = maxOf(localUpdatedAt, newestLocalStopChange)
             
             for (rStop in remote.stops) {
                 val existingStop = localStops.find { it.uuid == rStop.uuid }
@@ -161,6 +234,15 @@ class DriverRepositoryImpl @Inject constructor(
                     android.util.Log.d("SyncDebug", "DriverRepository: INSERT NEW Stop (UUID: ${rStop.uuid})")
                     dao.insertStop(rStop.copy(id = 0, tourId = tourId))
                 }
+            }
+
+            if (remoteUpdatedAt > newestLocalChange) {
+                localStops
+                    .filter { it.deletedAt == null && it.uuid !in remoteStopUuids }
+                    .forEach { staleStop ->
+                        android.util.Log.d("SyncDebug", "DriverRepository: MARK Stop deleted because it is absent remotely (Local ID: ${staleStop.id}, UUID: ${staleStop.uuid})")
+                        dao.updateStop(staleStop.copy(deletedAt = remoteUpdatedAt, updatedAt = remoteUpdatedAt))
+                    }
             }
         }
         val finalTours = dao.getAllToursWithDeleted(driverName)

@@ -13,6 +13,7 @@ import com.google.gson.Gson
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.channels.awaitClose
 import java.text.SimpleDateFormat
 import java.util.*
 import javax.inject.Inject
@@ -33,6 +34,8 @@ class DashboardViewModel @Inject constructor(
     private val _driverName = MutableStateFlow(prefs.getString("driver_name", "Ismeretlen Sofőr") ?: "Ismeretlen Sofőr")
     val driverNameFlow = _driverName.asStateFlow()
     private val driverName get() = _driverName.value
+    private val _driverPhoto = MutableStateFlow(prefs.getString("driver_photo", null))
+    val driverPhoto = _driverPhoto.asStateFlow()
 
     val lastLocation = locationRepository.getLocationHistory()
         .map { it.firstOrNull() }
@@ -66,6 +69,36 @@ class DashboardViewModel @Inject constructor(
     private val _lastData = MutableStateFlow<Pair<String, Int>?>(null)
     val lastData = _lastData.asStateFlow()
 
+    data class ServerStatusData(
+        val nextDist: Float?,
+        val nextDur: Long?,
+        val tourDist: Float?,
+        val tourDur: Long?,
+        val nextStopInfo: String?
+    )
+
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    val serverStatusData = callbackFlow<ServerStatusData?> {
+        val listener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { p, key ->
+            if (key?.startsWith("server_") == true) {
+                val nextDist = p.getFloat("server_next_stop_dist", -1f).takeIf { it >= 0 }
+                val nextDur = p.getLong("server_next_stop_dur", -1L).takeIf { it >= 0 }
+                val tourDist = p.getFloat("server_tour_dist", -1f).takeIf { it >= 0 }
+                val tourDur = p.getLong("server_tour_dur", -1L).takeIf { it >= 0 }
+                val nextStopInfo = p.getString("server_next_stop_info", null)
+                trySend(ServerStatusData(nextDist, nextDur, tourDist, tourDur, nextStopInfo))
+            }
+        }
+        prefs.registerOnSharedPreferenceChangeListener(listener)
+        val nextDist = prefs.getFloat("server_next_stop_dist", -1f).takeIf { it >= 0 }
+        val nextDur = prefs.getLong("server_next_stop_dur", -1L).takeIf { it >= 0 }
+        val tourDist = prefs.getFloat("server_tour_dist", -1f).takeIf { it >= 0 }
+        val tourDur = prefs.getLong("server_tour_dur", -1L).takeIf { it >= 0 }
+        val nextStopInfo = prefs.getString("server_next_stop_info", null)
+        send(ServerStatusData(nextDist, nextDur, tourDist, tourDur, nextStopInfo))
+        awaitClose { prefs.unregisterOnSharedPreferenceChangeListener(listener) }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
     private val _includeRests = MutableStateFlow(prefs.getBoolean("include_rests", true))
     val includeRests = _includeRests.asStateFlow()
 
@@ -85,6 +118,8 @@ class DashboardViewModel @Inject constructor(
             while(true) {
                 val latest = prefs.getString("driver_name", "Ismeretlen Sofőr") ?: "Ismeretlen Sofőr"
                 if (latest != _driverName.value) _driverName.value = latest
+                val latestPhoto = prefs.getString("driver_photo", null)
+                if (latestPhoto != _driverPhoto.value) _driverPhoto.value = latestPhoto
                 kotlinx.coroutines.delay(2000)
             }
         }
@@ -112,19 +147,16 @@ class DashboardViewModel @Inject constructor(
             try {
                 android.util.Log.d("SyncDebug", "--- START SYNC (DashboardViewModel) ---")
                 
-                // 1. PUSH
+                // 1. PUSH local changes
                 val tours = repository.getAllToursWithDeleted(_driverName.value)
                 val toursWithStops = tours.map { t ->
                     com.example.driverassistant.data.api.TourWithStops(t, repository.getStopsForTourWithDeleted(t.id))
                 }
-                android.util.Log.d("SyncDebug", "PUSH Payload isCurrent values: ${toursWithStops.map { it.tour.uuid to it.tour.isCurrent }}")
+                android.util.Log.d("SyncDebug", "PUSH Payload for driver: ${_driverName.value}")
                 backendApi.syncTours(_driverName.value, toursWithStops)
 
-                // 2. PULL
-                android.util.Log.d("SyncDebug", "PULL Request for driver: ${_driverName.value}")
+                // 2. PULL remote changes
                 val remoteTours = backendApi.getTours(_driverName.value)
-                android.util.Log.d("SyncDebug", "PULL Response isCurrent values: ${remoteTours.map { it.tour.uuid to it.tour.isCurrent }}")
-                
                 repository.syncRemoteTours(_driverName.value, remoteTours)
                 
                 android.util.Log.d("SyncDebug", "--- SYNC COMPLETED SUCCESSFULLY (Dashboard) ---")
@@ -137,7 +169,10 @@ class DashboardViewModel @Inject constructor(
     private fun syncHotels() {
         viewModelScope.launch {
             try {
-                val allHotels = repository.getAllHotels(_driverName.value).first()
+                val syncStartedAt = System.currentTimeMillis()
+                val remoteHotels = backendApi.getManualHotels(_driverName.value)
+                repository.syncRemoteHotels(_driverName.value, remoteHotels, syncStartedAt)
+                val allHotels = repository.getAllHotelsSnapshot(_driverName.value)
                 backendApi.syncHotels(allHotels)
             } catch (e: Exception) {
                 android.util.Log.e("SyncDebug", "--- HOTEL SYNC FAILED (Dashboard) ---", e)
@@ -375,11 +410,16 @@ class DashboardViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 android.util.Log.d("SyncDebug", "DashboardViewModel: START syncWithBackend (WorkTimes)")
-                // Szinkronizáljuk az összes adatot a pontos statisztikához (vagy pl. utolsó 30 nap)
+                
+                // 1. PULL remote work times
+                val remoteWorkTimes = backendApi.getWorkTimes(driverName)
+                repository.syncRemoteWorkTimes(driverName, remoteWorkTimes)
+
+                // 2. PUSH local work times
                 val monthSdf = SimpleDateFormat("yyyy-MM", Locale.getDefault())
                 val currentMonth = monthSdf.format(Date())
                 repository.getWorkTimesByPattern("$currentMonth%", driverName).first().let { allTimes ->
-                    android.util.Log.d("SyncDebug", "DashboardViewModel: PUSH WorkTimes Payload: ${gson.toJson(allTimes)}")
+                    android.util.Log.d("SyncDebug", "DashboardViewModel: PUSH WorkTimes Payload")
                     backendApi.syncWorkTimes(allTimes)
                 }
                 android.util.Log.d("SyncDebug", "DashboardViewModel: syncWithBackend COMPLETED")

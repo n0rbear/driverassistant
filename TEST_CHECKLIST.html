@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="hu">
+<head>
+    <meta charset="UTF-8">
+    <title>Driver Assistant - Teljes Rendszer Tesztelési Ellenőrző Lista</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.4;
+            color: #333;
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f4f7f6;
+        }
+        header {
+            text-align: center;
+            border-bottom: 3px solid #2c3e50;
+            margin-bottom: 20px;
+            padding-bottom: 10px;
+            background: white;
+            padding: 20px;
+            border-radius: 8px 8px 0 0;
+        }
+        h1 { margin: 0; color: #2c3e50; text-transform: uppercase; letter-spacing: 1px; }
+        .version { color: #7f8c8d; font-size: 0.9em; margin-top: 5px; }
+
+        .grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+
+        .section {
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+            margin-bottom: 20px;
+            break-inside: avoid;
+        }
+        h2 {
+            border-left: 5px solid #3498db;
+            padding-left: 10px;
+            font-size: 1.1em;
+            color: #2c3e50;
+            margin-top: 0;
+            margin-bottom: 15px;
+            border-bottom: 1px solid #eee;
+            padding-bottom: 5px;
+        }
+        .check-item {
+            display: flex;
+            align-items: flex-start;
+            margin-bottom: 8px;
+            padding: 5px;
+            border-radius: 4px;
+        }
+        .check-item:hover { background-color: #f9f9f9; }
+        .checkbox {
+            width: 16px;
+            height: 16px;
+            border: 2px solid #3498db;
+            margin-right: 12px;
+            margin-top: 3px;
+            flex-shrink: 0;
+            border-radius: 3px;
+        }
+        .content { flex-grow: 1; }
+        .content b { display: block; color: #2c3e50; font-size: 0.95em; }
+        .content span { font-size: 0.85em; color: #666; display: block; line-height: 1.2; }
+
+        @media print {
+            body { padding: 0; margin: 0; background: white; }
+            .grid { display: block; }
+            .section { box-shadow: none; border: 1px solid #eee; margin-bottom: 10px; }
+            .no-print-btn { display: none; }
+        }
+
+        .no-print-btn {
+            position: fixed;
+            bottom: 30px;
+            right: 30px;
+            background: #2c3e50;
+            color: white;
+            border: none;
+            padding: 15px 25px;
+            border-radius: 50px;
+            cursor: pointer;
+            font-weight: bold;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.3);
+            z-index: 100;
+        }
+    </style>
+</head>
+<body>
+
+<button class="no-print-btn" onclick="window.print()">NYOMTATÁS (PDF)</button>
+
+<header>
+    <h1>Driver Assistant</h1>
+    <p>Minden sarokra kiterjedő Rendszer Ellenőrző Lista</p>
+    <div class="version">Verzió: 2.0 (Full Deep-Scan) | Készült: 2024.05.22 | Állapot: Stabilizálás</div>
+</header>
+
+<div class="grid">
+    <!-- 1. AUTH & ONBOARDING -->
+    <div class="section">
+        <h2>1. Aktiváció és Biztonság</h2>
+        <div class="check-item">
+            <div class="checkbox"></div>
+            <div class="content">
+                <b>Aktivációs kód egyszeri használata</b>
+                <span>Egy kód csak egy `device_id`-hoz rendelhető. Másodszorra hiba.</span>
+            </div>
+        </div>
+        <div class="check-item">
+            <div class="checkbox"></div>
+            <div class="content">
+                <b>Remote Unlink (Kizárás)</b>
+                <span>Ha az admin törli az eszközt, az app 401/403-as hiba után a Login képernyőre ugrik.</span>
+            </div>
+        </div>
+        <div class="check-item">
+            <div class="checkbox"></div>
+            <div class="content">
+                <b>Profil szinkron</b>
+                <span>Rendszám, sofőr név és fotó frissül-e az appban változtatás után.</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- 2. STATUS ENGINE -->
+    <div class="section">
+        <h2>2. Állapotmotor & Követés</h2>
+        <div class="check-item">
+            <div class="checkbox"></div>
+            <div class="content">
+                <b>Sebesség alapú váltás (Auto-Vezetés)</b>
+                <span>8 km/h felett automatikusan "Vezetés" státusz rögzítése.</span>
+            </div>
+        </div>
+        <div class="check-item">
+            <div class="checkbox"></div>
+            <div class="content">
+                <b>Grace Period (3 perc)</b>
+                <span>Piros lámpánál való álláskor nem vált át "Munka"-ra vagy "Pihenő"-re.</span>
+            </div>
+        </div>
+        <div class="check-item">
+            <div class="checkbox"></div>
+            <div class="content">
+                <b>Helyszín alapú váltás (Rakodás)</b>
+                <span>Címre érkezéskor (200m körzet) automatikus váltás "Rakodás"-ra.</span>
+            </div>
+        </div>
+        <div class="check-item">
+            <div class="checkbox"></div>
+            <div class="content">
+                <b>Offline puffer sorrend</b>
+                <span>Net nélkül gyűjtött pontok időrendben érkeznek meg a szerverre.</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- 3. DASHBOARD & MAP -->
+    <div class="section">
+        <h2>3. Dashboard & Interaktív Térkép</h2>
+        <div class="check-item">
+            <div class="checkbox"></div>
+            <div class="content">
+                <b>WebView Leaflet Map</b>
+                <span>Megjelenik-e a térkép, rajta a sofőr kék körrel és az útvonal vonallal.</span>
+            </div>
+        </div>
+        <div class="check-item">
+            <div class="checkbox"></div>
+            <div class="content">
+                <b>Élő ETA Számítás</b>
+                <span>A hátralévő idő/km frissül-e a Dashboardon mozgás közben.</span>
+            </div>
+        </div>
+        <div class="check-item">
+            <div class="checkbox"></div>
+            <div class="content">
+                <b>Pihenőidő Kalkulátor</b>
+                <span>A "Pihenőkkel" kapcsoló helyesen adja-e hozzá a 45 percet a hosszú utakhoz.</span>
+            </div>
+        </div>
+        <div class="check-item">
+            <div class="checkbox"></div>
+            <div class="content">
+                <b>Műszak indítás/zárás</b>
+                <span>Rendszám bekérése indításkor, km óra állás rögzítése záráskor.</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- 4. AI & OCR -->
+    <div class="section">
+        <h2>4. AI Asszisztens (Mistral) & OCR</h2>
+        <div class="check-item">
+            <div class="checkbox"></div>
+            <div class="content">
+                <b>Többoldalas dokumentum</b>
+                <span>Fotózás után az összefűzés (Merge) helyesen működik-e.</span>
+            </div>
+        </div>
+        <div class="check-item">
+            <div class="checkbox"></div>
+            <div class="content">
+                <b>Ügyfél beazonosítás (UNCLEAR)</b>
+                <span>Ha az AI bizonytalan, felugrik-e a manuális választó lista.</span>
+            </div>
+        </div>
+        <div class="check-item">
+            <div class="checkbox"></div>
+            <div class="content">
+                <b>OCR Adatpontosság</b>
+                <span>Összeg, dátum és bizonylatszám kinyerése sikeres-e (ML Kit + AI).</span>
+            </div>
+        </div>
+        <div class="check-item">
+            <div class="checkbox"></div>
+            <div class="content">
+                <b>AI Töltő Animáció</b>
+                <span>A LogiHero logós feldolgozási animáció látható-e a folyamat alatt.</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- 5. TOUR MANAGEMENT -->
+    <div class="section">
+        <h2>5. Túra & OSRM Útvonaltervezés</h2>
+        <div class="check-item">
+            <div class="checkbox"></div>
+            <div class="content">
+                <b>Dinamikus Újratervezés</b>
+                <span>Ha egy megállót kihagyunk, az OSRM a következő legközelebbit tervezi be.</span>
+            </div>
+        </div>
+        <div class="check-item">
+            <div class="checkbox"></div>
+            <div class="content">
+                <b>Excel Import Validáció</b>
+                <span>Hibás koordináták vagy hiányzó oszlopok esetén a szerver nem crashel.</span>
+            </div>
+        </div>
+        <div class="check-item">
+            <div class="checkbox"></div>
+            <div class="content">
+                <b>Visszatérés a Depóba</b>
+                <span>Az utolsó cím után a Dashboard a telephelyet állítja be célként.</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- 6. TAGESFAHRBLATT -->
+    <div class="section">
+        <h2>6. Tagesfahrblatt (Napi Menetlevél)</h2>
+        <div class="check-item">
+            <div class="checkbox"></div>
+            <div class="content">
+                <b>Grafikus Idővonal (Canvas)</b>
+                <span>Kék/Piros/Zöld sávok fedik a valós tevékenységeket az időskálán.</span>
+            </div>
+        </div>
+        <div class="check-item">
+            <div class="checkbox"></div>
+            <div class="content">
+                <b>Manuális Szerkesztés</b>
+                <span>Dashboard előzményekben javítható-e a tévesen elindított státusz.</span>
+            </div>
+        </div>
+        <div class="check-item">
+            <div class="checkbox"></div>
+            <div class="content">
+                <b>PDF Generálás & Export</b>
+                <span>A letöltött PDF minden adatot tartalmaz (km állás, időpontok, rendszám).</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- 7. COSTS & DOCUMENTS -->
+    <div class="section">
+        <h2>7. Költségek & Dokumentumok</h2>
+        <div class="check-item">
+            <div class="checkbox"></div>
+            <div class="content">
+                <b>Duplikáció szűrés</b>
+                <span>Ugyanaz az összeg + dátum + sofőr esetén a szerver megállítja a feltöltést.</span>
+            </div>
+        </div>
+        <div class="check-item">
+            <div class="checkbox"></div>
+            <div class="content">
+                <b>Admin Jóváhagyás Sync</b>
+                <span>Ha az admin "Kifizetve" állapotba teszi, az appban zöldre vált a státusz.</span>
+            </div>
+        </div>
+        <div class="check-item">
+            <div class="checkbox"></div>
+            <div class="content">
+                <b>Nagyfelbontású fotók</b>
+                <span>10MB feletti képek feltöltése is stabil (Client-side resize/compression).</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- 8. HOTELS & LOGISTICS -->
+    <div class="section">
+        <h2>8. Szállások & Logisztika</h2>
+        <div class="check-item">
+            <div class="checkbox"></div>
+            <div class="content">
+                <b>Navigációs Deep-Link</b>
+                <span>A hotel címe helyesen nyílik meg a Google Maps-ben vagy Waze-ben.</span>
+            </div>
+        </div>
+        <div class="check-item">
+            <div class="checkbox"></div>
+            <div class="content">
+                <b>Kódok & Szobaszám</b>
+                <span>Buchungsnummer és belépőkódok tisztán olvashatóak az appban.</span>
+            </div>
+        </div>
+        <div class="check-item">
+            <div class="checkbox"></div>
+            <div class="content">
+                <b>Gyorshívás / Email</b>
+                <span>A hotel adatlapjáról indított hívás/email gombok működnek.</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- 9. CHAT & COMMS -->
+    <div class="section">
+        <h2>9. Chat & Kommunikáció</h2>
+        <div class="check-item">
+            <div class="checkbox"></div>
+            <div class="content">
+                <b>Real-time Polling</b>
+                <span>Admin üzenet 10mp-en belül megérkezik (ha nincs WebSocket).</span>
+            </div>
+        </div>
+        <div class="check-item">
+            <div class="checkbox"></div>
+            <div class="content">
+                <b>System Notifications</b>
+                <span>Új üzenetnél rezgés/hang és értesítés a tálcán, ha az app a háttérben van.</span>
+            </div>
+        </div>
+        <div class="check-item">
+            <div class="checkbox"></div>
+            <div class="content">
+                <b>Üzenet Olvasottság</b>
+                <span>Visszajelzés az adminnak, ha a sofőr megnyitotta a chatet.</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- 10. SYSTEM & STABILITY -->
+    <div class="section">
+        <h2>10. Stabilitás & Akkumulátor</h2>
+        <div class="check-item">
+            <div class="checkbox"></div>
+            <div class="content">
+                <b>LocationService Permanence</b>
+                <span>A Foreground Service nem áll le 8+ óra futás után sem (Doze mode test).</span>
+            </div>
+        </div>
+        <div class="check-item">
+            <div class="checkbox"></div>
+            <div class="content">
+                <b>Wakelock Kezelés</b>
+                <span>A telefon kikapcsolt képernyő mellett is küldi a GPS pontokat.</span>
+            </div>
+        </div>
+        <div class="check-item">
+            <div class="checkbox"></div>
+            <div class="content">
+                <b>Adatforgalom optimalizálás</b>
+                <span>Napi 8 óra használat nem fogyaszt több mobilnetet, mint 50-100MB.</span>
+            </div>
+        </div>
+    </div>
+</div>
+
+<footer style="margin-top: 30px; border-top: 2px solid #ccc; padding-top: 10px; font-size: 0.9em; text-align: center; background: white; border-radius: 0 0 8px 8px; padding: 20px;">
+    <b>Összegzés / Hibajegyek:</b><br><br>
+    ____________________________________________________________________________________________________________________<br><br>
+    ____________________________________________________________________________________________________________________
+</footer>
+
+</body>
+</html>

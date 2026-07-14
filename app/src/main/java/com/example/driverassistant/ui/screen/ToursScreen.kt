@@ -31,6 +31,18 @@ import com.example.driverassistant.util.IntentUtils
 import java.text.SimpleDateFormat
 import java.util.*
 
+private val stopDateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
+
+private fun formatStopDate(timestamp: Long?): String =
+    timestamp?.let { stopDateFormat.format(Date(it)) } ?: ""
+
+private fun parseStopDate(value: String): Long? =
+    try {
+        value.trim().takeIf { it.isNotEmpty() }?.let { stopDateFormat.parse(it)?.time }
+    } catch (e: Exception) {
+        null
+    }
+
 @Composable
 fun ToursScreen(viewModel: ToursViewModel = hiltViewModel()) {
     val tours by viewModel.tours.collectAsState()
@@ -129,6 +141,11 @@ fun TourItem(tour: Tour, viewModel: ToursViewModel, onDelete: () -> Unit) {
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "[#${tour.id} | ${tour.uuid.take(8)}...]",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color.Gray
+                    )
                     Text(text = tour.name, style = MaterialTheme.typography.titleLarge)
                     if (tour.customer.isNotBlank()) {
                         Text(text = tour.customer, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
@@ -211,8 +228,8 @@ fun TourItem(tour: Tour, viewModel: ToursViewModel, onDelete: () -> Unit) {
     if (showAddStopDialog) {
         AddStopDialog(
             onDismiss = { showAddStopDialog = false },
-            onConfirm = { recipient, street, house, postal, city, contact, phone, email, window, notes, type ->
-                viewModel.addStop(tour.id, recipient, street, house, postal, city, contact, phone, email, window, notes, type)
+            onConfirm = { recipient, street, house, postal, city, contact, phone, email, window, stopDate, notes, type ->
+                viewModel.addStop(tour.id, recipient, street, house, postal, city, contact, phone, email, window, stopDate, notes, type)
                 showAddStopDialog = false
             }
         )
@@ -296,10 +313,18 @@ fun StopItem(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "[#${stop.id} | ${stop.uuid.take(8)}...]",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color.Gray
+                    )
                     if (stop.recipient.isNotBlank()) {
                         Text(text = stop.recipient, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
                     }
                     Text(text = stop.addressFull.ifBlank { stop.address }, style = MaterialTheme.typography.bodyLarge)
+                    if (stop.stopDate != null) {
+                        Text(text = "Dátum: ${formatStopDate(stop.stopDate)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                    }
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         if (stop.stopType == "HOTEL") {
                             Icon(Icons.Default.Hotel, contentDescription = null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary)
@@ -631,6 +656,7 @@ fun EditStopDialog(stop: Stop, onDismiss: () -> Unit, onConfirm: (Stop) -> Unit)
     var phone by remember { mutableStateOf(stop.phoneNumber) }
     var email by remember { mutableStateOf(stop.email) }
     var window by remember { mutableStateOf(stop.timeWindow) }
+    var stopDateText by remember { mutableStateOf(formatStopDate(stop.stopDate)) }
     var notes by remember { mutableStateOf(stop.notes) }
     var stopType by remember { mutableStateOf(stop.stopType) }
     
@@ -708,6 +734,8 @@ fun EditStopDialog(stop: Stop, onDismiss: () -> Unit, onConfirm: (Stop) -> Unit)
                     Spacer(modifier = Modifier.height(8.dp))
                     TextField(value = window, onValueChange = { window = it }, label = { Text("Időablak") }, modifier = Modifier.fillMaxWidth())
                     Spacer(modifier = Modifier.height(8.dp))
+                    TextField(value = stopDateText, onValueChange = { stopDateText = it }, label = { Text("Dátum (yyyy-MM-dd)") }, modifier = Modifier.fillMaxWidth())
+                    Spacer(modifier = Modifier.height(8.dp))
                     TextField(value = notes, onValueChange = { notes = it }, label = { Text("Megjegyzés") }, modifier = Modifier.fillMaxWidth())
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(text = "Típus:", style = MaterialTheme.typography.labelSmall)
@@ -738,6 +766,7 @@ fun EditStopDialog(stop: Stop, onDismiss: () -> Unit, onConfirm: (Stop) -> Unit)
                     phoneNumber = phone,
                     email = email,
                     timeWindow = window,
+                    stopDate = parseStopDate(stopDateText),
                     notes = notes,
                     stopType = stopType
                 )) 
@@ -785,7 +814,7 @@ fun AddTourDialog(onDismiss: () -> Unit, onConfirm: (String, String, String) -> 
 }
 
 @Composable
-fun AddStopDialog(onDismiss: () -> Unit, onConfirm: (String, String, String, String, String, String, String, String, String, String, String) -> Unit) {
+fun AddStopDialog(onDismiss: () -> Unit, onConfirm: (String, String, String, String, String, String, String, String, String, Long?, String, String) -> Unit) {
     var recipient by remember { mutableStateOf("") }
     var street by remember { mutableStateOf("") }
     var houseNumber by remember { mutableStateOf("") }
@@ -795,6 +824,7 @@ fun AddStopDialog(onDismiss: () -> Unit, onConfirm: (String, String, String, Str
     var phone by remember { mutableStateOf("") }
     var email by remember { mutableStateOf("") }
     var window by remember { mutableStateOf("") }
+    var stopDateText by remember { mutableStateOf("") }
     var notes by remember { mutableStateOf("") }
     var stopType by remember { mutableStateOf("DELIVERY") }
 
@@ -826,6 +856,8 @@ fun AddStopDialog(onDismiss: () -> Unit, onConfirm: (String, String, String, Str
                     Spacer(modifier = Modifier.height(8.dp))
                     TextField(value = window, onValueChange = { window = it }, label = { Text("Időablak") }, modifier = Modifier.fillMaxWidth())
                     Spacer(modifier = Modifier.height(8.dp))
+                    TextField(value = stopDateText, onValueChange = { stopDateText = it }, label = { Text("Dátum (yyyy-MM-dd)") }, modifier = Modifier.fillMaxWidth())
+                    Spacer(modifier = Modifier.height(8.dp))
                     TextField(value = notes, onValueChange = { notes = it }, label = { Text("Megjegyzés") }, modifier = Modifier.fillMaxWidth())
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(text = "Típus:", style = MaterialTheme.typography.labelSmall)
@@ -844,7 +876,7 @@ fun AddStopDialog(onDismiss: () -> Unit, onConfirm: (String, String, String, Str
         confirmButton = {
             Button(onClick = { 
                 if (recipient.isNotEmpty() || street.isNotEmpty()) {
-                    onConfirm(recipient, street, houseNumber, postalCode, city, contact, phone, email, window, notes, stopType)
+                    onConfirm(recipient, street, houseNumber, postalCode, city, contact, phone, email, window, parseStopDate(stopDateText), notes, stopType)
                 }
             }) {
                 Text("Hozzáadás")

@@ -13,7 +13,7 @@ object FileUtils {
         val directory = File(context.getExternalFilesDir("Pictures"), "ai_uploads")
         if (!directory.exists()) directory.mkdirs()
         val tempFile = File.createTempFile("IMG_${System.currentTimeMillis()}", ".jpg", directory)
-        return FileProvider.getUriForFile(context, "com.example.driverassistant.fileprovider", tempFile)
+        return FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", tempFile)
     }
 
     fun saveBitmap(context: Context, bitmap: Bitmap, folderName: String): String? {

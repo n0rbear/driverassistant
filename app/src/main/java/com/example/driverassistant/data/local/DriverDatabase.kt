@@ -20,7 +20,7 @@ import com.example.driverassistant.domain.model.*
         CustomerMapping::class,
         ChatMessage::class
     ],
-    version = 22,
+    version = 24,
     exportSchema = false
 )
 abstract class DriverDatabase : RoomDatabase() {
@@ -121,6 +121,20 @@ abstract class DriverDatabase : RoomDatabase() {
         val MIGRATION_21_22 = object : Migration(21, 22) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE hotels ADD COLUMN bookingNumber TEXT NOT NULL DEFAULT ''")
+            }
+        }
+
+        val MIGRATION_22_23 = object : Migration(22, 23) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE stops ADD COLUMN stopDate INTEGER")
+            }
+        }
+
+        val MIGRATION_23_24 = object : Migration(23, 24) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE stops ADD COLUMN roomNumber TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE stops ADD COLUMN entryCode TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE stops ADD COLUMN bookingNumber TEXT NOT NULL DEFAULT ''")
             }
         }
     }

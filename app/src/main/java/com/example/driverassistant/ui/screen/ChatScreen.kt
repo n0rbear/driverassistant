@@ -44,7 +44,7 @@ fun ChatScreen(viewModel: ChatViewModel = hiltViewModel()) {
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             items(messages) { msg ->
-                ChatMessageItem(msg.sender, msg.message, msg.isMe)
+                ChatMessageItem(msg.sender, msg.message, msg.isMe, msg.id, msg.uuid)
             }
         }
 
@@ -83,7 +83,7 @@ fun ChatScreen(viewModel: ChatViewModel = hiltViewModel()) {
 }
 
 @Composable
-fun ChatMessageItem(sender: String, message: String, isMe: Boolean) {
+fun ChatMessageItem(sender: String, message: String, isMe: Boolean, id: Long, uuid: String) {
     val isBoss = sender == "DISZPÉCSER" || sender == "FŐNÖK"
     
     Column(
@@ -100,12 +100,20 @@ fun ChatMessageItem(sender: String, message: String, isMe: Boolean) {
             tonalElevation = 2.dp
         ) {
             Column(modifier = Modifier.padding(10.dp)) {
-                Text(
-                    text = sender, 
-                    style = MaterialTheme.typography.labelSmall,
-                    color = if (isBoss) Color(0xFFF57F17) else Color.Unspecified,
-                    fontWeight = FontWeight.Bold
-                )
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        text = sender, 
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (isBoss) Color(0xFFF57F17) else Color.Unspecified,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Text(
+                        text = "[#$id | ${uuid.take(6)}]",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color.Gray
+                    )
+                }
                 Text(text = message, style = MaterialTheme.typography.bodyLarge)
             }
         }

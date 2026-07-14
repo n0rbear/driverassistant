@@ -88,24 +88,47 @@ fun HotelItem(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "[#${hotel.id} | ${hotel.uuid.take(8)}...]",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color.Gray
+                    )
                     Text(text = hotel.name, style = MaterialTheme.typography.titleLarge)
-                    Text(text = hotel.address, style = MaterialTheme.typography.bodyMedium)
+                    if (hotel.address.isNotBlank()) {
+                        Text(text = hotel.address, style = MaterialTheme.typography.bodyMedium)
+                    }
                 }
                 Row {
-                    IconButton(onClick = { showEditDialog = true }) {
-                        Icon(Icons.Default.Edit, contentDescription = "Szerkesztés")
-                    }
-                    IconButton(onClick = { showDeleteConfirmation = true }) {
-                        Icon(Icons.Default.Delete, contentDescription = "Törlés")
+                    if (hotel.id < 0) {
+                        AssistChip(
+                            onClick = {},
+                            enabled = false,
+                            label = { Text("Túra része") },
+                            leadingIcon = {
+                                Icon(Icons.Default.Route, contentDescription = null, modifier = Modifier.size(18.dp))
+                            }
+                        )
+                    } else {
+                        IconButton(onClick = { showEditDialog = true }) {
+                            Icon(Icons.Default.Edit, contentDescription = "Szerkesztés")
+                        }
+                        IconButton(onClick = { showDeleteConfirmation = true }) {
+                            Icon(Icons.Default.Delete, contentDescription = "Törlés")
+                        }
                     }
                 }
             }
             
-            Spacer(modifier = Modifier.height(8.dp))
-            
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text(text = "Szoba: ${hotel.roomNumber}")
-                Text(text = "Kód: ${hotel.entryCode}", color = MaterialTheme.colorScheme.primary)
+            if (hotel.roomNumber.isNotBlank() || hotel.entryCode.isNotBlank()) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    if (hotel.roomNumber.isNotBlank()) {
+                        Text(text = "Szoba: ${hotel.roomNumber}")
+                    }
+                    if (hotel.entryCode.isNotBlank()) {
+                        Text(text = "Kód: ${hotel.entryCode}", color = MaterialTheme.colorScheme.primary)
+                    }
+                }
             }
             if (hotel.bookingNumber.isNotBlank()) {
                 Spacer(modifier = Modifier.height(4.dp))
@@ -117,24 +140,32 @@ fun HotelItem(
                 Text(text = hotel.notes!!, style = MaterialTheme.typography.bodySmall, color = Color.Gray)
             }
 
-            Spacer(modifier = Modifier.height(12.dp))
-            
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                AssistChip(
-                    onClick = { IntentUtils.openMaps(context, hotel.address) },
-                    label = { Text("Navigálás") },
-                    leadingIcon = { Icon(Icons.Default.Navigation, contentDescription = null, modifier = Modifier.size(18.dp)) }
-                )
-                AssistChip(
-                    onClick = { IntentUtils.dialPhoneNumber(context, hotel.phoneNumber) },
-                    label = { Text("Hívás") },
-                    leadingIcon = { Icon(Icons.Default.Phone, contentDescription = null, modifier = Modifier.size(18.dp)) }
-                )
-                AssistChip(
-                    onClick = { IntentUtils.sendEmail(context, hotel.email) },
-                    label = { Text("Email") },
-                    leadingIcon = { Icon(Icons.Default.Email, contentDescription = null, modifier = Modifier.size(18.dp)) }
-                )
+            val hasActions = hotel.address.isNotBlank() || hotel.phoneNumber.isNotBlank() || hotel.email.isNotBlank()
+            if (hasActions) {
+                Spacer(modifier = Modifier.height(12.dp))
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (hotel.address.isNotBlank()) {
+                    AssistChip(
+                        onClick = { IntentUtils.openMaps(context, hotel.address) },
+                        label = { Text("Navigálás") },
+                        leadingIcon = { Icon(Icons.Default.Navigation, contentDescription = null, modifier = Modifier.size(18.dp)) }
+                    )
+                }
+                if (hotel.phoneNumber.isNotBlank()) {
+                    AssistChip(
+                        onClick = { IntentUtils.dialPhoneNumber(context, hotel.phoneNumber) },
+                        label = { Text("Hívás") },
+                        leadingIcon = { Icon(Icons.Default.Phone, contentDescription = null, modifier = Modifier.size(18.dp)) }
+                    )
+                }
+                if (hotel.email.isNotBlank()) {
+                    AssistChip(
+                        onClick = { IntentUtils.sendEmail(context, hotel.email) },
+                        label = { Text("Email") },
+                        leadingIcon = { Icon(Icons.Default.Email, contentDescription = null, modifier = Modifier.size(18.dp)) }
+                    )
+                }
+                }
             }
         }
     }

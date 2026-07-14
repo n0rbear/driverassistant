@@ -68,6 +68,9 @@ interface DriverDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertCost(cost: Cost)
 
+    @Query("SELECT * FROM costs WHERE uuid = :uuid LIMIT 1")
+    suspend fun getCostByUuid(uuid: String): Cost?
+
     @Update
     suspend fun updateCost(cost: Cost)
 
@@ -78,6 +81,12 @@ interface DriverDao {
     @Query("SELECT * FROM hotels WHERE driverName = :driverName ORDER BY timestamp DESC")
     fun getAllHotels(driverName: String): Flow<List<Hotel>>
 
+    @Query("SELECT * FROM hotels WHERE driverName = :driverName ORDER BY timestamp DESC")
+    suspend fun getAllHotelsSnapshot(driverName: String): List<Hotel>
+
+    @Query("SELECT * FROM hotels WHERE uuid = :uuid LIMIT 1")
+    suspend fun getHotelByUuid(uuid: String): Hotel?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertHotel(hotel: Hotel)
 
@@ -86,6 +95,9 @@ interface DriverDao {
 
     @Delete
     suspend fun deleteHotel(hotel: Hotel)
+
+    @Query("DELETE FROM hotels WHERE uuid = :uuid")
+    suspend fun deleteHotelByUuid(uuid: String)
 
     // Location
     @Query("SELECT * FROM location_history ORDER BY timestamp DESC")
@@ -103,6 +115,9 @@ interface DriverDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertWorkTime(workTime: WorkTime)
+
+    @Query("SELECT * FROM work_times WHERE uuid = :uuid LIMIT 1")
+    suspend fun getWorkTimeByUuid(uuid: String): WorkTime?
 
     @Update
     suspend fun updateWorkTime(workTime: WorkTime)
@@ -174,7 +189,7 @@ interface DriverDao {
     @Query("DELETE FROM tours WHERE driverName = :driverName")
     suspend fun deleteToursByDriver(driverName: String)
 
-    @Query("SELECT * FROM work_times WHERE driverName = :driverName AND endTime IS NULL")
+    @Query("SELECT * FROM work_times WHERE driverName = :driverName AND endTime IS NULL ORDER BY startTime DESC")
     suspend fun getAllOngoingWorkTimes(driverName: String): List<WorkTime>
 
     @Query("SELECT * FROM work_times WHERE driverName = :driverName AND endTime IS NULL ORDER BY startTime DESC")

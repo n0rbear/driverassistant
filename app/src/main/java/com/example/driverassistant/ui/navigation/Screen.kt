@@ -3,6 +3,7 @@
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.ui.graphics.vector.ImageVector
+import com.example.driverassistant.BuildConfig
 
 sealed class Screen(val route: String, val title: String, val icon: ImageVector) {
     object Dashboard : Screen("dashboard", "Dashboard", Icons.Default.Dashboard)
@@ -16,19 +17,40 @@ sealed class Screen(val route: String, val title: String, val icon: ImageVector)
     object Stats : Screen("stats", "Összesítő", Icons.Default.BarChart)
 }
 
-val bottomNavItems = listOf(
-    Screen.Dashboard,
-    Screen.Tours,
-    Screen.Report,
-    Screen.Stats
-)
+val bottomNavItems = if (BuildConfig.IS_TEST_APP) {
+    listOf(
+        Screen.Dashboard,
+        Screen.Hotels,
+        Screen.Tours
+    )
+} else {
+    listOf(
+        Screen.Dashboard,
+        Screen.Tours,
+        Screen.Costs,
+        Screen.Hotels,
+        Screen.Chat,
+        Screen.Profile
+    )
+}
 
-val drawerItems = listOf(
-    Screen.Dashboard,
-    Screen.Tours,
-    Screen.Costs,
-    Screen.Hotels,
-    Screen.Chat,
-    Screen.Profile,
-    Screen.Settings
-)
+val drawerItems = if (BuildConfig.IS_TEST_APP) {
+    listOf(
+        Screen.Dashboard,
+        Screen.Tours,
+        Screen.Hotels,
+        Screen.Profile
+    )
+} else {
+    listOf(
+        Screen.Dashboard,
+        Screen.Tours,
+        Screen.Costs,
+        Screen.Hotels,
+        Screen.Chat,
+        Screen.Report,
+        Screen.Stats,
+        Screen.Profile,
+        Screen.Settings
+    )
+}

@@ -7,13 +7,14 @@ import android.widget.Toast
 
 object IntentUtils {
     fun openMaps(context: Context, address: String) {
-        val gmmIntentUri = Uri.parse("geo:0,0?q=${Uri.encode(address)}")
-        val mapIntent = Intent(Intent.ACTION_VIEW, gmmIntentUri)
+        val navigationUri = Uri.parse("google.navigation:q=${Uri.encode(address)}&mode=d")
+        val mapIntent = Intent(Intent.ACTION_VIEW, navigationUri)
         mapIntent.setPackage("com.google.android.apps.maps")
         if (mapIntent.resolveActivity(context.packageManager) != null) {
             context.startActivity(mapIntent)
         } else {
             // Fallback for any map app
+            val gmmIntentUri = Uri.parse("geo:0,0?q=${Uri.encode(address)}")
             val fallbackIntent = Intent(Intent.ACTION_VIEW, gmmIntentUri)
             context.startActivity(fallbackIntent)
         }

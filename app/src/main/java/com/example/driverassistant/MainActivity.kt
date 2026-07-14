@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -17,7 +18,10 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
@@ -26,7 +30,9 @@ import com.example.driverassistant.ui.navigation.Screen
 import com.example.driverassistant.ui.navigation.bottomNavItems
 import com.example.driverassistant.ui.screen.*
 import com.example.driverassistant.ui.theme.DriverAssistantTheme
+import com.example.driverassistant.ui.viewmodel.ProfileViewModel
 import dagger.hilt.android.AndroidEntryPoint
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
 @AndroidEntryPoint
@@ -44,16 +50,21 @@ class MainActivity : ComponentActivity() {
                 }
 
                 if (showNameDialog) {
-                    DriverNameDialog { name, phone, email ->
-                        val prefs = getSharedPreferences("driver_prefs", Context.MODE_PRIVATE)
-                        prefs.edit().apply {
-                            putString("driver_name", name)
-                            putString("driver_phone", phone)
-                            putString("driver_email", email)
-                            apply()
+                    DriverNameDialog(
+                        onNameSaved = { name, phone, email ->
+                            val prefs = getSharedPreferences("driver_prefs", Context.MODE_PRIVATE)
+                            prefs.edit().apply {
+                                putString("driver_name", name)
+                                putString("driver_phone", phone)
+                                putString("driver_email", email)
+                                apply()
+                            }
+                            showNameDialog = false
+                        },
+                        onLinked = {
+                            showNameDialog = false
                         }
-                        showNameDialog = false
-                    }
+                    )
                 } else {
                     LocationServiceManager()
                     MainApp()
@@ -67,33 +78,48 @@ class MainActivity : ComponentActivity() {
 fun LocationServiceManager() {
     val context = androidx.compose.ui.platform.LocalContext.current
     LaunchedEffect(Unit) {
-        // Várjunk egy kicsit, hogy a permission dialog lefusson, ha kell
-        kotlinx.coroutines.delay(2000)
-        
-        val hasFineLocation = androidx.core.content.ContextCompat.checkSelfPermission(
-            context,
-            android.Manifest.permission.ACCESS_FINE_LOCATION
-        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
-        
-        val hasCoarseLocation = androidx.core.content.ContextCompat.checkSelfPermission(
-            context,
-            android.Manifest.permission.ACCESS_COARSE_LOCATION
-        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        while (true) {
+            val hasFineLocation = androidx.core.content.ContextCompat.checkSelfPermission(
+                context,
+                android.Manifest.permission.ACCESS_FINE_LOCATION
+            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
 
-        if (hasFineLocation || hasCoarseLocation) {
-            val intent = Intent(context, com.example.driverassistant.service.LocationService::class.java).apply {
-                action = com.example.driverassistant.service.LocationService.ACTION_START
+            val hasCoarseLocation = androidx.core.content.ContextCompat.checkSelfPermission(
+                context,
+                android.Manifest.permission.ACCESS_COARSE_LOCATION
+            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+
+            if (hasFineLocation || hasCoarseLocation) {
+                val intent = Intent(context, com.example.driverassistant.service.LocationService::class.java).apply {
+                    action = com.example.driverassistant.service.LocationService.ACTION_START
+                }
+                context.startForegroundService(intent)
             }
-            context.startForegroundService(intent)
+            kotlinx.coroutines.delay(15000)
         }
     }
 }
 
 @Composable
-fun DriverNameDialog(onNameSaved: (String, String, String) -> Unit) {
+fun DriverNameDialog(
+    onNameSaved: (String, String, String) -> Unit,
+    onLinked: () -> Unit,
+    profileViewModel: ProfileViewModel = hiltViewModel()
+) {
+    val context = LocalContext.current
     var name by remember { mutableStateOf("") }
     var phone by remember { mutableStateOf("") }
     var email by remember { mutableStateOf("") }
+    var showLinkDialog by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        profileViewModel.events.collectLatest { message ->
+            Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+            if (message.startsWith("Telefon társítva")) {
+                onLinked()
+            }
+        }
+    }
     
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Surface(
@@ -140,13 +166,33 @@ fun DriverNameDialog(onNameSaved: (String, String, String) -> Unit) {
                 ) {
                     Text("Indítás")
                 }
+
+                HorizontalDivider()
+
+                OutlinedButton(
+                    onClick = { showLinkDialog = true },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Meglévő webes profil társítása")
+                }
             }
         }
+    }
+
+    if (showLinkDialog) {
+        LinkDeviceDialog(
+            onDismiss = { showLinkDialog = false },
+            onConfirm = { code ->
+                profileViewModel.linkWithActivationCode(code)
+                showLinkDialog = false
+            }
+        )
     }
 }
 
 @Composable
 fun RequestPermissions() {
+    val context = LocalContext.current
     val permissionsToRequest = mutableListOf(
         Manifest.permission.ACCESS_FINE_LOCATION,
         Manifest.permission.ACCESS_COARSE_LOCATION,
@@ -159,7 +205,16 @@ fun RequestPermissions() {
 
     val launcher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
-    ) { _ -> }
+    ) { grants ->
+        val hasLocation = grants[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
+            grants[Manifest.permission.ACCESS_COARSE_LOCATION] == true
+        if (hasLocation) {
+            val intent = Intent(context, com.example.driverassistant.service.LocationService::class.java).apply {
+                action = com.example.driverassistant.service.LocationService.ACTION_START
+            }
+            context.startForegroundService(intent)
+        }
+    }
 
     LaunchedEffect(Unit) {
         launcher.launch(permissionsToRequest.toTypedArray())
@@ -181,7 +236,7 @@ fun MainApp() {
             ModalDrawerSheet {
                 Spacer(modifier = Modifier.height(16.dp))
                 Text(
-                    "Driver Assistant",
+                    if (BuildConfig.IS_TEST_APP) "LOGIHERO Driver Assistant" else "Driver Assistant",
                     modifier = Modifier.padding(16.dp),
                     style = MaterialTheme.typography.headlineSmall
                 )
@@ -211,22 +266,46 @@ fun MainApp() {
                     title = {
                         val title = com.example.driverassistant.ui.navigation.drawerItems
                             .find { it.route == currentRoute }?.title ?: "Driver Assistant"
-                        Text(title)
+                        Text(if (BuildConfig.IS_TEST_APP) "LOGIHERO · $title" else title)
                     },
                     navigationIcon = {
                         IconButton(onClick = { scope.launch { drawerState.open() } }) {
                             Icon(Icons.Default.Menu, contentDescription = "Menü")
                         }
+                    },
+                    colors = if (BuildConfig.IS_TEST_APP) {
+                        TopAppBarDefaults.centerAlignedTopAppBarColors(
+                            containerColor = Color.Black,
+                            titleContentColor = MaterialTheme.colorScheme.primary,
+                            navigationIconContentColor = MaterialTheme.colorScheme.primary,
+                            actionIconContentColor = MaterialTheme.colorScheme.primary
+                        )
+                    } else {
+                        TopAppBarDefaults.centerAlignedTopAppBarColors()
                     }
                 )
             },
             bottomBar = {
-                NavigationBar {
+                NavigationBar(
+                    containerColor = if (BuildConfig.IS_TEST_APP) Color.Black else NavigationBarDefaults.containerColor,
+                    contentColor = if (BuildConfig.IS_TEST_APP) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                ) {
                     bottomNavItems.forEach { screen ->
                         NavigationBarItem(
                             icon = { Icon(screen.icon, contentDescription = screen.title) },
                             label = { Text(screen.title) },
                             selected = currentRoute == screen.route,
+                            colors = if (BuildConfig.IS_TEST_APP) {
+                                NavigationBarItemDefaults.colors(
+                                    selectedIconColor = Color.Black,
+                                    selectedTextColor = MaterialTheme.colorScheme.primary,
+                                    indicatorColor = MaterialTheme.colorScheme.primary,
+                                    unselectedIconColor = Color.White.copy(alpha = 0.72f),
+                                    unselectedTextColor = Color.White.copy(alpha = 0.72f)
+                                )
+                            } else {
+                                NavigationBarItemDefaults.colors()
+                            },
                             onClick = {
                                 navController.navigate(screen.route) {
                                     popUpTo(navController.graph.startDestinationId) {
@@ -246,7 +325,16 @@ fun MainApp() {
                 startDestination = Screen.Dashboard.route,
                 modifier = Modifier.padding(innerPadding)
             ) {
-                composable(Screen.Dashboard.route) { DashboardScreen() }
+                composable(Screen.Dashboard.route) {
+                    DashboardScreen(
+                        onOpenHotels = {
+                            navController.navigate(Screen.Hotels.route) {
+                                launchSingleTop = true
+                                restoreState = true
+                            }
+                        }
+                    )
+                }
                 composable(Screen.Tours.route) { ToursScreen() }
                 composable(Screen.Report.route) { TagesfahrblattScreen() }
                 composable(Screen.Stats.route) { MonthlyStatsScreen() }

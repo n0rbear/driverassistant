@@ -58,7 +58,17 @@ data class SetCurrentTourRequest(
 
 data class LiveUpdateResponse(
     val status: String,
-    val licensePlate: String? = null
+    val licensePlate: String? = null,
+    val nextStopDist: Float? = null,
+    val nextStopDur: Long? = null,
+    val tourRemainingDist: Float? = null,
+    val tourRemainingDur: Long? = null,
+    val nextStopInfo: String? = null,
+    val nextLat: Double? = null,
+    val nextLng: Double? = null,
+    val depotName: String? = null,
+    val depotLat: Double? = null,
+    val depotLng: Double? = null
 )
 
 data class ApiProfile(
@@ -144,6 +154,12 @@ interface BackendApi {
     @POST("api/sync-worktimes")
     suspend fun syncWorkTimes(@Body workTimes: List<WorkTime>)
 
+    @GET("api/get-worktimes/{driverName}")
+    suspend fun getWorkTimes(@Path("driverName") driverName: String): List<WorkTime>
+
+    @GET("api/get-costs/{driverName}")
+    suspend fun getCosts(@Path("driverName") driverName: String): List<Cost>
+
     @GET("api/get-tours/{driverName}")
     suspend fun getTours(@Path("driverName") driverName: String): List<TourWithStops>
 
@@ -152,6 +168,9 @@ interface BackendApi {
 
     @POST("api/sync-hotels")
     suspend fun syncHotels(@Body hotels: List<Hotel>)
+
+    @GET("api/get-manual-hotels/{driverName}")
+    suspend fun getManualHotels(@Path("driverName") driverName: String): List<Hotel>
 
     @POST("api/sync-profile")
     suspend fun syncProfile(@Body profile: ApiProfile): ProfileSyncResponse

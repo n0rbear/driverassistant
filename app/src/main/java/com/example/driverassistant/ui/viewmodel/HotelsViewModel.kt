@@ -22,18 +22,24 @@ class HotelsViewModel @Inject constructor(
     private val prefs = context.getSharedPreferences("driver_prefs", Context.MODE_PRIVATE)
     private val driverName get() = prefs.getString("driver_name", "Ismeretlen") ?: "Ismeretlen"
 
+    init {
+        syncHotelsWithBackend()
+    }
+
     val hotels = combine(
         repository.getAllHotels(driverName),
         repository.getHotelStops(driverName)
     ) { manualHotels, tourHotels ->
         val mappedTourHotels = tourHotels.map { stop ->
             Hotel(
+                id = -stop.id,
+                uuid = stop.uuid,
                 driverName = driverName,
                 name = stop.recipient.ifBlank { stop.addressFull.ifBlank { stop.address } },
                 address = stop.addressFull.ifBlank { stop.address },
-                roomNumber = "",
-                entryCode = "",
-                bookingNumber = "",
+                roomNumber = stop.roomNumber,
+                entryCode = stop.entryCode,
+                bookingNumber = stop.bookingNumber,
                 phoneNumber = stop.phoneNumber,
                 email = stop.email,
                 notes = stop.notes,
@@ -66,7 +72,13 @@ class HotelsViewModel @Inject constructor(
     private fun syncHotelsWithBackend() {
         viewModelScope.launch {
             try {
-                val allHotels = repository.getAllHotels(driverName).first()
+                // 1. PULL manual hotels
+                val remoteHotels = backendApi.getManualHotels(driverName)
+                val syncStartedAt = System.currentTimeMillis()
+                repository.syncRemoteHotels(driverName, remoteHotels, syncStartedAt)
+
+                // 2. PUSH local manual hotels
+                val allHotels = repository.getAllHotelsSnapshot(driverName)
                 backendApi.syncHotels(allHotels)
             } catch (e: Exception) {
                 android.util.Log.e("SyncError", "Failed to sync hotels with backend", e)

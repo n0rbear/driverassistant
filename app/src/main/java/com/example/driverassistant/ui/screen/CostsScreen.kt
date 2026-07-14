@@ -190,6 +190,11 @@ fun CostItem(
                     Icon(Icons.Default.ReceiptLong, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                     Spacer(modifier = Modifier.width(16.dp))
                     Column {
+                        Text(
+                            text = "[#${cost.id} | ${cost.uuid.take(8)}...]",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color.Gray
+                        )
                         Text(text = "${cost.amount} ${cost.currency}", style = MaterialTheme.typography.titleLarge)
                         Text(text = "${cost.category} • ${sdf.format(Date(cost.timestamp))}", style = MaterialTheme.typography.bodySmall)
                         if (cost.photoPath != null) {

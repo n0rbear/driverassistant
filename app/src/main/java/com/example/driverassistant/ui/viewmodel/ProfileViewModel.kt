@@ -58,6 +58,9 @@ class ProfileViewModel @Inject constructor(
     private val _isLinked = MutableStateFlow(driverUuid != null)
     val isLinked = _isLinked.asStateFlow()
 
+    private val _driverUuidFlow = MutableStateFlow(driverUuid)
+    val driverUuidFlow = _driverUuidFlow.asStateFlow()
+
     val savedLocations = repository.getAllSavedLocations()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
@@ -234,6 +237,7 @@ class ProfileViewModel @Inject constructor(
     ) {
         val previousName = _driverName.value
         driverUuid = uuid ?: driverUuid
+        _driverUuidFlow.value = driverUuid
         _isLinked.value = driverUuid != null
         profileUpdatedAt = updatedAt
         _driverName.value = name
@@ -279,6 +283,7 @@ class ProfileViewModel @Inject constructor(
             // 4. Clear profile binding but keep this local device id for future pairing.
             prefs.edit().clear().putString("device_id", deviceId).apply()
             driverUuid = null
+            _driverUuidFlow.value = null
             profileUpdatedAt = 0L
             _isLinked.value = false
 

@@ -38,6 +38,7 @@ class LocationService : Service() {
 
     private lateinit var fusedLocationClient: FusedLocationProviderClient
     private lateinit var locationCallback: LocationCallback
+    private var isTracking = false
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     
@@ -67,6 +68,8 @@ class LocationService : Service() {
     }
 
     private fun start() {
+        if (isTracking) return
+
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Driver Assistant - Aktív követés")
             .setContentText("GPS pozíció és állapot automatikus rögzítése...")
@@ -107,6 +110,21 @@ class LocationService : Service() {
 
         try {
             fusedLocationClient.requestLocationUpdates(locationRequest, locationCallback, null)
+            isTracking = true
+            fusedLocationClient.lastLocation.addOnSuccessListener { location ->
+                location?.let {
+                    serviceScope.launch {
+                        val currentLoc = LocationData(
+                            latitude = it.latitude,
+                            longitude = it.longitude,
+                            timestamp = System.currentTimeMillis(),
+                            speed = it.speed * 3.6f
+                        )
+                        repository.insertLocation(currentLoc)
+                        syncWithBackend(currentLoc)
+                    }
+                }
+            }
         } catch (e: SecurityException) {
             // Permission not granted
         }
@@ -137,6 +155,14 @@ class LocationService : Service() {
             val savedLocations = driverRepository.getAllSavedLocations().first()
             val baseLoc = savedLocations.find { it.type == "BASE" }
             
+            val includeRests = prefs.getBoolean("include_rests", true)
+            
+            // Get current tour and next stop to help the server
+            val currentTour = driverRepository.getCurrentTour(driverName).first()
+            val nextStop = currentTour?.let { tour ->
+                driverRepository.getStopsForTour(tour.id).first().find { !it.isCompleted }
+            }
+            
             val response = backendApi.sendLiveUpdate(
                 LiveUpdate(
                     uuid = currentLoc.uuid,
@@ -151,9 +177,26 @@ class LocationService : Service() {
                     timestamp = currentLoc.timestamp,
                     depotLat = baseLoc?.latitude,
                     depotLng = baseLoc?.longitude,
-                    depotName = baseLoc?.name
+                    depotName = baseLoc?.name,
+                    currentTour = currentTour?.name,
+                    nextStop = nextStop?.let { "${it.recipient.ifBlank { it.address }} | ${it.address}" },
+                    nextLat = nextStop?.latitude,
+                    nextLng = nextStop?.longitude,
+                    includeRests = includeRests
                 )
             )
+
+            // Save server data for UI to read back
+            prefs.edit().apply {
+                putFloat("server_next_stop_dist", response.nextStopDist ?: -1f)
+                putLong("server_next_stop_dur", response.nextStopDur ?: -1L)
+                putFloat("server_tour_dist", response.tourRemainingDist ?: -1f)
+                putLong("server_tour_dur", response.tourRemainingDur ?: -1L)
+                putString("server_next_stop_info", response.nextStopInfo)
+                putFloat("server_next_lat", response.nextLat?.toFloat() ?: 0f)
+                putFloat("server_next_lng", response.nextLng?.toFloat() ?: 0f)
+                apply()
+            }
 
             // Handle server calculated status
             if (response.status != (ongoing?.type ?: "Offline")) {
@@ -202,7 +245,7 @@ class LocationService : Service() {
         if (timestamp - ongoingRest.startTime >= shortRestGraceMs) return false
 
         val restStart = ongoingRest.startTime
-        val minPreviousEnd = restStart - shortRestGraceMs
+        val minPreviousEnd = restStart - (shortRestGraceMs * 3)
         val maxPreviousEnd = restStart + 1000L
         val workTimes = driverRepository.getWorkTimesByDate(ongoingRest.date, driverName).first()
         val previousDriving = workTimes
@@ -214,16 +257,30 @@ class LocationService : Service() {
                     endTime in minPreviousEnd..maxPreviousEnd
             }
             .maxByOrNull { it.endTime ?: Long.MIN_VALUE }
+            ?: workTimes
+                .filter {
+                    val endTime = it.endTime
+                    it.id != ongoingRest.id &&
+                        it.type.startsWith("Vezet") &&
+                        endTime != null &&
+                        endTime <= restStart
+                }
+                .maxByOrNull { it.endTime ?: Long.MIN_VALUE }
 
         if (previousDriving != null) {
             driverRepository.updateWorkTime(previousDriving.copy(endTime = null, endMileage = null))
+            driverRepository.deleteWorkTime(ongoingRest)
+        } else {
+            driverRepository.updateWorkTime(ongoingRest.copy(type = "Vezetés", startTime = restStart))
         }
-        driverRepository.deleteWorkTime(ongoingRest)
         return true
     }
 
     private fun handleStop() {
-        fusedLocationClient.removeLocationUpdates(locationCallback)
+        if (::locationCallback.isInitialized) {
+            fusedLocationClient.removeLocationUpdates(locationCallback)
+        }
+        isTracking = false
         stopForeground(true)
         stopSelf()
     }
@@ -245,6 +302,7 @@ class LocationService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        isTracking = false
         serviceScope.cancel()
     }
 

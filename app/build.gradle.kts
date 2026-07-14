@@ -28,6 +28,20 @@ android {
         buildConfigField("String", "MISTRAL_API_KEY", "\"${mistralApiKey.replace("\\", "\\\\").replace("\"", "\\\"")}\"")
     }
 
+    flavorDimensions += "distribution"
+    productFlavors {
+        create("full") {
+            dimension = "distribution"
+            buildConfigField("Boolean", "IS_TEST_APP", "false")
+        }
+        create("pilot") {
+            dimension = "distribution"
+            applicationIdSuffix = ".test"
+            versionNameSuffix = "-test"
+            buildConfigField("Boolean", "IS_TEST_APP", "true")
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
