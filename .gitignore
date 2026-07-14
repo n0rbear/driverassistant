@@ -18,3 +18,15 @@
 .cxx
 local.properties
 node_modules/
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.p12
+*.pfx
+*.dump
+backups/
+npm-debug.log*
+Thumbs.db
+.idea/

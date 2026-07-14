@@ -1,7 +1,8 @@
 ﻿// FIXED SERVER v17 - TRACE LIVE UPDATES
 const express = require('express');
 const pool = require('./src/database/pool');
-const { ADMIN_TOKEN, MAX_UPLOAD_BYTES, IS_DEPLOYED, PORT } = require('./src/config/env');
+const { MAX_UPLOAD_BYTES, PORT } = require('./src/config/env');
+const requireAdmin = require('./src/middleware/requireAdmin');
 const path = require('path');
 const app = express();
 app.use(express.json({ limit: '10mb' }));
@@ -10,17 +11,6 @@ const fs = require('fs');
 if (!fs.existsSync('uploads')) fs.mkdirSync('uploads');
 
 const SHORT_REST_GRACE_MS = 3 * 60 * 1000;
-const requireAdmin = (req, res, next) => {
-    if (!ADMIN_TOKEN) {
-        if (IS_DEPLOYED) return res.status(503).json({ error: 'ADMIN_TOKEN is not configured.' });
-        return next();
-    }
-    const header = req.headers.authorization || '';
-    const token = header.startsWith('Bearer ') ? header.slice(7) : (req.headers['x-admin-token'] || req.query.adminToken);
-    if (token === ADMIN_TOKEN) return next();
-    return res.sendStatus(401);
-};
-
 app.get('/tour-import-template.xlsx', (req, res) => {
     res.download(path.join(__dirname, 'DriverAssistant_tura_import_sablon.xlsx'), 'DriverAssistant_tura_import_sablon.xlsx');
 });
