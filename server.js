@@ -29,6 +29,7 @@ const statsRoutes = require('./src/routes/stats.routes');
 const historyRoutes = require('./src/routes/history.routes');
 const currentTourRoutes = require('./src/routes/current-tour.routes');
 const tourRoutes = require('./src/routes/tour.routes');
+const adminTourRoutes = require('./src/routes/admin-tour.routes');
 const path = require('path');
 const app = express();
 app.use(express.json({ limit: '10mb' }));
@@ -943,19 +944,7 @@ app.post('/admin/transfer-tour', requireAdmin, async (req, res) => {
     }
 });
 
-app.post('/admin/delete-tour', requireAdmin, async (req, res) => {
-    const id = req.body.id;
-    if (!id) return res.status(400).send('Missing tour id');
-    try {
-        const now = Date.now();
-        await pool.query('UPDATE stops SET deleted_at = $1, updated_at = $1 WHERE tour_id = $2', [now, id]);
-        const result = await pool.query('UPDATE tours SET deleted_at = $1, updated_at = $1 WHERE id = $2', [now, id]);
-        if (result.rowCount === 0) return res.status(404).send('Tour not found');
-        res.json({ success: true });
-    } catch (e) {
-        res.status(500).send(e.message);
-    }
-});
+app.use(adminTourRoutes);
 
 app.use(fleetRoutes);
 
