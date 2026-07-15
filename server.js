@@ -5,15 +5,14 @@ const { MAX_UPLOAD_BYTES, PORT } = require('./src/config/env');
 const requireAdmin = require('./src/middleware/requireAdmin');
 const setupUploads = require('./src/infrastructure/uploads');
 const healthRoutes = require('./src/routes/health.routes');
+const downloadRoutes = require('./src/routes/download.routes');
 const path = require('path');
 const app = express();
 app.use(express.json({ limit: '10mb' }));
 setupUploads(app);
 
 const SHORT_REST_GRACE_MS = 3 * 60 * 1000;
-app.get('/tour-import-template.xlsx', (req, res) => {
-    res.download(path.join(__dirname, 'DriverAssistant_tura_import_sablon.xlsx'), 'DriverAssistant_tura_import_sablon.xlsx');
-});
+app.use(downloadRoutes);
 const escapeHtml = (value) => String(value ?? '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
