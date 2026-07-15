@@ -26,6 +26,7 @@ const {
 } = require('./src/routes/driver.routes');
 const fleetRoutes = require('./src/routes/fleet.routes');
 const statsRoutes = require('./src/routes/stats.routes');
+const historyRoutes = require('./src/routes/history.routes');
 const path = require('path');
 const app = express();
 app.use(express.json({ limit: '10mb' }));
@@ -688,18 +689,7 @@ app.post('/api/live-update', async (req, res) => {
     }
 });
 
-app.get('/api/get-history/:driverName/:date', async (req, res) => {
-    try {
-        const { driverName, date } = req.params;
-        const startOfDay = new Date(date).getTime();
-        const endOfDay = startOfDay + 24 * 60 * 60 * 1000;
-        const result = await pool.query(
-            'SELECT latitude, longitude, speed, timestamp FROM live_updates WHERE driver_name = $1 AND timestamp >= $2 AND timestamp < $3 ORDER BY timestamp ASC',
-            [driverName, startOfDay, endOfDay]
-        );
-        res.json(result.rows);
-    } catch (e) { res.status(500).send(e.message); }
-});
+app.use(historyRoutes);
 
 app.use(chatRoutes);
 
