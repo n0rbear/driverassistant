@@ -31,6 +31,7 @@ const currentTourRoutes = require('./src/routes/current-tour.routes');
 const tourRoutes = require('./src/routes/tour.routes');
 const adminTourRoutes = require('./src/routes/admin-tour.routes');
 const devResetRoutes = require('./src/routes/dev-reset.routes');
+const createAdminSaveTourRoutes = require('./src/routes/admin-save-tour.routes');
 const path = require('path');
 const app = express();
 app.use(express.json({ limit: '10mb' }));
@@ -843,16 +844,7 @@ app.use(tourRoutes);
 
 app.use(hotelReadRoutes);
 
-app.post('/admin/save-tour', requireAdmin, async (req, res) => {
-    const client = await pool.connect();
-    try {
-        await client.query('BEGIN');
-        const tourId = await ImportEngine.processTour(client, req.body.driver_name, req.body, req.body.stops || []);
-        await client.query('COMMIT');
-        res.json({ success: true, tourId });
-    } catch (e) { await client.query('ROLLBACK'); console.error(e); res.status(500).send(e.message); }
-    finally { client.release(); }
-});
+app.use(createAdminSaveTourRoutes({ ImportEngine }));
 
 app.post('/admin/transfer-tour', requireAdmin, async (req, res) => {
     const { tourId, newDriverName } = req.body;
