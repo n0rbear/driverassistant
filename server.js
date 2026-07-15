@@ -4,6 +4,7 @@ const pool = require('./src/database/pool');
 const { MAX_UPLOAD_BYTES, PORT } = require('./src/config/env');
 const requireAdmin = require('./src/middleware/requireAdmin');
 const setupUploads = require('./src/infrastructure/uploads');
+const healthRoutes = require('./src/routes/health.routes');
 const path = require('path');
 const app = express();
 app.use(express.json({ limit: '10mb' }));
@@ -614,7 +615,7 @@ app.get('/api/get-costs/:driverName', async (req, res) => {
     } catch (e) { res.status(500).send(e.message); }
 });
 
-app.get('/health', (req, res) => res.sendStatus(200));
+app.use(healthRoutes);
 
 app.post('/api/live-update', async (req, res) => {
     const d = req.body;
