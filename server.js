@@ -30,6 +30,7 @@ const historyRoutes = require('./src/routes/history.routes');
 const currentTourRoutes = require('./src/routes/current-tour.routes');
 const tourRoutes = require('./src/routes/tour.routes');
 const adminTourRoutes = require('./src/routes/admin-tour.routes');
+const devResetRoutes = require('./src/routes/dev-reset.routes');
 const path = require('path');
 const app = express();
 app.use(express.json({ limit: '10mb' }));
@@ -702,38 +703,7 @@ app.use(costManagementRoutes);
 
 app.use(hotelManagementRoutes);
 
-app.post('/admin/dev-reset-database', requireAdmin, async (req, res) => {
-    if (req.body?.confirm !== 'RESET_DEV_DATABASE') {
-        return res.status(400).json({ error: 'Missing confirm: RESET_DEV_DATABASE' });
-    }
-    const client = await pool.connect();
-    try {
-        await client.query('BEGIN');
-        const tables = [
-            'live_updates',
-            'chat_messages',
-            'costs',
-            'hotels',
-            'work_times',
-            'stops',
-            'tours',
-            'role_permissions',
-            'web_users',
-            'drivers',
-            'companies'
-        ];
-        for (const table of tables) {
-            await client.query(`DELETE FROM ${table}`);
-        }
-        await client.query('COMMIT');
-        res.json({ success: true, cleared: tables });
-    } catch (e) {
-        await client.query('ROLLBACK');
-        res.status(500).send(e.message);
-    } finally {
-        client.release();
-    }
-});
+app.use(devResetRoutes);
 
 app.post('/admin/dev-reset-demo', requireAdmin, async (req, res) => {
     if (req.body?.confirm !== 'RESET_DEMO_DATA') {
