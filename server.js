@@ -27,6 +27,7 @@ const {
 const fleetRoutes = require('./src/routes/fleet.routes');
 const statsRoutes = require('./src/routes/stats.routes');
 const historyRoutes = require('./src/routes/history.routes');
+const currentTourRoutes = require('./src/routes/current-tour.routes');
 const path = require('path');
 const app = express();
 app.use(express.json({ limit: '10mb' }));
@@ -863,17 +864,7 @@ app.post('/admin/dev-seed-demo', requireAdmin, async (req, res) => {
     }
 });
 
-app.post('/api/set-current-tour', async (req, res) => {
-    const { driverName, tourUuid } = req.body;
-    console.log(`[TRACE-TOUR] Endpoint: /api/set-current-tour | Driver: ${driverName} | TourUUID: ${tourUuid}`);
-    try {
-        await pool.query('SELECT set_current_tour($1, $2)', [driverName, tourUuid]);
-        res.sendStatus(200);
-    } catch (e) {
-        console.error(`[TRACE-TOUR] Error in set-current-tour: ${e.message}`);
-        res.status(500).send(e.message);
-    }
-});
+app.use(currentTourRoutes);
 
 // ==========================================
 // DRIVER PROFILE & AUTH
