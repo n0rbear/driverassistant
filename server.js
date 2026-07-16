@@ -40,7 +40,6 @@ const createLiveUpdateRoutes = require('./src/routes/live-update.routes');
 const { escapeHtml, escapeJsString } = require('./src/utils/escape');
 const ImportEngine = require('./src/engines/import-engine');
 const StatusEngine = require('./src/engines/status-engine');
-const path = require('path');
 const app = express();
 app.use(express.json({ limit: '10mb' }));
 setupUploads(app);
