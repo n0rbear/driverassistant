@@ -37,6 +37,7 @@ const createAdminSaveTourRoutes = require('./src/routes/admin-save-tour.routes')
 const adminTransferTourRoutes = require('./src/routes/admin-transfer-tour.routes');
 const createSyncTourRoutes = require('./src/routes/sync-tour.routes');
 const createLiveUpdateRoutes = require('./src/routes/live-update.routes');
+const { escapeHtml, escapeJsString } = require('./src/utils/escape');
 const path = require('path');
 const app = express();
 app.use(express.json({ limit: '10mb' }));
@@ -44,18 +45,6 @@ setupUploads(app);
 
 const SHORT_REST_GRACE_MS = 3 * 60 * 1000;
 app.use(downloadRoutes);
-const escapeHtml = (value) => String(value ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-const escapeJsString = (value) => String(value ?? '')
-    .replace(/\\/g, '\\\\')
-    .replace(/'/g, "\\'")
-    .replace(/\r/g, '\\r')
-    .replace(/\n/g, '\\n')
-    .replace(/</g, '\\x3C');
 
 // ==========================================
 // ADDRESS ENGINE
